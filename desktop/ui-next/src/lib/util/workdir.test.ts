@@ -34,8 +34,8 @@ describe("DEFAULT_DIR", () => {
   // UNC 再翻译回 guest 路径),却多出三笔代价——要等引擎起来才拿得到基座、
   // 拿不到时又退回 `~/MonkeyCode`(同一个"默认目录"两种形态,createDir 的判等
   // 跟着看运气)、输入框里还显示一长串 UNC。旧 UI 从头到尾就是 `~/MonkeyCode`。
-  it("恒为 ~/MonkeyCode:`~` 交给壳按内核环境展开,前端不拼平台路径", () => {
-    expect(DEFAULT_DIR).toBe("~/MonkeyCode");
+  it("恒为 ~/TeemoCode:`~` 交给壳按内核环境展开,前端不拼平台路径", () => {
+    expect(DEFAULT_DIR).toBe("~/TeemoCode");
   });
 
   it("它自己必须能通过所有环境的归属校验(否则默认目录会被自己过滤掉)", () => {

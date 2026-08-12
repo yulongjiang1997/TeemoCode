@@ -37,10 +37,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
-const LOGICAL_H: f64 = 120.0;
-const LOGICAL_SPRITE: f64 = 88.0;
-const SOURCE_FRAME: usize = 176;
-const FRAME_COUNT: usize = 52;
+const LOGICAL_H: f64 = 232.0;
+const LOGICAL_SPRITE: f64 = 200.0;
+const SOURCE_FRAME: usize = 400;
+const FRAME_COUNT: usize = 37;
 const SUBCLASS_ID: usize = 0x4D43_5045_54; // "MCPET"
 const TIMER_ID: usize = 0x5045_54;
 const TIMER_MS: u32 = 80;
@@ -124,7 +124,7 @@ struct NativePet {
     // 窗口/GDI 调用仍通过 PostMessage 回到创建窗口的 UI 线程。
     hwnd: isize,
     app: AppHandle,
-    /// 52 帧横条,2x 源图(9152x176),RGBA row-major。
+    /// 37 帧横条,2x 源图(14800x400),RGBA row-major。
     sprite: tauri::image::Image<'static>,
     visual: Mutex<VisualState>,
     mouse: Mutex<MouseState>,
@@ -192,7 +192,7 @@ pub fn create(app: &AppHandle, x: i32, y: i32, width: i32, height: i32) -> Resul
         CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
             WINDOW_CLASS_NAME,
-            w!("MonkeyCode 桌宠"),
+            w!("TeemoCode 桌宠"),
             WS_POPUP,
             x,
             y,
@@ -331,13 +331,15 @@ impl NativePet {
     }
 
     fn frame_at(mode: Mode, elapsed: Duration) -> usize {
+        // 帧段:0-11 idle / 12-17 running / 18-29 waiting / 30-35 celebrate / 36 offline。
+        // 每帧时长 160ms,与 ui-next/public/pet.html 的 CSS steps 保持一致。
         let ms = elapsed.as_millis() as usize;
         match mode {
-            Mode::Idle => (ms / 2500) % 7,
-            Mode::Running => 7 + (ms / 160) % 30,
-            Mode::Waiting => 37 + (ms / 229) % 7,
-            Mode::Celebrate => 44 + (ms / 200).min(6),
-            Mode::Offline => 51,
+            Mode::Idle => (ms / 160) % 12,
+            Mode::Running => 12 + (ms / 160) % 6,
+            Mode::Waiting => 18 + (ms / 160) % 12,
+            Mode::Celebrate => 30 + (ms / 160).min(5),
+            Mode::Offline => 36,
         }
     }
 

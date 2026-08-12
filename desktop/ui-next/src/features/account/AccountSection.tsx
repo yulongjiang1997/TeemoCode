@@ -229,7 +229,7 @@ function BaizhiCard({
       // 必须说(旧 UI settings.tsx:1176 有这句,ui-next 只解析不渲染):不说的话
       // 用户日后在网关后台看到这把来路不明的 key,很可能当成多余项删掉,本地
       // 百智云模型随即集体鉴权失败,而现场与那次同步之间没有任何线索可连
-      const keyLine = r.key_created ? ` ${t("account.baizhi.keyCreated", { name: r.key_name || "MonkeyCode" })}` : "";
+      const keyLine = r.key_created ? ` ${t("account.baizhi.keyCreated", { name: r.key_name || "TeemoCode" })}` : "";
       setMsg({
         text:
           t("account.baizhi.syncDone", { models: r.models.length, mcp: mcpCount }) +

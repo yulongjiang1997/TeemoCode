@@ -165,7 +165,7 @@ export function usableCloudHosts(hosts: McCloudHost[], publicModel = false): McC
   const publicHost: McCloudHost = {
     ...remotePublic,
     id: PUBLIC_CLOUD_HOST_ID,
-    name: remotePublic?.name || "MonkeyCode",
+    name: remotePublic?.name || "TeemoCode",
     status: "online",
     owner: remotePublic?.owner || { type: "public" },
   };

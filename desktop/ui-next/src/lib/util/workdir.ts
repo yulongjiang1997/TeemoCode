@@ -13,7 +13,7 @@
  *    `workdir === defaultDir` 判等还得跟着看运气;
  *  ③输入框里显示一长串 UNC,不如 `~/MonkeyCode` 一眼看得懂在哪。
  *  目录**对话框**的起始位置仍要真实路径,那条继续走 host.ts::workdirPickBase。 */
-export const DEFAULT_DIR = "~/MonkeyCode";
+export const DEFAULT_DIR = "~/TeemoCode";
 
 /** 目录是否属于当前内核运行环境。WSL 模式下 guest 形态(/… 或 \\wsl$ UNC)、
  * Windows 盘符(壳映射为 /mnt/<盘>/…)与 ~ 形态(展开为 guest 家目录)均可

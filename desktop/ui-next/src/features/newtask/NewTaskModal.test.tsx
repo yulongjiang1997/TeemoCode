@@ -50,13 +50,13 @@ async function openDirMenu() {
 }
 
 describe("新建任务", () => {
-  it("默认本地模式:目录预填 ~/MonkeyCode,模型取默认且锁定项禁选", async () => {
+  it("默认本地模式:目录预填 ~/TeemoCode,模型取默认且锁定项禁选", async () => {
     stubShell();
     render(<NewTaskModal open onClose={() => {}} onCreated={() => {}} />);
     // 模型/思考档是 composer 同款菜单触发器(pickers.ModelMenu):文本即当前模型
     await waitFor(() => expect(screen.getByRole("button", { name: "模型" }).textContent).toContain("gpt-5"));
     const input = await openDirMenu();
-    expect(input.value).toBe("~/MonkeyCode");
+    expect(input.value).toBe("~/TeemoCode");
     await userEvent.click(screen.getByRole("button", { name: "模型" }));
     const menu = screen.getByRole("list", { name: "切换模型" });
     expect((within(menu).getByRole("button", { name: /locked-pro/ }) as HTMLButtonElement).disabled).toBe(true);
@@ -70,7 +70,7 @@ describe("新建任务", () => {
     await userEvent.click(screen.getByRole("button", { name: "创建" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalled());
     const create = calls.find((c) => c.cmd === "session_create");
-    expect(create?.args).toEqual({ workdir: "~/MonkeyCode", model: "gpt-5", createDir: true, kind: "local", think: "" });
+    expect(create?.args).toEqual({ workdir: "~/TeemoCode", model: "gpt-5", createDir: true, kind: "local", think: "" });
     expect(localStorage.getItem("mc.lastTaskModel")).toBe("gpt-5");
   });
 
@@ -210,7 +210,7 @@ describe("新建任务", () => {
   // ~/MonkeyCode,`~` 交给壳按内核环境展开(WSL → guest 家目录)。前端拼 UNC
   // 落点完全一样,却要等引擎起来才拿得到基座、拿不到时又退回 ~/MonkeyCode,
   // 同一个"默认目录"两种形态;旧 UI 从头到尾就是 ~/MonkeyCode。
-  it("WSL 运行环境:默认目录仍是 ~/MonkeyCode(不拼 UNC),且享受静默创建", async () => {
+  it("WSL 运行环境:默认目录仍是 ~/TeemoCode(不拼 UNC),且享受静默创建", async () => {
     const calls = stubShell({
       get_config: () => Promise.resolve({ models: [], mcp_servers: {}, kernel_env: "wsl:Ubuntu" }),
       wsl_workdir_base: () => Promise.resolve("\\\\wsl$\\Ubuntu\\home\\u"),
@@ -218,11 +218,11 @@ describe("新建任务", () => {
     const onCreated = vi.fn();
     render(<NewTaskModal open onClose={() => {}} onCreated={onCreated} />);
     const input = await openDirMenu();
-    await waitFor(() => expect(input.value).toBe("~/MonkeyCode"));
+    await waitFor(() => expect(input.value).toBe("~/TeemoCode"));
     await userEvent.click(screen.getByRole("button", { name: "创建" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalled());
     expect(calls.find((c) => c.cmd === "session_create")?.args).toMatchObject({
-      workdir: "~/MonkeyCode",
+      workdir: "~/TeemoCode",
       createDir: true,
     });
     // 基座只用于**目录对话框**的起始位置,不参与默认目录推导

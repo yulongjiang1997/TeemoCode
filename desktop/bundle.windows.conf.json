@@ -29,9 +29,8 @@
   },
   "plugins": {
     "updater": {
-      "endpoints": [
-        "https://release.monkeycode-ai.com/public/desktop/latest-windows.json"
-      ]
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY0MTkzMzI3RjhCQzRFMUYKUldRZlRyejRKek1aOUpBME1rRWdvQ1JjMVYzMFlIVEQ4UVVMVmtwWTJLVnM5VHdVeGRTemUrc3kK",
+      "endpoints": []
     }
   }
 }

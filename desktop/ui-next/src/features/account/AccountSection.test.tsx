@@ -94,7 +94,7 @@ describe("账号分区:门与登录面板", () => {
     expect(await screen.findByText("用微信扫一扫登录")).toBeDefined();
   });
 
-  it("扫码 ok:刷新登录态、顺带桥接 MonkeyCode,且两路自动同步(登录即同步,不用手点)", async () => {
+  it("扫码 ok:刷新登录态、顺带桥接 TeemoCode,且两路自动同步(登录即同步,不用手点)", async () => {
     let statusCalls = 0;
     let mcConnected = false;
     const { calls } = stubShell({
@@ -203,7 +203,7 @@ describe("短信验证码登录", () => {
     expect(restored.disabled).toBe(false);
   });
 
-  it("登录成功:baizhi_login 携带手机号与验证码,并顺带桥接 MonkeyCode", async () => {
+  it("登录成功:baizhi_login 携带手机号与验证码,并顺带桥接 TeemoCode", async () => {
     let loggedIn = false;
     let mcConnected = false;
     const { calls } = stubShell({
@@ -231,14 +231,14 @@ describe("短信验证码登录", () => {
   });
 });
 
-describe("MonkeyCode 账号密码登录入口", () => {
-  it("全未登录:MonkeyCode 组照出,入口归本卡;不摆「连接」死钮(桥接要百智云会话)", async () => {
+describe("TeemoCode 账号密码登录入口", () => {
+  it("全未登录:TeemoCode 组照出,入口归本卡;不摆「连接」死钮(桥接要百智云会话)", async () => {
     stubShell({ baizhi_status: bzOut, mc_status: mcOut, baizhi_wechat_start: never });
     render(<AccountSection />);
-    expect(await screen.findByText("MonkeyCode 云端")).toBeDefined();
-    expect(screen.queryByRole("button", { name: "连接 MonkeyCode 云端" })).toBeNull();
-    // 展开 → 收起:表单在 MonkeyCode 卡内,不再挂在百智云登录卡下方
-    await userEvent.click(screen.getByRole("button", { name: "使用 MonkeyCode 账号密码登录" }));
+    expect(await screen.findByText("TeemoCode 云端")).toBeDefined();
+    expect(screen.queryByRole("button", { name: "连接 TeemoCode 云端" })).toBeNull();
+    // 展开 → 收起:表单在 TeemoCode 卡内,不再挂在百智云登录卡下方
+    await userEvent.click(screen.getByRole("button", { name: "使用 TeemoCode 账号密码登录" }));
     expect(screen.getByRole("textbox", { name: "邮箱" })).toBeDefined();
     await userEvent.click(screen.getByRole("button", { name: "收起" }));
     expect(screen.queryByRole("textbox", { name: "邮箱" })).toBeNull();
@@ -247,8 +247,8 @@ describe("MonkeyCode 账号密码登录入口", () => {
   it("百智云已登录、MC 未连:出「连接」主钮,账密入口仍在同一张卡", async () => {
     stubShell({ baizhi_status: bzIn, mc_status: mcOut, mc_usage: () => null });
     render(<AccountSection />);
-    expect(await screen.findByRole("button", { name: "连接 MonkeyCode 云端" })).toBeDefined();
-    expect(screen.getByRole("button", { name: "使用 MonkeyCode 账号密码登录" })).toBeDefined();
+    expect(await screen.findByRole("button", { name: "连接 TeemoCode 云端" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "使用 TeemoCode 账号密码登录" })).toBeDefined();
   });
 
   it("空提交拦截;正确提交 mc_password_login 原样携带 email/password", async () => {
@@ -265,7 +265,7 @@ describe("MonkeyCode 账号密码登录入口", () => {
       mc_models_sync: () => ({ models: [{ name: "m", base_url: "https://m", api_key: "k", model: "m", source: "monkeycode" }] }),
     });
     render(<AccountSection />);
-    await userEvent.click(await screen.findByRole("button", { name: "使用 MonkeyCode 账号密码登录" }));
+    await userEvent.click(await screen.findByRole("button", { name: "使用 TeemoCode 账号密码登录" }));
 
     await userEvent.click(screen.getByRole("button", { name: "登录" }));
     expect(screen.getByRole("alert").textContent).toContain("请输入邮箱和密码");
@@ -277,7 +277,7 @@ describe("MonkeyCode 账号密码登录入口", () => {
     expect(await screen.findByText("云端用户")).toBeDefined();
     expect(calls.find((c) => c.cmd === "mc_password_login")?.args).toEqual({ email: "a@b.c", password: "p w" });
     // MC 已连、百智云未登录:补百智云登录入口但不再给账密入口
-    expect(screen.queryByRole("button", { name: "使用 MonkeyCode 账号密码登录" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "使用 TeemoCode 账号密码登录" })).toBeNull();
     // 账密直连同样是登录真实事件:会员模型自动同步
     await waitFor(() => expect(calls.some((c) => c.cmd === "mc_models_sync")).toBe(true));
   });
@@ -444,7 +444,7 @@ describe("已登录:用量面板/签到/同步/断开", () => {
     });
     render(<AccountSection />);
     await userEvent.click(await screen.findByRole("button", { name: "断开连接" }));
-    expect(await screen.findByRole("button", { name: "连接 MonkeyCode 云端" })).toBeDefined();
+    expect(await screen.findByRole("button", { name: "连接 TeemoCode 云端" })).toBeDefined();
     const names = calls.map((c) => c.cmd);
     const revokeAt = names.indexOf("mc_models_revoke");
     const logoutAt = names.indexOf("mc_logout");
@@ -469,18 +469,18 @@ describe("已登录:用量面板/签到/同步/断开", () => {
     });
     render(<AccountSection />);
     await userEvent.click(await screen.findByRole("button", { name: "断开连接" }));
-    expect(await screen.findByRole("button", { name: "连接 MonkeyCode 云端" })).toBeDefined();
+    expect(await screen.findByRole("button", { name: "连接 TeemoCode 云端" })).toBeDefined();
     expect(calls.map((c) => c.cmd)).toContain("mc_logout");
     expect((await screen.findByRole("alert")).textContent).toContain("网络不可达");
   });
 });
 
 describe("自建部署配置(彩蛋解锁)", () => {
-  it("默认隐藏;连点 MonkeyCode 卡图标 6 次解锁并记住", async () => {
+  it("默认隐藏;连点 TeemoCode 卡图标 6 次解锁并记住", async () => {
     stubShell({ baizhi_status: bzOut, mc_status: mcOut });
     const { unmount } = render(<AccountSection draft={emptyDraft()} onDraft={() => {}} />);
     // 卡渲染出来再点(logo 是 aria-hidden 的装饰图,按 DOM 取)
-    await screen.findByText("MonkeyCode 云端");
+    await screen.findByText("TeemoCode 云端");
     expect(screen.queryByText("自建部署")).toBeNull();
     const logo = document.querySelector('img[src="/logo.png"]')!;
     for (let i = 0; i < 5; i++) fireEvent.click(logo);
@@ -512,7 +512,7 @@ describe("自建部署配置(彩蛋解锁)", () => {
     localStorage.setItem("mc.serverConfigUnlocked", "1");
     stubShell({ baizhi_status: bzOut, mc_status: mcOut });
     render(<AccountSection />);
-    await screen.findByText("MonkeyCode 云端");
+    await screen.findByText("TeemoCode 云端");
     expect(screen.queryByText("自建部署")).toBeNull();
   });
 });

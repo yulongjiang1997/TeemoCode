@@ -1,21 +1,22 @@
 <!DOCTYPE html>
 <!-- 桌宠状态页:macOS/Linux 直接作为透明置顶小窗;
      Windows(含 Win7)上隐藏运行,只承担状态聚合与音效,画面推送给壳的原生 layered window。
-     形象:官方吉祥物 52 帧精灵图(pet-sprite.webp,88px@2x),
-     CSS steps 逐帧播放——待机慢速打盹、运行中正面敲键盘、等审批定格
-     摇晃、离线定格在低头睡着帧并灰化。
+     形象:37 帧精灵图(pet-sprite.png,240px/帧 @2x 源图,显示 120x120),
+     CSS steps 逐帧播放——待机抛萝卜吃、工作中写作、等待审核拔萝卜、
+     庆祝抛彩蛋、离线定格正面图并灰化。
+     节奏:160ms/帧(沿用动作包 GIF 原始速度)。
      数据流:sessions_list 命令取快照 → session-event 壳事件持续更新
      (壳聚合引擎状态,引擎重启对本页透明);快照失败视为引擎离线,
      3s 重试,另有 10s 周期性快照兜底探活。 -->
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>MonkeyCode 桌宠</title>
+<title>TeemoCode 桌宠</title>
 <style>
   * { box-sizing:border-box; user-select:none; -webkit-user-select:none; }
   html, body { margin:0; background:transparent; overflow:hidden; }
   body {
-    width:116px; height:120px; display:flex; flex-direction:column;
+    width:204px; height:232px; display:flex; flex-direction:column;
     align-items:center; justify-content:flex-end;
     font:11px/1.4 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
     cursor:grab;
@@ -24,7 +25,7 @@
 
   /* ---- 气泡 ---- */
   #bubble {
-    max-width:112px; padding:4px 9px; border-radius:9px; margin-bottom:2px;
+    max-width:196px; padding:4px 9px; border-radius:9px; margin-bottom:2px;
     background:rgba(19,19,22,.88); color:#d8d8de; text-align:center;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; position:relative;
     opacity:0; transform:translateY(4px); transition:opacity .2s, transform .2s;
@@ -41,28 +42,27 @@
   #bubble.err { background:rgba(185,52,52,.92); color:#ffecec; }
   #bubble.err::after { border-top-color:rgba(185,52,52,.92); }
 
-  /* ---- 吉祥物精灵图:52 帧横条。
-         帧段:1-7 无所事事 / 8-37 正面敲键盘 / 38-44 看通知 / 45-51 庆祝 / 52 睡着。
+  /* ---- 吉祥物精灵图:37 帧横条。
+         帧段:1-12 待机 / 13-18 工作中 / 19-30 等待审核 / 31-36 庆祝 / 37 离线。
          各状态在自己的帧段内 steps 循环;庆祝只播一遍后定格末姿势 ---- */
-  #wrap { width:88px; height:88px; }
+  #wrap { width:200px; height:200px; }
   #sprite {
-    width:88px; height:88px;
-    background:url(pet-sprite.webp) 0 0 / 4576px 88px no-repeat;
+    width:200px; height:200px;
+    background:url(pet-sprite.png) 0 0 / 7400px 200px no-repeat;
   }
-  @keyframes idle-loop   { from { background-position-x:0; }       to { background-position-x:-616px; } }
-  @keyframes work-loop   { from { background-position-x:-616px; }  to { background-position-x:-3256px; } }
-  @keyframes notify-loop { from { background-position-x:-3256px; } to { background-position-x:-3872px; } }
-  @keyframes cheer-once  { from { background-position-x:-3872px; } to { background-position-x:-4488px; } }
+  @keyframes idle-loop   { from { background-position-x:0; }        to { background-position-x:-2400px; } }
+  @keyframes work-loop   { from { background-position-x:-2400px; }  to { background-position-x:-3600px; } }
+  @keyframes notify-loop { from { background-position-x:-3600px; }  to { background-position-x:-6000px; } }
+  @keyframes cheer-once  { from { background-position-x:-6000px; }  to { background-position-x:-7200px; } }
 
-  /* 空闲 7 帧全是独立姿势(非补间)。桌宠挂在余光位,动作越频繁越抢注意力,
-     而空闲正是最不该抢注意力的状态:2.5s/姿势 ≈ 人发呆时的小动作节奏 */
-  body.st-idle      #sprite { animation:idle-loop 17.5s steps(7) infinite; }
-  body.st-running   #sprite { animation:work-loop 4.8s steps(30) infinite; }
-  body.st-waiting   #sprite { animation:notify-loop 1.6s steps(7) infinite; }
-  /* 庆祝:播一遍(帧 45-51),动画结束回落到基准位 = 末帧叉腰挺胸,撑满气泡时长 */
-  body.st-celebrate #sprite { background-position-x:-4400px; animation:cheer-once 1.4s steps(7); }
+  /* 节奏沿用动作包 GIF 原始 160ms/帧 */
+  body.st-idle      #sprite { animation:idle-loop 1.92s steps(12) infinite; }
+  body.st-running   #sprite { animation:work-loop 0.96s steps(6) infinite; }
+  body.st-waiting   #sprite { animation:notify-loop 1.92s steps(12) infinite; }
+  /* 庆祝:播一遍(帧 31-36),动画结束回落到基准位 = 末帧定格 */
+  body.st-celebrate #sprite { background-position-x:-7000px; animation:cheer-once 0.96s steps(6); }
   body.st-offline   #sprite {
-    background-position-x:-4488px; /* 第 52 帧:完全低头睡着 */
+    background-position-x:-7200px; /* 第 37 帧:离线静态(角色正面图) */
     filter:grayscale(.7) brightness(.92); opacity:.85;
   }
 </style>
@@ -272,9 +272,9 @@
   // 和气泡实际形状做命中检测；光标落在透明像素时临时开启穿透。
   // 穿透后页面收不到 mousemove，所以用全局光标位置低频探测重新进入热区。
   const MAC_HIT_POLL_MS = 50;
-  const SPRITE_CSS_SIZE = 88;
-  const SPRITE_SOURCE_SIZE = 176;
-  const SPRITE_FRAMES = 52;
+  const SPRITE_CSS_SIZE = 200;
+  const SPRITE_SOURCE_SIZE = 400;
+  const SPRITE_FRAMES = 37;
   const SPRITE_ALPHA_HIT = 20;
   let macSpriteMasks = null;
   let macWindowOrigin = null;
@@ -307,7 +307,7 @@
       }
       macSpriteMasks = masks;
     };
-    image.src = 'pet-sprite.webp';
+    image.src = 'pet-sprite.png';
   }
 
   function inRoundedRect(x, y, rect, radius) {

@@ -162,7 +162,7 @@ describe("NewCloudTask", () => {
   // 未连接不是"选项加载失败":恢复动作是去设置里连账号,不是重试。
   // 无条件拉 mc_task_options 只会把壳的 401 原文摊在面板上(旧 UI
   // newtask.tsx:289/916 的 cloudReady 守卫 + 「请先连接」)
-  it("未连接 MonkeyCode:不拉选项,给「请先连接」空态与去设置入口", async () => {
+  it("未连接 TeemoCode:不拉选项,给「请先连接」空态与去设置入口", async () => {
     const calls: string[] = [];
     (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
       core: {
@@ -176,7 +176,7 @@ describe("NewCloudTask", () => {
     };
     const onOpenSettings = vi.fn();
     render(<NewCloudTask onCreated={() => {}} onOpenSettings={onOpenSettings} />);
-    expect(await screen.findByText("请先连接 MonkeyCode")).toBeTruthy();
+    expect(await screen.findByText("请先连接 TeemoCode")).toBeTruthy();
     expect(calls).not.toContain("mc_task_options"); // 明知会 401 就不拉
     expect(screen.queryByText(/401/)).toBeNull(); // 不把壳的原文摊给用户
     expect(screen.queryByLabelText("任务描述")).toBeNull();
@@ -188,7 +188,7 @@ describe("NewCloudTask", () => {
     stubShell([], OPTIONS, new Error("shell offline"));
     render(<NewCloudTask onCreated={() => {}} />);
     expect((await screen.findByRole("alert")).textContent).toContain("shell offline");
-    expect(screen.queryByText("请先连接 MonkeyCode")).toBeNull();
+    expect(screen.queryByText("请先连接 TeemoCode")).toBeNull();
   });
 
   it("空描述拦截外显", async () => {

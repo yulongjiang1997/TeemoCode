@@ -53,7 +53,7 @@ describe("usableCloudHosts / pickDefaultCloudHost", () => {
   const hosts: McCloudHost[] = [
     { id: "h-online", name: "私有A", status: "online" },
     { id: "h-off", name: "私有B", status: "offline" },
-    { id: PUBLIC_CLOUD_HOST_ID, name: "MonkeyCode", status: "online" },
+    { id: PUBLIC_CLOUD_HOST_ID, name: "TeemoCode", status: "online" },
   ];
 
   it("公共宿主始终第一;离线私有宿主剔除;公共模型强制公共宿主", () => {
