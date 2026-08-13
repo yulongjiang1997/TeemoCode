@@ -9,7 +9,8 @@
     ],
     "resources": {
       "../browser-extension/dist": "browser-extension",
-      "binaries/ohmyagent-linux": "./"
+      "binaries/ohmyagent-linux": "./",
+      "binaries/WebView2Loader.dll": "./"
     },
     "icon": [
       "icons/icon.ico",

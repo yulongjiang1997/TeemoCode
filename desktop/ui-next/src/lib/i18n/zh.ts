@@ -57,6 +57,7 @@ export const zh = {
   "sidebar.noResults.chat.detail": "试试标题中的其他关键词。",
   "sidebar.row.hint": "右键管理",
   "sidebar.row.chatDetail": "本地会话",
+  "sidebar.row.tokens": "Token 用量",
   "sidebar.row.rename": "重命名",
   "sidebar.row.archive": "归档",
   "sidebar.row.unarchive": "取消归档",

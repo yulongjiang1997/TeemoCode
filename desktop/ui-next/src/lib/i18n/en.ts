@@ -53,6 +53,7 @@ export const en: Record<MessageKey, string> = {
   "sidebar.noResults.chat.detail": "Try another keyword from the title.",
   "sidebar.row.hint": "Right-click to manage",
   "sidebar.row.chatDetail": "Local chat",
+  "sidebar.row.tokens": "Token usage",
   "sidebar.row.rename": "Rename",
   "sidebar.row.archive": "Archive",
   "sidebar.row.unarchive": "Unarchive",

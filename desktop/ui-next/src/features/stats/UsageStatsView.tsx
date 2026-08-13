@@ -18,6 +18,14 @@ const total = (b: Bucket): number => b.input_tokens + b.output_tokens;
 
 const fmt = (n: number): string => n.toLocaleString("en-US");
 
+/** 浏览器本地时区的今天 `YYYY-MM-DD`,与壳侧 `stats::today()` 同口径 */
+const todayKey = (): string => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
+const zeroBucket: Bucket = { input_tokens: 0, output_tokens: 0, calls: 0 };
+
 /** 汇总卡:大号总计 + 「输入 X · 输出 Y · N 次调用」副行 */
 function SumCard({ label, bucket }: { label: string; bucket: Bucket }) {
   return (
@@ -330,27 +338,51 @@ export function UsageStatsView() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(async () => {
-    setBusy(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setBusy(true);
     setError("");
     try {
       setStats(await usageStats());
     } catch (e) {
       setError(errMsg(e));
     } finally {
-      setBusy(false);
+      if (!silent) setBusy(false);
     }
   }, []);
 
+  // 挂载时取一次;此后每 60s 静默轮询 + 窗口回到前台时刷新,保证跨天/后台
+  // 任务消耗能被面板看到,不必手动点刷新
   useEffect(() => {
     void load();
+    const timer = setInterval(() => void load(true), 60_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void load(true);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [load]);
 
-  const last7: Bucket = { input_tokens: 0, output_tokens: 0, calls: 0 };
-  for (const d of stats?.days.slice(0, 7) ?? []) {
-    last7.input_tokens += d.input_tokens;
-    last7.output_tokens += d.output_tokens;
-    last7.calls += d.calls;
+  const byDate = new Map<string, UsageStats["days"][number]>();
+  for (const d of stats?.days ?? []) byDate.set(d.date, d);
+
+  // 「今日」按真实日历日取;今天还没有用量时显示 0,而不是回退到最近有数据的那天
+  const todayBucket = byDate.get(todayKey()) ?? zeroBucket;
+
+  // 「近 7 天」按最近 7 个自然日累加(含今天),中间空档也算 0
+  const last7: Bucket = { ...zeroBucket };
+  for (let i = 0; i < 7; i++) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const b = byDate.get(key);
+    if (b) {
+      last7.input_tokens += b.input_tokens;
+      last7.output_tokens += b.output_tokens;
+      last7.calls += b.calls;
+    }
   }
 
   return (
@@ -391,7 +423,7 @@ export function UsageStatsView() {
         ) : (
           <>
             <div className="flex gap-3">
-              <SumCard label={t("stats.card.today")} bucket={stats.days[0] ?? { input_tokens: 0, output_tokens: 0, calls: 0 }} />
+              <SumCard label={t("stats.card.today")} bucket={todayBucket} />
               <SumCard label={t("stats.card.last7d")} bucket={last7} />
               <SumCard label={t("stats.card.total")} bucket={stats.totals} />
             </div>

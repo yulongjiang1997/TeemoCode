@@ -42,3 +42,81 @@ export async function usageStats(): Promise<UsageStats> {
   }
   return invoke<UsageStats>("usage_stats");
 }
+
+/** 行尾/头部展示用的 token 用量(子代理已归并进父任务)。 */
+export interface TokenUsage {
+  input: number;
+  output: number;
+  calls: number;
+  models: { model: string; input_tokens: number; output_tokens: number; calls: number }[];
+}
+
+interface UsageAgg {
+  input: number;
+  output: number;
+  calls: number;
+  models: Map<string, { input: number; output: number; calls: number }>;
+}
+
+function addAgg(m: Map<string, UsageAgg>, sid: string, s: SessionRow) {
+  let agg = m.get(sid);
+  if (!agg) {
+    agg = { input: 0, output: 0, calls: 0, models: new Map() };
+    m.set(sid, agg);
+  }
+  agg.input += s.input_tokens;
+  agg.output += s.output_tokens;
+  agg.calls += s.calls;
+  for (const md of s.models) {
+    const cur = agg.models.get(md.model);
+    agg.models.set(md.model, {
+      input: (cur?.input ?? 0) + md.input_tokens,
+      output: (cur?.output ?? 0) + md.output_tokens,
+      calls: (cur?.calls ?? 0) + md.calls,
+    });
+  }
+}
+
+const aggToUsage = (a: UsageAgg): TokenUsage => ({
+  input: a.input,
+  output: a.output,
+  calls: a.calls,
+  models: a.models.size
+    ? [...a.models.entries()].map(([model, v]) => ({ model, input_tokens: v.input, output_tokens: v.output, calls: v.calls }))
+    : [],
+});
+
+/** 把 usage_stats 快照聚合为「会话 id → 用量」;子代理(parent 非空)归并进父任务。 */
+export function buildSessionUsageMap(sessions: UsageStats["sessions"]): Map<string, TokenUsage> {
+  const m = new Map<string, UsageAgg>();
+  for (const s of sessions) {
+    addAgg(m, s.session_id, s);
+    if (s.parent) addAgg(m, s.parent, s);
+  }
+  const out = new Map<string, TokenUsage>();
+  for (const [sid, agg] of m) out.set(sid, aggToUsage(agg));
+  return out;
+}
+
+/** 把一组会话 id 的用量合并成一个合计(文件夹级展示用)。 */
+export function sumUsage(ids: Iterable<string>, map: ReadonlyMap<string, TokenUsage>): TokenUsage | null {
+  const agg: UsageAgg = { input: 0, output: 0, calls: 0, models: new Map() };
+  let any = false;
+  for (const id of ids) {
+    const u = map.get(id);
+    if (!u) continue;
+    any = true;
+    agg.input += u.input;
+    agg.output += u.output;
+    agg.calls += u.calls;
+    for (const md of u.models) {
+      const cur = agg.models.get(md.model);
+      agg.models.set(md.model, {
+        input: (cur?.input ?? 0) + md.input_tokens,
+        output: (cur?.output ?? 0) + md.output_tokens,
+        calls: (cur?.calls ?? 0) + md.calls,
+      });
+    }
+  }
+  return any ? aggToUsage(agg) : null;
+}

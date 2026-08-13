@@ -416,6 +416,18 @@ impl Inner {
                     self.push_usage(&sid, used, window);
                 }
                 self.record_usage(&sid, &data);
+                // 挂到本轮最后一条 agent_message 帧:每条助手消息显示其 token
+                // 用量。usage 事件是每次模型调用的全量,同帧后到覆盖前值。
+                let input = data.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                let output = data.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                if input > 0 || output > 0 {
+                    if let Some(sess) = self.sess.sessions.lock_ok().get_mut(&sid) {
+                        sess.fold.attach_usage(input, output);
+                    }
+                    // 实时路径:usage 晚于流式帧,单独补发 session-usage 事件,
+                    // UI 据此把用量补到最后一条助手消息与大纲条目上。
+                    self.emit_session_usage(&sid, input, output);
+                }
             }
             // 会话摘要:引擎每轮用户消息后异步生成一句 ≤60 字的对话摘要
             // (随对话演进改写,后一轮覆盖前一轮),只给顶层会话生成。
