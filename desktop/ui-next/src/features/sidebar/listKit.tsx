@@ -13,7 +13,7 @@
 // - SectionFold 小节折叠:Archive 形小节头(10px 图标行首、无计数),
 //   开合走 prefs 契约键持久化,收起即卸载(部分 webview 里 details 收起
 //   后嵌套 ul 残留占位空间)。
-import { IconArchive, type TablerIcon } from "@tabler/icons-react";
+import { IconArchive, IconPin, type TablerIcon } from "@tabler/icons-react";
 import { useState, type MouseEvent, type ReactNode } from "react";
 
 import { openMenu, type MenuItem } from "@/lib/contextMenu";
@@ -160,6 +160,7 @@ export function ListRow({
   primary,
   trailing,
   usage,
+  pinned,
   tooltip,
   level = 0,
   active,
@@ -175,6 +176,8 @@ export function ListRow({
   trailing?: { tone: string; label: string; pulse?: boolean } | null;
   /** 该会话的 token 用量(>0 才显示行尾徽标;点击弹明细)。 */
   usage?: TokenUsage | null;
+  /** 置顶:行首小图钉标记 */
+  pinned?: boolean;
   tooltip: string;
   /** 缩进级(见 LEVELS):0 = 平铺行,1 = 项目内任务行,依此类推 */
   level?: number;
@@ -204,7 +207,10 @@ export function ListRow({
         }}
       >
         {/* 活跃行走正文色(不覆写);归档降到 /55,选中态不降——选中就该看清 */}
-        <span className={`min-w-0 flex-1 truncate ${archived && !active ? "text-base-content/55" : ""}`}>{primary}</span>
+        <span className={`min-w-0 flex-1 truncate ${archived && !active ? "text-base-content/55" : ""}`}>
+          {pinned && <IconPin size={10} stroke={2} className="-mt-px me-0.5 inline text-warning" aria-hidden />}
+          {primary}
+        </span>
         {/* token 用量徽标:紧凑总数,点击弹明细(命令式弹窗,见 showTokenPopover) */}
         {usage && usage.input + usage.output > 0 && (
           <button

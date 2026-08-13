@@ -118,6 +118,10 @@ pub fn dispatch(ctx: &RepoCtx, kind: &str, payload: &Value) -> Value {
             Err(e) => json!({ "error": e }),
         };
     }
+    if kind == "repo_recent_files" {
+        let since_min = payload.get("since_min").and_then(|v| v.as_u64()).unwrap_or(60);
+        return json!({ "result": recent_files(ctx, since_min) });
+    }
     let r = match kind {
         "repo_file_list" => list_files(ctx, path),
         "repo_read_file" => read_file(ctx, path),
@@ -158,7 +162,57 @@ fn list_files(ctx: &RepoCtx, dir: &str) -> Result<Value, String> {
     Ok(Value::Array(entries))
 }
 
-/// 读取文件内容(1MB 上限)。
+/// 工作区内最近 since_min 分钟内修改过的文件(相对 workdir,按 mtime 降序,
+/// 上限 50)。与 git 无关:非 git 仓库也能用(「生成资源/输出目录」检测)。
+/// 跳过依赖/构建产物目录;WSL 经 UNC 走同一套 fs_root。
+fn recent_files(ctx: &RepoCtx, since_min: u64) -> Value {
+    // 只跳过依赖/缓存目录;target/dist/build/.next 等构建输出目录**不跳**
+    // (产物经常就在其中)。walk 有深度/条数上限兜底,不会因大目录卡死。
+    const SKIP: &[&str] = &[
+        "node_modules",
+        ".git",
+        ".venv",
+        "__pycache__",
+        ".cache",
+        "vendor",
+        ".idea",
+        ".vscode",
+    ];
+    let since = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(since_min.saturating_mul(60)))
+        .unwrap_or(std::time::UNIX_EPOCH);
+    fn walk(dir: &std::path::Path, rel: &str, since: std::time::SystemTime, depth: usize, out: &mut Vec<(i64, String)>) {
+        if depth > 10 || out.len() > 200 {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let rel_child = if rel.is_empty() { name.clone() } else { format!("{rel}/{name}") };
+            let Ok(md) = entry.metadata() else { continue };
+            if md.is_dir() {
+                if SKIP.contains(&name.as_str()) {
+                    continue;
+                }
+                walk(&path, &rel_child, since, depth + 1, out);
+            } else if let Ok(modified) = md.modified() {
+                if modified >= since {
+                    let secs = modified
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    out.push((secs, rel_child));
+                }
+            }
+        }
+    }
+    let mut out: Vec<(i64, String)> = Vec::new();
+    walk(&ctx.fs_root(), "", since, 0, &mut out);
+    out.sort_by(|a, b| b.0.cmp(&a.0));
+    out.truncate(50);
+    Value::Array(out.into_iter().map(|(_, p)| json!({ "path": p })).collect())
+}
 fn read_file(ctx: &RepoCtx, rel: &str) -> Result<Value, String> {
     let p = ctx.resolve(rel)?;
     let md = std::fs::metadata(&p).map_err(|e| format!("读取失败: {e}"))?;

@@ -14,8 +14,8 @@
 // LogList 函数体里只许留 O(n) 的**廉价**扫描(join/分组/锚定表);逐条目的
 // 昂贵计算(presentToolCall、splitAttachments、markdown)一律待在行组件内,
 // 靠 memo 只在该行变化时才跑。
-import { IconArrowsMinimize, IconChevronRight, IconFile as FileIcon, IconSparkles } from "@tabler/icons-react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { IconArrowsMinimize, IconChevronRight, IconFile as FileIcon, IconFolderOpen, IconSparkles } from "@tabler/icons-react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Markdown, MarkdownInline } from "@/components/markdown/Markdown";
 import { downloadUpload, Lightbox, UploadImg } from "@/components/media/UploadImg";
@@ -493,6 +493,8 @@ export const LogList = memo(function LogList({
   onLocalLink,
   workdir,
   loadFullTool,
+  turnOutputs,
+  onOpenOutput,
 }: {
   state: ChatState;
   sessionId: string;
@@ -509,6 +511,10 @@ export const LogList = memo(function LogList({
   uploadUrl?: (path: string) => Promise<string>;
   /** markdown 工作区文件链接点击代理(reveal);缺省点击无动作。 */
   onLocalLink?: (path: string) => void;
+  /** 每回合产物(user seq → 工作区相对路径);回合末尾出「打开输出目录」。 */
+  turnOutputs?: Record<number, string>;
+  /** 打开某回合产物目录(缺省不渲染按钮)。 */
+  onOpenOutput?: (rel: string) => void;
   /** 会话工作目录:工具卡 path 型目标剥绝对前缀;缺省不剥。 */
   workdir?: string;
   /** 工具卡大字段回读通道(按帧 seq 取原帧);缺省只展示截断头部。 */
@@ -528,6 +534,7 @@ export const LogList = memo(function LogList({
   // 测试环境天然 no-op。代价:hidden 行退出查找/无障碍树,滚回带内即恢复
   // (auto 的跳过态本就只有占位,实际损失仅辅助技术读远端历史,可接受)。
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const { t } = useI18n();
   const farPassRef = useRef<() => void>(() => {});
   useEffect(() => {
     let raf = 0;
@@ -821,9 +828,19 @@ export const LogList = memo(function LogList({
             />
           );
         }
-        return (
+        // 回合末尾「打开输出目录」:产物挂在对应 user seq 上;按钮跟随该回合
+        // 最后一条消息出现,repoReveal 定位产物文件 = 打开产物所在目录
+        const isTurnEnd = i === state.items.length - 1 || state.items[i + 1]?.kind === "user";
+        const turnSeqOf = (() => {
+          for (let k = i; k >= 0; k--) {
+            const it = state.items[k];
+            if (it?.kind === "user" && it.seq !== undefined) return it.seq;
+          }
+          return undefined;
+        })();
+        const outputRel = turnSeqOf !== undefined ? turnOutputs?.[turnSeqOf] : undefined;
+        const row = (
           <Row
-            key={itemKey(state, i)}
             item={item}
             perm={permOf(item)}
             flash={item.kind === "user" && item.seq !== undefined && item.seq === flashSeq}
@@ -832,6 +849,24 @@ export const LogList = memo(function LogList({
             gap={gap}
             {...shared}
           />
+        );
+        if (!isTurnEnd || !outputRel || !onOpenOutput) {
+          return <Fragment key={itemKey(state, i)}>{row}</Fragment>;
+        }
+        return (
+          <Fragment key={itemKey(state, i)}>
+            {row}
+            <div className="flex justify-center">
+              <button
+                type="button"
+                className="btn btn-ghost btn-xs gap-1.5 text-base-content/70"
+                onClick={() => onOpenOutput(outputRel)}
+              >
+                <IconFolderOpen size={13} stroke={1.75} aria-hidden />
+                {t("chat.openOutputDir")}
+              </button>
+            </div>
+          </Fragment>
         );
       })}
       {state.running && state.streamKind === "" && (

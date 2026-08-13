@@ -83,3 +83,12 @@ export async function repoReveal(id: string, path: string): Promise<void> {
   const r = await call<{ ok?: boolean }>(id, "repo_reveal", { path });
   if (r.error) throw new Error(r.error);
 }
+
+/** 工作区最近 sinceMin 分钟内修改过的文件(相对路径,按 mtime 降序)。
+ *  与 git 无关:非 git 工作区也能用于「生成资源」检测。 */
+export async function repoRecentFiles(id: string, sinceMin = 60): Promise<string[]> {
+  if (!inDesktopShell()) return [];
+  const r = await call<{ path: string }[]>(id, "repo_recent_files", { since_min: sinceMin });
+  const rows = unwrap(r, []);
+  return rows.map((x) => x.path).filter((p): p is string => typeof p === "string");
+}

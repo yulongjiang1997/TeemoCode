@@ -24,10 +24,19 @@ import {
 } from "react";
 
 import { useApprovalHotkeys } from "@/app/shortcuts";
+
+/** 从文本里提取「产物文件路径」:取最后一段带分隔符+扩展名的路径,
+ *  剥盘符/前导分隔归一为工作区相对路径。agent 常在回合末尾明说产物位置。 */
+function extractOutputPath(text: string): string | null {
+  const matches = text.match(/[\w.@+-]+(?:[\\/][\w.@+-]+)+\.\w{1,6}/g);
+  if (!matches?.length) return null;
+  const raw = matches[matches.length - 1] ?? "";
+  return raw.replace(/^[A-Za-z]:[\\/]/, "").replace(/^[\\/]+/, "") || null;
+}
 import { fmtCompact, showTokenPopover } from "@/features/sidebar/listKit";
 import { useI18n } from "@/lib/i18n";
 import { sessionOutline, type OutlineItem } from "@/lib/ipc/controls";
-import { repoChanges, repoReveal } from "@/lib/ipc/repo";
+import { repoChanges, repoRecentFiles, repoReveal } from "@/lib/ipc/repo";
 import { sessionFrame, sessionPatch, type SessionMeta } from "@/lib/ipc/sessions";
 import { buildSessionUsageMap, usageStats, type TokenUsage } from "@/lib/ipc/usageStats";
 import { onNativeFileDrop, uploadFileURL } from "@/lib/ipc/uploads";
@@ -635,6 +644,46 @@ export function ChatView({
       alive = false;
     };
   }, [changesToken, meta.id]);
+
+  // 每回合「打开输出目录」:轮末优先解析该回合最后一条助手消息里的产物路径
+  // (agent 会明说「已生成:xxx.exe」),解析不到再回退工作区最近文件扫描。
+  // repoReveal 定位产物文件 = 打开产物所在目录。
+  const [turnOutputs, setTurnOutputs] = useState<Record<number, string>>({});
+  const claimedRef = useRef<Set<string>>(new Set());
+  const lastUserSeqRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    for (let i = state.items.length - 1; i >= 0; i--) {
+      const it = state.items[i];
+      if (it?.kind === "user" && it.seq !== undefined) {
+        lastUserSeqRef.current = it.seq;
+        break;
+      }
+    }
+  }, [state.items]);
+  useEffect(() => {
+    if (state.turnEnded && !prevTurnEnded.current) {
+      // 该回合最后一条助手消息(agent 明确产物路径)
+      let lastAgentText = "";
+      for (let i = state.items.length - 1; i >= 0; i--) {
+        const it = state.items[i];
+        if (it?.kind === "user") break;
+        if (it?.kind === "agent") lastAgentText = it.text;
+      }
+      const fromMsg = extractOutputPath(lastAgentText);
+      void repoRecentFiles(meta.id, 60)
+        .then((files) => {
+          const pick = fromMsg ?? files.find((p) => !claimedRef.current.has(p));
+          if (!pick) return;
+          claimedRef.current.add(pick);
+          const seq = lastUserSeqRef.current;
+          if (seq !== undefined) {
+            setTurnOutputs((prev) => (prev[seq] === pick ? prev : { ...prev, [seq]: pick }));
+          }
+        })
+        .catch(() => {});
+    }
+    prevTurnEnded.current = state.turnEnded;
+  }, [state.turnEnded, meta.id]);
   const dragDepth = useRef(0);
   const onDragEnter = (e: DragEvent<HTMLElement>) => {
     if (![...(e.dataTransfer?.items ?? [])].some((i) => i.kind === "file")) return;
@@ -944,6 +993,14 @@ export function ChatView({
             onLocalLink={revealMarkdownLink}
             workdir={meta.workdir}
             loadFullTool={loadFullTool}
+            turnOutputs={turnOutputs}
+            onOpenOutput={(rel) => {
+              void repoReveal(meta.id, rel).catch((e: unknown) => {
+                composerRef.current.notifyError(
+                  t("chat.revealFailed", { reason: e instanceof Error ? e.message : String(e) }),
+                );
+              });
+            }}
           />
         </div>
       </div>
