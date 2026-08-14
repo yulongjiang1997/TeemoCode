@@ -646,7 +646,8 @@ export function ChatView({
   useEffect(() => {
     void getConfig()
       .then((cfg) => {
-        modelRatioRef.current = cfg?.models?.find((m) => m.model === meta.model)?.auto_compact_ratio ?? 0;
+        // meta.model 是显示名(model_name),配置里可能叫 model(ID)或 name(显示名)
+        modelRatioRef.current = cfg?.models?.find((m) => m.model === meta.model || m.name === meta.model)?.auto_compact_ratio ?? 0;
       })
       .catch(() => {});
   }, [meta.id, meta.model]);
@@ -673,7 +674,8 @@ export function ChatView({
       rotatingRef.current = true;
       try {
         const cfg = await getConfig();
-        const model = cfg?.models?.find((m) => m.model === meta.model);
+        // meta.model 是显示名(model_name),配置里可能叫 model(ID)或 name(显示名)
+        const model = cfg?.models?.find((m) => m.model === meta.model || m.name === meta.model);
         if (!model) return;
         const keys = model.api_keys?.filter((k) => k.trim()) ?? [];
         keyFailRef.current += 1;
@@ -722,7 +724,7 @@ export function ChatView({
         const chain = [meta.model, ...readFallbackModels(meta.id)];
         const pos = chain.indexOf(meta.model);
         const nextModel = chain[pos + 1];
-        const nextCfg = cfg?.models?.find((m) => m.model === nextModel);
+        const nextCfg = cfg?.models?.find((m) => m.model === nextModel || m.name === nextModel);
         if (!nextModel || !nextCfg) return; // 没有备用模型了:任务失败,留失败态
         keyFailRef.current = 0; // 新模型从头试 key
         // 切换提示:主模型错误原因 + 切到哪个备用模型

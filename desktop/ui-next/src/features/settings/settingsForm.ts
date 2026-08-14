@@ -185,6 +185,8 @@ export function buildPayload(base: DesktopConfig, draft: SettingsDraft): Desktop
       provider: m.provider,
       base_url: m.base_url,
       api_key: m.api_key,
+      api_keys: m.api_keys,
+      api_key_aliases: m.api_key_aliases,
       model: m.model,
       default: isDefault,
       context_window: m.context_window,
