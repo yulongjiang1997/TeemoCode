@@ -11,7 +11,7 @@
 // ②反过来在关于页查到新版本但没装,退出设置后侧栏底部条依旧不显示,而这次检查
 // 还把接下来 30 分钟内的回焦复查一起闸掉了——那笔账记了,结果却只留在已卸载的
 // 组件里。
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 import { recordUpdateCheck, takeUpdateCheck, updateCheck, updateDownload, updateInstall, type UpdateInfo } from "@/lib/ipc/update";
 
@@ -36,6 +36,29 @@ function subscribe(cb: () => void): () => void {
 }
 
 const getSnapshot = (): UpdateInfo | null => current;
+
+/** 下载/安装态也走同一共享 store:关于页与侧栏底部条两处按钮必须同源联动
+ *  (这边点「更新」下载,那边同步变进度条;下载完成两边都出「立即安装」)。 */
+interface DownloadState {
+  downloading: boolean;
+  progress: number;
+  downloaded: boolean;
+  installing: boolean;
+  error: string | null;
+}
+let dl: DownloadState = { downloading: false, progress: 0, downloaded: false, installing: false, error: null };
+function publishDl(patch: Partial<DownloadState>): void {
+  dl = { ...dl, ...patch };
+  for (const cb of listeners) cb();
+}
+const getDlSnapshot = (): DownloadState => dl;
+
+/** 仅供测试:复位模块级共享态(更新信息 + 下载/安装态)。 */
+export function resetUpdateStoreForTests(): void {
+  current = null;
+  dl = { downloading: false, progress: 0, downloaded: false, installing: false, error: null };
+  for (const cb of listeners) cb();
+}
 
 /** 只读订阅(关于页):不起轮询,只跟随共享真值。 */
 export function useUpdateInfo(): UpdateInfo | null {
@@ -74,11 +97,7 @@ export function useUpdate(): {
   install: () => void;
 } {
   const update = useUpdateInfo();
-  const [downloading, setDownloading] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [downloaded, setDownloaded] = useState(false);
-  const [installing, setInstalling] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const dl = useSyncExternalStore(subscribe, getDlSnapshot, getDlSnapshot);
 
   useEffect(() => {
     checkGated();
@@ -92,34 +111,27 @@ export function useUpdate(): {
 
   return {
     update,
-    downloading,
-    progress,
-    downloaded,
-    installing,
-    error,
+    downloading: dl.downloading,
+    progress: dl.progress,
+    downloaded: dl.downloaded,
+    installing: dl.installing,
+    error: dl.error,
     download: () => {
-      setError(null);
-      setDownloading(true);
-      setProgress(0);
-      setDownloaded(false);
+      publishDl({ error: null, downloading: true, progress: 0, downloaded: false });
       void updateDownload((e) => {
-        setProgress(e.progress);
-        if (e.state === "downloaded") setDownloaded(true);
+        publishDl({ progress: e.progress });
+        if (e.state === "downloaded") publishDl({ downloaded: true });
       })
-        .then(() => setDownloaded(true))
+        .then(() => publishDl({ downloaded: true }))
         .catch((e) => {
-          setDownloading(false);
-          setError(e instanceof Error ? e.message : String(e));
+          publishDl({ downloading: false, error: e instanceof Error ? e.message : String(e) });
         });
     },
     install: () => {
-      setInstalling(true);
-      setError(null);
+      publishDl({ installing: true, error: null });
       void updateInstall().catch((e) => {
         // 失败:复位忙态并外显;成功后壳自行重启,不会走到这里
-        setInstalling(false);
-        setDownloading(false);
-        setError(e instanceof Error ? e.message : String(e));
+        publishDl({ installing: false, downloading: false, error: e instanceof Error ? e.message : String(e) });
       });
     },
   };
@@ -128,5 +140,6 @@ export function useUpdate(): {
 /** 仅测试用:清空模块级 store(跨用例会串)。 */
 export function resetUpdateForTest(): void {
   current = null;
+  dl = { downloading: false, progress: 0, downloaded: false, installing: false, error: null };
   for (const cb of listeners) cb();
 }
