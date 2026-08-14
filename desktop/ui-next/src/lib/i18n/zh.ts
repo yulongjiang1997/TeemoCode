@@ -340,6 +340,10 @@ export const zh = {
   "settings.about.installing": "更新中…",
   "settings.about.checkFailed": "检查更新失败",
   "settings.about.installHint": "安装完成后应用将自动重启。",
+  "settings.about.downloading": "下载更新中",
+  "settings.about.downloaded": "下载完成,是否立即安装?",
+  "settings.about.installNow": "立即安装",
+  "settings.about.update": "更新",
   // 关于页的隐藏排障入口(连点版本号解锁);「打开扩展目录」的常驻入口在
   // 设置·浏览器分区,键沿用同一条
   "settings.about.openAppDir": "打开程序目录",

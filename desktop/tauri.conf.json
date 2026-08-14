@@ -45,6 +45,7 @@
             "allow-sound-enabled",
             "allow-set-sound-enabled",
             "allow-update-check",
+            "allow-update-download",
             "allow-update-install",
             "allow-open-extension-dir",
             "allow-open-log-dir",

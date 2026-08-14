@@ -1,6 +1,7 @@
 // 应用更新域:静默检查(窗口焦点驱动 + 30 分钟闸门)与安装。
-// update_install 成功后壳会自行 app.restart();失败上抛给调用方外显。
-import { inDesktopShell, invoke } from "./ipc";
+// 下载与安装分离:update_download 只下载(带 update-download 进度事件),
+// 人工确认后 update_install 才安装;成功后壳自行 app.restart()。
+import { inDesktopShell, invoke, listen } from "./ipc";
 
 export interface UpdateInfo {
   available: boolean;
@@ -8,12 +9,29 @@ export interface UpdateInfo {
   latest?: string;
 }
 
+export interface UpdateDownloadEvent {
+  progress: number;
+  state: "downloading" | "downloaded";
+}
+
 export function updateCheck(): Promise<UpdateInfo | null> {
   if (!inDesktopShell()) return Promise.resolve(null);
   return invoke<UpdateInfo>("update_check").catch(() => null);
 }
 
-/** 安装更新。成功后壳自行 app.restart(),promise 不会正常返回;
+/** 下载更新(不安装)。成功后字节已暂存,等用户确认再 update_install。
+ *  进度经「update-download」事件下发(onDownloadProgress 可订阅)。 */
+export function updateDownload(onProgress?: (e: UpdateDownloadEvent) => void): Promise<void> {
+  if (!inDesktopShell()) return Promise.resolve();
+  const off = onProgress ? listen<UpdateDownloadEvent>("update-download", (e) => onProgress(e.payload)) : undefined;
+  return invoke<void>("update_download")
+    .catch((e) => {
+      throw e;
+    })
+    .finally(() => off?.());
+}
+
+/** 安装已下载的更新。成功后壳自行 app.restart(),promise 不会正常返回;
  *  失败必须上抛——调用方复位忙态并外显文案,吞掉就是按钮永远"更新中…"。 */
 export function updateInstall(): Promise<void> {
   return invoke<void>("update_install");

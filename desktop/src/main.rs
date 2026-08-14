@@ -35,6 +35,9 @@ use std::time::{Duration, Instant};
 
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
+
+use crate::driver::ohmy::ShellCtx;
+use serde_json::json;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, RunEvent, WebviewUrl, WebviewWindow,
@@ -681,19 +684,45 @@ async fn update_check(app: AppHandle) -> Result<serde_json::Value, String> {
 /// UI 内下载安装更新并重启(update_check 确认有新版后调用)。
 #[tauri::command]
 async fn update_install(app: AppHandle) -> Result<(), String> {
+    let pending = PENDING_UPDATE.lock().unwrap().take().ok_or("尚未下载更新,先点「更新」下载")?;
+    let (update, bytes) = pending;
+    update.install(bytes).map_err(|e| format!("安装更新失败: {e}"))?;
+    eprintln!("[desktop] 更新: 安装完成,重启应用");
+    app.restart();
+}
+
+/// update_download 下载完成的安装包暂存:下载(带进度事件)与安装(人工确认)分离。
+static PENDING_UPDATE: std::sync::Mutex<Option<(tauri_plugin_updater::Update, Vec<u8>)>> =
+    std::sync::Mutex::new(None);
+
+/// 仅下载更新(校验签名后暂存字节),不安装。进度经 `update-download` 事件
+/// (progress 0-100 / state)下发;下载完由用户确认后再调 update_install。
+#[tauri::command]
+async fn update_download(app: AppHandle) -> Result<(), String> {
     let updater = build_updater(&app)?;
     let update = match updater.check().await {
         Ok(Some(u)) => u,
         Ok(None) => return Err("当前已是最新版本".into()),
         Err(e) => return Err(format!("检查更新失败: {e}")),
     };
-    eprintln!("[desktop] 更新: UI 内触发下载安装 {}", update.version);
-    update
-        .download_and_install(|_, _| {}, || eprintln!("[desktop] 更新: 下载完成,安装中"))
+    eprintln!("[desktop] 更新: 下载 {}", update.version);
+    let app2 = app.clone();
+    let mut got: usize = 0;
+    let bytes = update
+        .download(
+            |chunk, total| {
+                got += chunk;
+                let pct = total.map(|t| if t > 0 { (got as f64 / t as f64 * 100.0) as u8 } else { 0 }).unwrap_or(0);
+                let _ = app2.emit_json("update-download", json!({ "progress": pct.min(100), "state": "downloading" }));
+            },
+            || {
+                let _ = app2.emit_json("update-download", json!({ "progress": 100, "state": "downloaded" }));
+            },
+        )
         .await
-        .map_err(|e| format!("更新失败: {e}"))?;
-    eprintln!("[desktop] 更新: 安装完成,重启应用");
-    app.restart();
+        .map_err(|e| format!("下载更新失败: {e}"))?;
+    *PENDING_UPDATE.lock().unwrap() = Some((update, bytes));
+    Ok(())
 }
 
 // ==================== 自动更新 ====================
@@ -1423,6 +1452,7 @@ fn main() {
             sound_enabled,
             set_sound_enabled,
             update_check,
+            update_download,
             update_install,
             open_extension_dir,
             open_app_dir,

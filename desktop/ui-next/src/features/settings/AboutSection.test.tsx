@@ -43,35 +43,34 @@ async function unlock() {
 }
 
 describe("关于页更新(H5)", () => {
-  it("发现更新使用信息提示，并明确安装后自动重启应用", async () => {
+  it("发现更新:显示版本号与「更新」按钮(下载→确认安装流程)", async () => {
     stubShell();
     render(<AboutSection />);
     await userEvent.click(screen.getByRole("button", { name: "检查更新" }));
 
-    const status = await screen.findByRole("status");
-    expect(status.className).toContain("alert-info");
-    expect(status.className).not.toContain("alert-success");
-    expect(status.textContent).toContain("安装完成后应用将自动重启");
+    // 检查后有版本号 + 「更新」按钮(点它只是下载,不是直接安装)
+    await waitFor(() => expect(screen.getByRole("button", { name: "更新" })).toBeTruthy());
+    expect(screen.getByText("1.0 → 1.1")).toBeTruthy(); // 版本号区间
   });
 
-  it("安装失败:复位忙态、外显失败文案,按钮可重试", async () => {
+  it("下载后确认安装:失败复位忙态、外显失败文案,按钮可重试", async () => {
     stubShell({ failInstall: "签名校验失败" });
     render(<AboutSection />);
     await userEvent.click(screen.getByRole("button", { name: "检查更新" }));
-    const install = await screen.findByRole("button", { name: "下载更新" });
-
-    await userEvent.click(install);
+    await userEvent.click(await screen.findByRole("button", { name: "更新" })); // 下载
+    await userEvent.click(await screen.findByRole("button", { name: "立即安装" })); // 确认安装
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("更新失败:签名校验失败"));
-    const again = screen.getByRole("button", { name: "下载更新" }); // 忙态已复位,不再是"更新中…"
+    const again = screen.getByRole("button", { name: "立即安装" }); // 忙态已复位,可重试
     expect((again as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it("安装成功路径:壳自行重启,按钮停在更新中", async () => {
+  it("安装成功路径:壳自行重启,按钮停在安装中", async () => {
     stubShell();
     render(<AboutSection />);
     await userEvent.click(screen.getByRole("button", { name: "检查更新" }));
-    await userEvent.click(await screen.findByRole("button", { name: "下载更新" }));
-    const busy = screen.getByRole("button", { name: /更新中/ });
+    await userEvent.click(await screen.findByRole("button", { name: "更新" }));
+    await userEvent.click(await screen.findByRole("button", { name: "立即安装" }));
+    const busy = await screen.findByRole("button", { name: /更新中/ }); // 安装悬起,忙态停留
     expect((busy as HTMLButtonElement).disabled).toBe(true);
   });
 });

@@ -1380,21 +1380,30 @@ export function Sidebar({
 
 function UpdateFooter() {
   const { t } = useI18n();
-  const { update, installing, error, install } = useUpdate();
+  const { update, downloading, progress, downloaded, installing, error, download, install } = useUpdate();
   if (!update?.available) return null;
-  // 安装失败:忙态已由 useUpdate 复位,这里换错误形态外显原因,按钮可重试
+  // 流程:有新版本 →「更新」下载(带进度)→ 下载完成 →「立即安装」(人工确认)
   return (
     <div
       role={error ? "alert" : "status"}
       className={`alert ${error ? "alert-error" : ""} alert-soft m-2 mt-0 flex items-center py-1.5 text-xs`}
     >
       <span className="min-w-0 flex-1 truncate" title={error ?? undefined}>
-        {error ? t("update.failed", { reason: error }) : t("update.available", { version: update.latest ?? "" })}
+        {error ? t("update.failed", { reason: error }) : downloaded ? t("settings.about.downloaded") : t("update.available", { version: update.latest ?? "" })}
       </span>
-      <button type="button" className={`btn ${error ? "btn-error" : "btn-primary"} btn-xs`} disabled={installing} onClick={install}>
-        {installing && <span className="loading loading-spinner loading-xs" aria-hidden />}
-        {t("update.install")}
-      </button>
+      {downloading && !downloaded ? (
+        <progress className="progress progress-primary progress-xs w-16" value={progress} max={100} aria-label={t("settings.about.downloading")} />
+      ) : downloaded ? (
+        <button type="button" className="btn btn-primary btn-xs" disabled={installing} onClick={install}>
+          {installing && <span className="loading loading-spinner loading-xs" aria-hidden />}
+          {installing ? t("settings.about.installing") : t("settings.about.installNow")}
+        </button>
+      ) : (
+        <button type="button" className={`btn ${error ? "btn-error" : "btn-primary"} btn-xs`} disabled={downloading || installing} onClick={download}>
+          {downloading && <span className="loading loading-spinner loading-xs" aria-hidden />}
+          {t("update.install")}
+        </button>
+      )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 // composer 全功能的集成测试:经 ChatView 挂载(真实 useSessionFeed/
 // useComposer 链路),假壳 IPC 断言发送面契约(载荷以壳侧 session.rs /
 // uploads.rs 为准)。
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -492,12 +492,13 @@ describe("运行态 / 停止 / 排队", () => {
     await userEvent.click(screen.getByRole("button", { name: "移除" }));
     expect(screen.queryByText("待移除的")).toBeNull();
     expect(screen.getByText("第一条")).toBeTruthy(); // 执行中条目保留
-    emit("frames:s1", [{ type: "task-ended", timestamp: 7, seq: 7 }]);
-    await new Promise((r) => setTimeout(r, 20));
-    // 移除后只剩执行中的第一条;轮结束补投它,不再投被移除的
-    const sent = sends(ops, "user-input");
-    expect(sent).toHaveLength(1);
-    expect(b64decode((sent[0]?.args?.payload as { content: string }).content)).toBe("第一条");
+    act(() => emit("frames:s1", [{ type: "task-ended", timestamp: 7, seq: 7 }]));
+    // 轮结束补投队首(移除后只剩执行中的第一条);waitFor 内部包 act,捕捉补投
+    await waitFor(() => {
+      const sent = sends(ops, "user-input");
+      expect(sent).toHaveLength(1);
+      expect(b64decode((sent[0]?.args?.payload as { content: string }).content)).toBe("第一条");
+    });
   });
 });
 

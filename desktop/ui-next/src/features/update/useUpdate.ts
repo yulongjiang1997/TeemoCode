@@ -13,7 +13,7 @@
 // 组件里。
 import { useEffect, useState, useSyncExternalStore } from "react";
 
-import { recordUpdateCheck, takeUpdateCheck, updateCheck, updateInstall, type UpdateInfo } from "@/lib/ipc/update";
+import { recordUpdateCheck, takeUpdateCheck, updateCheck, updateDownload, updateInstall, type UpdateInfo } from "@/lib/ipc/update";
 
 /** 兜底复查间隔:窗口一直开着、从没失去过焦点(挂着跑长任务正是如此)就
  *  永远等不到前台事件,只靠 focus 触发等于不查。被闸门挡掉只是顺延到下一
@@ -60,12 +60,23 @@ function checkGated(): void {
 
 export function useUpdate(): {
   update: UpdateInfo | null;
+  /** 下载中(progress 0-100) */
+  downloading: boolean;
+  progress: number;
+  /** 下载完成,待用户确认安装 */
+  downloaded: boolean;
   installing: boolean;
-  /** 上次安装失败的原因;null = 没失败过/重试中 */
+  /** 上次下载/安装失败的原因;null = 没失败过/重试中 */
   error: string | null;
+  /** 下载更新(不安装);成功后等 install() */
+  download: () => void;
+  /** 安装已下载的更新(用户确认后调用) */
   install: () => void;
 } {
   const update = useUpdateInfo();
+  const [downloading, setDownloading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [downloaded, setDownloaded] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -81,14 +92,33 @@ export function useUpdate(): {
 
   return {
     update,
+    downloading,
+    progress,
+    downloaded,
     installing,
     error,
+    download: () => {
+      setError(null);
+      setDownloading(true);
+      setProgress(0);
+      setDownloaded(false);
+      void updateDownload((e) => {
+        setProgress(e.progress);
+        if (e.state === "downloaded") setDownloaded(true);
+      })
+        .then(() => setDownloaded(true))
+        .catch((e) => {
+          setDownloading(false);
+          setError(e instanceof Error ? e.message : String(e));
+        });
+    },
     install: () => {
       setInstalling(true);
       setError(null);
       void updateInstall().catch((e) => {
         // 失败:复位忙态并外显;成功后壳自行重启,不会走到这里
         setInstalling(false);
+        setDownloading(false);
         setError(e instanceof Error ? e.message : String(e));
       });
     },

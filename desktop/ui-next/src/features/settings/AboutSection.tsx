@@ -18,8 +18,7 @@ import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { exportEngineLog } from "@/lib/ipc/config";
 import { hostInfo, openAppDir, openLogDir, type HostInfo } from "@/lib/ipc/host";
-import { updateInstall } from "@/lib/ipc/update";
-import { checkUpdateNow, useUpdateInfo } from "@/features/update/useUpdate";
+import { checkUpdateNow, useUpdate, useUpdateInfo } from "@/features/update/useUpdate";
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -34,7 +33,9 @@ export function AboutSection() {
   // 「检查更新」钮;反过来在这儿查到的结果也传不到侧栏,而这次检查还把
   // 接下来 30 分钟的回焦复查一起闸掉了(两条路共用 update.ts 的模块级闸门)
   const update = useUpdateInfo();
-  const [phase, setPhase] = useState<"idle" | "checking" | "installing">("idle");
+  // 下载/安装态也走 useUpdate(与侧栏同源):下载进度、下载完成待确认、安装
+  const { downloading, progress, downloaded, installing, error: updateErr, download, install } = useUpdate();
+  const [phase, setPhase] = useState<"idle" | "checking">("idle");
   const [msg, setMsg] = useState<{ text: string; error?: boolean; updateAvailable?: boolean } | null>(null);
   // 连点解锁计数:不落盘、不跨挂载(离开设置页即复位)——隐藏入口就该
   // 每次都要重新解一遍,免得某次排障之后按钮永久留在别人的关于页上
@@ -71,18 +72,6 @@ export function AboutSection() {
     );
   };
 
-  const install = async () => {
-    setPhase("installing");
-    setMsg(null);
-    try {
-      await updateInstall(); // 成功后壳自行重启,promise 不会正常返回
-    } catch (e) {
-      // 失败:复位忙态,失败文案外显(与侧栏 useUpdate 同一语义)
-      setPhase("idle");
-      setMsg({ text: t("update.failed", { reason: errMsg(e) }), error: true });
-    }
-  };
-
   /** 排障动作的统一收尾:失败就地外显(壳的 Err 是中文,吞掉就成了「点了
    *  没反应」);ok 可按结果补一句成功反馈,返回 null 表示这次不必说话
    *  (如另存对话框被用户取消)。 */
@@ -99,16 +88,12 @@ export function AboutSection() {
     }
   };
 
-  const busy = phase !== "idle";
+  const busy = phase !== "idle" || downloading || installing;
   const found = !!update?.available;
   const updateLabel =
     phase === "checking"
       ? t("settings.about.checking")
-      : phase === "installing"
-        ? t("settings.about.installing")
-        : found
-          ? t("settings.about.install")
-          : t("settings.about.check");
+      : t("settings.about.check");
 
   return (
     <section aria-label={t("settings.nav.about")} className="flex flex-col gap-3">
@@ -130,16 +115,46 @@ export function AboutSection() {
             })}
           </button>
         </div>
-        <button
-          type="button"
-          className={found ? "btn btn-primary btn-sm shrink-0" : "btn btn-sm shrink-0"}
-          disabled={busy}
-          onClick={() => void (found ? install() : check())}
-        >
-          {busy && <span className="loading loading-spinner loading-xs" aria-hidden />}
-          {updateLabel}
-        </button>
+        {/* 更新动作区:检查更新 → 显示版本号 + 更新按钮 → 下载进度 → 下载完成确认安装 */}
+        {!found ? (
+          <button type="button" className="btn btn-sm shrink-0" disabled={busy} onClick={() => void check()}>
+            {busy && <span className="loading loading-spinner loading-xs" aria-hidden />}
+            {updateLabel}
+          </button>
+        ) : downloaded ? (
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            <span className="text-[11px] text-success">{t("settings.about.downloaded")}</span>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={installing}
+              onClick={() => void install()}
+            >
+              {installing && <span className="loading loading-spinner loading-xs" aria-hidden />}
+              {installing ? t("settings.about.installing") : t("settings.about.installNow")}
+            </button>
+          </div>
+        ) : downloading ? (
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            <progress className="progress progress-primary progress-xs w-24" value={progress} max={100} aria-label={t("settings.about.downloading")} />
+            <span className="text-[11px] tabular-nums text-base-content/60">{progress}%</span>
+          </div>
+        ) : (
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            <span className="text-[11px] tabular-nums text-base-content/60">
+              {update?.current} → {update?.latest}
+            </span>
+            <button type="button" className="btn btn-primary btn-sm" disabled={downloading || installing} onClick={download}>
+              {t("settings.about.update")}
+            </button>
+          </div>
+        )}
       </div>
+      {updateErr && (
+        <div role="alert" className="alert alert-error alert-soft py-1.5 text-xs">
+          <span>{t("update.failed", { reason: updateErr })}</span>
+        </div>
+      )}
       {msg && (
         <div
           role={msg.error ? "alert" : "status"}
