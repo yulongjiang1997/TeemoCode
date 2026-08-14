@@ -2088,9 +2088,11 @@ impl Inner {
     /// 乱序(旧实现在放锁后写盘,两线程并发 push 本就可能倒序落盘)。
     /// 热路径(model_delta 每 token 一帧)自此无任何磁盘 I/O。
     /// 锁序:sessions → batch(flush_batch 只拿 batch,无反向嵌套)。
-    pub(super) fn push_frame(&self, sid: &str, build: impl FnOnce(u64) -> Value) {
+    /// 追加一帧(不带认证扫描),返回所写帧。push_frame 的内核,扫描里的
+    /// 收尾帧也走它,避免 push_frame 自我递归。
+    fn emit_frame(&self, sid: &str, build: impl FnOnce(u64) -> Value) -> Value {
         let mut sessions = self.sess.sessions.lock_ok();
-        let Some(s) = sessions.get_mut(sid) else { return };
+        let Some(s) = sessions.get_mut(sid) else { return json!(null) };
         s.seq += 1;
         let f = build(s.seq);
         let _ = self
@@ -2111,7 +2113,39 @@ impl Inner {
             }
         }
         if s.opened {
-            self.sess.batch.lock_ok().entry(sid.to_string()).or_default().push(f);
+            self.sess.batch.lock_ok().entry(sid.to_string()).or_default().push(f.clone());
+        }
+        f
+    }
+
+    pub(super) fn push_frame(&self, sid: &str, build: impl FnOnce(u64) -> Value) {
+        let f = self.emit_frame(sid, build);
+        // 认证/额度错误扫描:引擎把 401 吞在内部重试(不产 error 事件),只在
+        // task-running 的文本里露出来。一旦出现(短错误行)→ 按终止收尾,
+        // 前端多密钥/备用模型轮换才能触发。running 复位防重复触发。
+        let mut sessions = self.sess.sessions.lock_ok();
+        let Some(s) = sessions.get_mut(sid) else { return };
+        if !s.running {
+            return;
+        }
+        let msg = f
+            .get("data")
+            .and_then(|d| d.get("update"))
+            .and_then(|u| u.get("content"))
+            .and_then(|c| c.get("text"))
+            .and_then(|t| t.as_str())
+            .filter(|t| t.len() < 300 && super::normalize::is_key_auth_error(t))
+            .map(str::to_string);
+        if let Some(msg) = msg {
+            s.running = false;
+            s.open_tools.clear();
+            s.model_text.clear();
+            drop(sessions);
+            self.emit_frame(sid, |seq| frame::task_error(&msg, seq));
+            self.emit_frame(sid, frame::task_ended);
+            self.write_sidecar(sid, |m| m["status"] = json!(SessionStatus::Error.as_str()));
+            self.emit_session_event(sid, SessionStatus::Error.as_str());
+            self.emit_session_ask(sid, false);
         }
     }
 
