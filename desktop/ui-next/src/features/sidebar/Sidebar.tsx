@@ -845,7 +845,7 @@ function ImportMcModal({ onClose, onImported }: { onClose: () => void; onImporte
           <IconDownload size={16} stroke={1.75} aria-hidden className="text-base-content/60" />
           <h3 className="text-sm font-semibold">{t("sidebar.importMc.title")}</h3>
           <div className="min-w-0 flex-1" />
-          <button type="button" className="btn btn-ghost btn-square btn-xs" onClick={onClose} aria-label={t("common.close")}>
+          <button type="button" className="btn btn-ghost btn-square btn-xs" onClick={onClose} aria-label={t("titlebar.close")}>
             <IconX size={14} stroke={1.75} aria-hidden />
           </button>
         </div>
@@ -890,7 +890,7 @@ function ImportMcModal({ onClose, onImported }: { onClose: () => void; onImporte
               {done !== null && <span className="text-xs text-success">{t("sidebar.importMc.done", { n: done })}</span>}
               <div className="min-w-0 flex-1" />
               <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>
-                {t("common.cancel")}
+                {t("create.cancel")}
               </button>
               <button type="button" className="btn btn-primary btn-sm" disabled={applying || selected.size === 0} onClick={apply}>
                 {t("sidebar.importMc.apply", { n: selected.size })}
