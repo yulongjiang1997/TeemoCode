@@ -654,6 +654,7 @@ function Overview({
   todoCount = 0,
   cloud,
   onRefresh,
+  onImported,
 }: {
   space: Space;
   sessions: SessionMeta[];
@@ -665,8 +666,11 @@ function Overview({
   cloud?: { feed: CloudTasksFeed; projects: import("@/lib/ipc/cloudtasks").CloudProject[] };
   /** 云端列表刷新(概览块右上;整表故障条也用它重试) */
   onRefresh?: () => void;
+  /** 导入原版 MonkeyCode 成功后的列表刷新(由 Sidebar 从 App 传入) */
+  onImported?: () => void;
 }) {
   const { t } = useI18n();
+  const [importOpen, setImportOpen] = useState(false);
   const title = t(
     space === "cloud" ? "rail.cloud" : space === "chat" ? "rail.chat" : space === "stats" ? "rail.stats" : "rail.local",
   );
@@ -716,6 +720,7 @@ function Overview({
   }
   const feedErr = space === "cloud" ? cloud?.feed.error : "";
   return (
+    <>
     <div className="shrink-0 px-5 pt-3 pb-1">
       {/* 标题行**恒留一个 btn-xs 的高度**,不管这个空间有没有刷新钮:
           btn-xs 是 24px(--size-field × 6),text-xs 的行盒只有 16px,
@@ -736,7 +741,7 @@ function Overview({
             className="btn btn-ghost btn-square btn-xs -me-1 shrink-0 text-base-content/50"
             onClick={() => setImportOpen(true)}
           >
-            <IconDownload size={13} stroke={1.75} aria-hidden />
+            <IconFolderOpen size={13} stroke={1.75} aria-hidden />
           </button>
         )}
         {/* 刷新是**列表级**操作,归概览块;品牌头只放品牌与新建
@@ -776,6 +781,8 @@ function Overview({
         </div>
       )}
     </div>
+    {importOpen && <ImportMcModal onClose={() => setImportOpen(false)} onImported={onImported} />}
+    </>
   );
 }
 
@@ -1004,7 +1011,6 @@ export function Sidebar({
   const [projectGroups, setProjectGroups] = useState<Record<string, string>>(readProjectGroups);
   const [pinnedProjects, setPinnedProjects] = useState<Set<string>>(readPinnedProjects);
   const [creatingGroup, setCreatingGroup] = useState(false);
-  const [importOpen, setImportOpen] = useState(false);
 
   const commitCustomGroups = (next: CustomGroup[]) => {
     setCustomGroups(next);
@@ -1347,7 +1353,6 @@ export function Sidebar({
           <IconPlus size={14} stroke={2} aria-hidden />
         </button>
       </div>
-      {importOpen && <ImportMcModal onClose={() => setImportOpen(false)} onImported={onImported} />}
       {/* 四段式(LAYOUT.md):头部固定 → 概览块固定 → 列表 = 唯一滚动区 → footer 钉底。
           scrollbar-gutter 预留滚条槽位:滚条挤占布局,auto 下出现/消失会让
           整列内容横移抖动;常驻滚道(overflow-y-scroll)会在壳内露白条,
@@ -1359,6 +1364,7 @@ export function Sidebar({
         todoCount={todo?.todos.filter((i) => i.status !== "done").length ?? 0}
         cloud={{ feed: cloudFeed, projects: cloudProjects }}
         onRefresh={cloud?.onRefresh}
+        onImported={onImported}
       />
       <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-2 [scrollbar-gutter:stable]">{body()}</div>
       <div className="shrink-0 empty:hidden">
