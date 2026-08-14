@@ -263,7 +263,9 @@ describe("useComposer:队列补投", () => {
     rerender({ lastSeq: 7, running: false, turnEnded: false }); // 回显帧到达
     await settle();
     expect(sends()).toHaveLength(2);
-    turnCycle(rerender, true);
+    // 完整轮次:开轮 → task-ended 结束 → 成功出队
+    rerender({ lastSeq: 7, running: true, turnEnded: false });
+    rerender({ lastSeq: 7, running: false, turnEnded: true });
     await waitFor(() => expect(result.current.queue).toHaveLength(0));
   });
 });
