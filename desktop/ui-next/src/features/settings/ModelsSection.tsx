@@ -256,53 +256,71 @@ export function ModelsSection({
                   {/* 多密钥:每行一个(默认掩码,可查看明文/删除);使用中失败/额度用完自动换下一个 */}
                   <div className="flex flex-col gap-1">
                     {(() => {
-                      // 空模型也保底一行,方便直接录入首个 key
+                      // 空模型也保底一行,方便直接录入首个 key;别名与 key 等长
                       const keys = m.api_keys?.length ? m.api_keys : m.api_key ? [m.api_key] : [""];
+                      const aliases = m.api_key_aliases?.length ? m.api_key_aliases : keys.map(() => "");
                       return keys.map((k, ki) => {
                         const revealed = revealedKeys.has(`${i}:${ki}`);
                         return (
-                          <div key={ki} className="flex items-center gap-1">
+                          <div key={ki} className="flex flex-col gap-0.5">
+                            {/* 别名备注:仅显示用,不参与实际使用 */}
                             <input
-                              className="input input-sm min-w-0 w-full flex-1 font-mono text-xs"
-                              type={revealed ? "text" : "password"}
-                              aria-label={`${t("settings.models.apiKey")} ${ki + 1}`}
-                              placeholder="sk-..."
-                              value={k}
+                              className="input input-xs w-full font-mono text-xs text-base-content/70"
+                              type="text"
+                              aria-label={`${t("settings.models.apiKey.alias")} ${ki + 1}`}
+                              placeholder={t("settings.models.apiKey.aliasPlaceholder")}
+                              value={aliases[ki] ?? ""}
                               onChange={(e) => {
-                                const cur = m.api_keys?.length ? m.api_keys : m.api_key ? [m.api_key] : [""];
-                                const keys2 = cur.slice();
-                                keys2[ki] = e.target.value;
-                                patch(i, { api_keys: keys2, api_key: keys2[0] ?? "" });
+                                const ks = (m.api_keys?.length ? m.api_keys : m.api_key ? [m.api_key] : [""]).slice();
+                                const al = (m.api_key_aliases?.length ? m.api_key_aliases : ks.map(() => "")).slice();
+                                al[ki] = e.target.value;
+                                patch(i, { api_keys: ks, api_key: ks[0] ?? "", api_key_aliases: al });
                               }}
                             />
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-square btn-xs shrink-0"
-                              aria-label={revealed ? t("settings.models.apiKey.hide") : t("settings.models.apiKey.reveal")}
-                              title={revealed ? t("settings.models.apiKey.hide") : t("settings.models.apiKey.reveal")}
-                              onClick={() => {
-                                const next = new Set(revealedKeys);
-                                if (next.has(`${i}:${ki}`)) next.delete(`${i}:${ki}`);
-                                else next.add(`${i}:${ki}`);
-                                setRevealedKeys(next);
-                              }}
-                            >
-                              {revealed ? <IconEyeOff size={14} stroke={1.75} aria-hidden /> : <IconEye size={14} stroke={1.75} aria-hidden />}
-                            </button>
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-square btn-xs shrink-0 text-base-content/50"
-                              aria-label={t("settings.models.apiKey.remove")}
-                              title={t("settings.models.apiKey.remove")}
-                              onClick={() => {
-                                const cur = m.api_keys?.length ? m.api_keys : m.api_key ? [m.api_key] : [""];
-                                const keys2 = cur.slice();
-                                keys2.splice(ki, 1);
-                                patch(i, { api_keys: keys2, api_key: keys2[0] ?? "" });
-                              }}
-                            >
-                              <IconX size={14} stroke={1.75} aria-hidden />
-                            </button>
+                            <div className="flex items-center gap-1">
+                              <input
+                                className="input input-sm min-w-0 w-full flex-1 font-mono text-xs"
+                                type={revealed ? "text" : "password"}
+                                aria-label={`${t("settings.models.apiKey")} ${ki + 1}`}
+                                placeholder="sk-..."
+                                value={k}
+                                onChange={(e) => {
+                                  const ks = (m.api_keys?.length ? m.api_keys : m.api_key ? [m.api_key] : [""]).slice();
+                                  ks[ki] = e.target.value;
+                                  const al = (m.api_key_aliases?.length ? m.api_key_aliases : ks.map(() => "")).slice();
+                                  patch(i, { api_keys: ks, api_key: ks[0] ?? "", api_key_aliases: al });
+                                }}
+                              />
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-square btn-xs shrink-0"
+                                aria-label={revealed ? t("settings.models.apiKey.hide") : t("settings.models.apiKey.reveal")}
+                                title={revealed ? t("settings.models.apiKey.hide") : t("settings.models.apiKey.reveal")}
+                                onClick={() => {
+                                  const next = new Set(revealedKeys);
+                                  if (next.has(`${i}:${ki}`)) next.delete(`${i}:${ki}`);
+                                  else next.add(`${i}:${ki}`);
+                                  setRevealedKeys(next);
+                                }}
+                              >
+                                {revealed ? <IconEyeOff size={14} stroke={1.75} aria-hidden /> : <IconEye size={14} stroke={1.75} aria-hidden />}
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-square btn-xs shrink-0 text-base-content/50"
+                                aria-label={t("settings.models.apiKey.remove")}
+                                title={t("settings.models.apiKey.remove")}
+                                onClick={() => {
+                                  const ks = (m.api_keys?.length ? m.api_keys : m.api_key ? [m.api_key] : [""]).slice();
+                                  const al = (m.api_key_aliases?.length ? m.api_key_aliases : ks.map(() => "")).slice();
+                                  ks.splice(ki, 1);
+                                  al.splice(ki, 1);
+                                  patch(i, { api_keys: ks, api_key: ks[0] ?? "", api_key_aliases: al });
+                                }}
+                              >
+                                <IconX size={14} stroke={1.75} aria-hidden />
+                              </button>
+                            </div>
                           </div>
                         );
                       });
@@ -313,8 +331,10 @@ export function ModelsSection({
                     className="btn btn-outline btn-xs w-fit"
                     onClick={() => {
                       const keys = (m.api_keys?.length ? m.api_keys : m.api_key ? [m.api_key] : [""]).slice();
+                      const aliases = (m.api_key_aliases?.length ? m.api_key_aliases : keys.map(() => "")).slice();
                       keys.push("");
-                      patch(i, { api_keys: keys, api_key: keys[0] ?? "" });
+                      aliases.push("");
+                      patch(i, { api_keys: keys, api_key: keys[0] ?? "", api_key_aliases: aliases });
                     }}
                   >
                     <IconPlus size={12} stroke={2} aria-hidden />

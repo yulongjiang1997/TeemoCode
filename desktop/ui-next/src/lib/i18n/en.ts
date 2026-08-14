@@ -229,6 +229,8 @@ export const en: Record<MessageKey, string> = {
   "settings.models.provider": "Protocol",
   "settings.models.baseUrl": "Base URL",
   "settings.models.apiKey": "API Key",
+  "settings.models.apiKey.alias": "Alias",
+  "settings.models.apiKey.aliasPlaceholder": "Note (display only, not used)",
   "settings.models.apiKey.reveal": "Reveal",
   "settings.models.apiKey.hide": "Hide",
   "settings.models.apiKey.remove": "Remove this key",
