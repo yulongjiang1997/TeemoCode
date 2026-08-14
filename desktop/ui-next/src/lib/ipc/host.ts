@@ -53,6 +53,30 @@ export async function hostInfo(): Promise<HostInfo | null> {
   }
 }
 
+/** 原版 MonkeyCode 会话(一键导入候选)。 */
+export interface ImportMcSession {
+  sid: string;
+  engine_id: string;
+  title: string;
+  workdir: string;
+  archived: boolean;
+}
+
+/** 扫描原版 MonkeyCode 的本地会话(一键导入第一步)。 */
+export async function importMcScan(): Promise<{ found: boolean; sessions: ImportMcSession[] }> {
+  if (!inDesktopShell()) return { found: false, sessions: [] };
+  try {
+    return await invoke("import_mc_scan");
+  } catch {
+    return { found: false, sessions: [] };
+  }
+}
+
+/** 导入选中的原版会话(壳复制 sidecar + 工作区 + 引擎消息)。 */
+export async function importMcApply(sids: string[]): Promise<{ imported: number; skipped: number }> {
+  return await invoke("import_mc_apply", { sids });
+}
+
 /* ---- 窗口控制(不带 label 即作用于调用方窗口;close 由壳拦截转托盘) ---- */
 
 const quiet = (p: Promise<unknown>): void => {

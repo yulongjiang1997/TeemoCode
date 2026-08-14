@@ -10,8 +10,8 @@
 //   btn、右键菜单走 lib/contextMenu(menu 皮相)。
 // 行交互:右键 = 行菜单(重命名/归档/删除二段确认)。
 // 行/组头/小节折叠的呈现件收口在 listKit(三列表统一,不做两套)。
-import { IconArchive, IconFolder, IconFolderOpen, IconInbox, IconMessages, IconPin, IconPlus, IconRefresh } from "@tabler/icons-react";
-import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { IconArchive, IconDownload, IconFolder, IconFolderOpen, IconInbox, IconMessages, IconPin, IconPlus, IconRefresh, IconX } from "@tabler/icons-react";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 
 import { CloudTaskList, useCloudProjects, useCloudTasks, type CloudTasksFeed } from "@/features/cloud/CloudTaskList";
 import { fmtCompact, GroupLabel, levelPad, ListRow, NEST_NO_GUIDE, SectionFold, showTokenPopover } from "@/features/sidebar/listKit";
@@ -47,6 +47,7 @@ import {
 } from "@/lib/util/projects";
 import type { Space } from "@/lib/util/prefs";
 import { renameIsNoop } from "@/lib/util/rename";
+import { importMcApply, importMcScan, type ImportMcSession } from "@/lib/ipc/host";
 
 export interface SidebarActions {
   onSelect: (meta: SessionMeta) => void;
@@ -777,6 +778,131 @@ function EmptySlate({ icon, title, detail }: { icon: ReactNode; title: string; d
 }
 
 
+/** 一键导入原版 MonkeyCode 本地任务:扫描 → 按项目(工作目录)勾选 → 复制。 */
+function ImportMcModal({ onClose, onImported }: { onClose: () => void; onImported?: () => void }) {
+  const { t } = useI18n();
+  const [found, setFound] = useState<boolean | null>(null); // null = 扫描中
+  const [sessions, setSessions] = useState<ImportMcSession[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [applying, setApplying] = useState(false);
+  const [done, setDone] = useState<number | null>(null);
+
+  useEffect(() => {
+    void importMcScan().then((r) => {
+      setFound(r.found);
+      setSessions(r.sessions);
+      setSelected(new Set(r.sessions.map((s) => s.sid))); // 默认全选
+    });
+  }, []);
+
+  // 按工作目录(项目)分组,便于逐项目勾选
+  const groups = useMemo(() => {
+    const m = new Map<string, ImportMcSession[]>();
+    for (const s of sessions) {
+      const key = s.workdir || "(未知目录)";
+      (m.get(key) ?? m.set(key, []).get(key)!).push(s);
+    }
+    return [...m.entries()];
+  }, [sessions]);
+
+  const toggleOne = (sid: string) => {
+    setSelected((cur) => {
+      const next = new Set(cur);
+      if (next.has(sid)) next.delete(sid);
+      else next.add(sid);
+      return next;
+    });
+  };
+  const toggleGroup = (items: ImportMcSession[], on: boolean) => {
+    setSelected((cur) => {
+      const next = new Set(cur);
+      for (const s of items) {
+        if (on) next.add(s.sid);
+        else next.delete(s.sid);
+      }
+      return next;
+    });
+  };
+
+  const apply = async () => {
+    setApplying(true);
+    try {
+      const r = await importMcApply([...selected]);
+      setDone(r.imported);
+      onImported?.();
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40" onClick={onClose}>
+      <div
+        className="flex max-h-[75vh] w-[540px] flex-col rounded-box border border-base-300 bg-base-100 p-4 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-3 flex shrink-0 items-center gap-2">
+          <IconDownload size={16} stroke={1.75} aria-hidden className="text-base-content/60" />
+          <h3 className="text-sm font-semibold">{t("sidebar.importMc.title")}</h3>
+          <div className="min-w-0 flex-1" />
+          <button type="button" className="btn btn-ghost btn-square btn-xs" onClick={onClose} aria-label={t("common.close")}>
+            <IconX size={14} stroke={1.75} aria-hidden />
+          </button>
+        </div>
+        {found === null && <div className="py-10 text-center text-xs text-base-content/50">{t("sidebar.importMc.loading")}</div>}
+        {found === false && <div className="py-10 text-center text-xs text-base-content/60">{t("sidebar.importMc.notFound")}</div>}
+        {found === true && sessions.length === 0 && (
+          <div className="py-10 text-center text-xs text-base-content/60">{t("sidebar.importMc.empty")}</div>
+        )}
+        {found === true && sessions.length > 0 && (
+          <>
+            <div className="mb-2 shrink-0 text-[11px] text-base-content/50">{t("sidebar.importMc.hint")}</div>
+            <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto pr-1">
+              {groups.map(([workdir, items]) => {
+                const allOn = items.every((s) => selected.has(s.sid));
+                return (
+                  <div key={workdir} className="mb-2">
+                    <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-base-content/70">
+                      <input
+                        type="checkbox"
+                        className="checkbox checkbox-xs"
+                        checked={allOn}
+                        onChange={(e) => toggleGroup(items, e.target.checked)}
+                      />
+                      <IconFolderOpen size={12} stroke={1.75} aria-hidden className="shrink-0 text-base-content/40" />
+                      <span className="min-w-0 flex-1 truncate">{workdir}</span>
+                      <span className="shrink-0 tabular-nums text-base-content/40">{items.length}</span>
+                    </div>
+                    <div className="ms-4 flex flex-col gap-0.5">
+                      {items.map((s) => (
+                        <label key={s.sid} className="flex items-center gap-1.5 rounded px-1 py-0.5 text-xs hover:bg-base-content/5">
+                          <input type="checkbox" className="checkbox checkbox-xs" checked={selected.has(s.sid)} onChange={() => toggleOne(s.sid)} />
+                          <span className="min-w-0 flex-1 truncate text-base-content/80">{s.title || s.sid}</span>
+                          {s.archived && <span className="shrink-0 text-[10px] text-base-content/40">{t("sidebar.archivedTasks")}</span>}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-3 flex shrink-0 items-center gap-2">
+              {done !== null && <span className="text-xs text-success">{t("sidebar.importMc.done", { n: done })}</span>}
+              <div className="min-w-0 flex-1" />
+              <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>
+                {t("common.cancel")}
+              </button>
+              <button type="button" className="btn btn-primary btn-sm" disabled={applying || selected.size === 0} onClick={apply}>
+                {t("sidebar.importMc.apply", { n: selected.size })}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function Sidebar({
   space,
   sessions,
@@ -785,6 +911,7 @@ export function Sidebar({
   attentionIds,
   todo,
   cloud,
+  onImported,
 }: {
   space: Space;
   sessions: SessionMeta[];
@@ -792,6 +919,8 @@ export function Sidebar({
   actions: SidebarActions;
   /** 后台提醒未读的会话 id 集(D3):命中行状态点转警示色 + 行高亮 */
   attentionIds?: Set<string>;
+  /** 一键导入原版 MonkeyCode 会话成功后的列表刷新回调(App 重拉 sessions) */
+  onImported?: () => void;
   /** 待办组(仅本地任务空间,列表顶部):清单本体就在侧栏里,添加/勾选/
    *  编辑/派发/删除全在组内完成,主区不再有待办页(2026-08-12 用户二次
    *  定案「先不需要右侧的页面」,推翻同日「钉住行入口 + 覆盖视图」版) */
@@ -823,6 +952,7 @@ export function Sidebar({
   const [projectGroups, setProjectGroups] = useState<Record<string, string>>(readProjectGroups);
   const [pinnedProjects, setPinnedProjects] = useState<Set<string>>(readPinnedProjects);
   const [creatingGroup, setCreatingGroup] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
   const commitCustomGroups = (next: CustomGroup[]) => {
     setCustomGroups(next);
@@ -1154,6 +1284,17 @@ export function Sidebar({
       <div data-tauri-drag-region="" className="flex h-13 shrink-0 items-center gap-1.5 border-b border-base-300 ps-5 pe-3">
         <Brand />
         <span data-tauri-drag-region="" className="min-w-0 flex-1" />
+        {space === "local" && (
+          <button
+            type="button"
+            aria-label={t("sidebar.importMc")}
+            title={t("sidebar.importMc")}
+            className="btn btn-ghost btn-square btn-xs text-base-content/60"
+            onClick={() => setImportOpen(true)}
+          >
+            <IconDownload size={14} stroke={1.75} aria-hidden />
+          </button>
+        )}
         <button
           type="button"
           aria-label={t("sidebar.newTask")}
@@ -1165,6 +1306,7 @@ export function Sidebar({
           <IconPlus size={14} stroke={2} aria-hidden />
         </button>
       </div>
+      {importOpen && <ImportMcModal onClose={() => setImportOpen(false)} onImported={onImported} />}
       {/* 四段式(LAYOUT.md):头部固定 → 概览块固定 → 列表 = 唯一滚动区 → footer 钉底。
           scrollbar-gutter 预留滚条槽位:滚条挤占布局,auto 下出现/消失会让
           整列内容横移抖动;常驻滚道(overflow-y-scroll)会在壳内露白条,

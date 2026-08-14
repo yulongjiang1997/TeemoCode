@@ -18,6 +18,7 @@ mod config;
 mod driver;
 #[cfg(target_os = "windows")]
 mod native_pet;
+mod import_mc;
 mod repo;
 mod skills;
 mod stats;
@@ -1439,6 +1440,8 @@ fn main() {
             driver::session_create,
             driver::session_delete,
             driver::session_patch,
+            import_mc::import_mc_scan,
+            import_mc::import_mc_apply,
             driver::models_list,
             driver::usage_stats,
             driver::session_open,
