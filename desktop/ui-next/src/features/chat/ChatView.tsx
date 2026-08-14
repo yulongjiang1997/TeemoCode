@@ -656,11 +656,14 @@ export function ChatView({
   const keyFailRef = useRef(0);
   const rotatingRef = useRef(false);
   useEffect(() => {
-    if (state.running) {
-      keyFailRef.current = 0; // 开轮清计数
+    // 开轮不清计数:轮换 key 后的重发回合也要累计——否则 key1 失败→换 key2→
+    // 开轮清零→key2 失败→又换回 key1,永远轮换不到下一个备用模型
+    if (state.running) return;
+    if (state.turnEnded) {
+      keyFailRef.current = 0; // 成功回合清零
       return;
     }
-    if (state.turnEnded || rotatingRef.current) return; // 正常结束 / 正在轮换
+    if (rotatingRef.current) return; // 正在轮换
     // 本轮失败:取最后一条 sys 错误消息判断是否 key 问题
     const errItem = [...state.items].reverse().find((it) => it.kind === "sys" && it.error);
     const reason =
