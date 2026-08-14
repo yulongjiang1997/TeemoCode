@@ -219,7 +219,7 @@ export function ModelMenu({
           )}
           <ul
             aria-label={t("chat.model.label")}
-            className="menu w-full min-h-0 max-h-40 flex-1 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto p-0"
+            className="menu w-full h-40 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto p-0"
           >
             {tabItems.length === 0 && (
               <li className="menu-disabled">
@@ -246,7 +246,7 @@ export function ModelMenu({
               <div className="menu-title flex flex-row items-baseline gap-2 text-xs">
                 <span className="min-w-0 flex-1 truncate">{t("chat.model.fallback")}</span>
               </div>
-              <ul className="menu w-full max-h-40 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto p-0">
+              <ul className="menu w-full h-40 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto p-0">
                 {models
                   .filter((m) => m.name !== current && !m.locked)
                   .map((m) => (
