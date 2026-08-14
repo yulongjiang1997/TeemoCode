@@ -689,19 +689,31 @@ export function ChatView({
         const resend = async () => {
           if (lastText) await sessionSend(meta.id, "user-input", { content: b64encode(lastText) });
         };
-        // 当前模型还有备用 key 没试 → 轮换 key
+        // 当前模型还有备用 key 没试 → 轮换 key(别名数组同步旋转,保持对齐)
         if (keys.length > 1 && keyFailRef.current < keys.length) {
           const cur = model.api_key;
           const idx = keys.indexOf(cur);
-          const next = keys[(idx + 1) % keys.length];
+          const ni = (idx + 1) % keys.length;
+          const next = keys[ni];
+          const aliases = model.api_key_aliases?.length ? model.api_key_aliases : keys.map(() => "");
+          const curLabel = aliases[idx]?.trim() || t("chat.keyN", { n: idx + 1 });
+          const nextLabel = aliases[ni]?.trim() || t("chat.keyN", { n: ni + 1 });
           const rotated = [...keys];
+          const rotatedAliases = [...aliases];
           if (idx >= 0) {
+            const ca = rotatedAliases[idx] ?? "";
             rotated.splice(idx, 1);
             rotated.push(cur);
+            rotatedAliases.splice(idx, 1);
+            rotatedAliases.push(ca);
           }
+          // 切换提示:当前 key(别名或第几个)+ 错误原因 + 切到哪个 key
+          composerRef.current.notifyError(t("chat.keySwitched", { key: curLabel, reason, next: nextLabel }));
           await saveConfig({
             ...cfg,
-            models: (cfg?.models ?? []).map((m) => (m.model === model.model ? { ...m, api_keys: rotated, api_key: next } : m)),
+            models: (cfg?.models ?? []).map((m) =>
+              m.model === model.model ? { ...m, api_keys: rotated, api_key: next, api_key_aliases: rotatedAliases } : m,
+            ),
           } as DesktopConfig); // 壳写盘并重启引擎,返回时已 Ready
           await resend();
           return;

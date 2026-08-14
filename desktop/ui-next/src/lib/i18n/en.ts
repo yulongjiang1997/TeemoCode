@@ -502,6 +502,8 @@ export const en: Record<MessageKey, string> = {
   "chat.running.acting": "Working",
   "chat.running.waitPerm": "Waiting for approval",
   "chat.fallbackSwitched": "Primary model {model} failed ({reason}), switched to fallback {next}",
+  "chat.keySwitched": "Key {key} unavailable ({reason}), switched to {next}",
+  "chat.keyN": "key #{n}",
   "chat.stop": "Stop",
   "chat.queued": "Queued",
   "chat.queuedHint": "Sends automatically when this turn ends",
