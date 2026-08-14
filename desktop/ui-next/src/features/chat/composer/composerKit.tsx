@@ -77,17 +77,12 @@ export function UsageRing({
   tip,
   label,
   onCompact,
-  autoRatio,
-  onAutoRatioChange,
 }: {
   pct: number | null;
   tip: string;
   label: string;
   /** 手动压缩上下文(悬浮窗内的按钮;缺省不渲染) */
   onCompact?: () => void;
-  /** 自动压缩阈值(%):>0 时回合结束超阈自动压缩 */
-  autoRatio?: number;
-  onAutoRatioChange?: (pct: number) => void;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -112,39 +107,16 @@ export function UsageRing({
           />
         )}
       </div>
-      {/* 悬浮窗:用量说明 + 手动压缩 + 自动压缩阈值(可交互,悬停显示) */}
+      {/* 悬浮窗:用量说明 + 手动压缩按钮(自动压缩阈值在「模型配置」里设置)。
+          composer 底栏在视口底部,弹窗必须向上弹(bottom-full),否则被窗口裁掉 */}
       {open && (
-        <div className="absolute right-0 top-full z-50 mt-1.5 w-60 rounded-box border border-base-300 bg-base-100 p-2.5 shadow-lg">
+        <div className="absolute bottom-full right-0 z-50 mb-1.5 w-56 rounded-box border border-base-300 bg-base-100 p-2.5 shadow-lg">
           <div className="text-[11px] leading-relaxed text-base-content/70">{tip}</div>
           {onCompact && (
-            <div className="mt-2 flex items-center gap-2">
-              <button type="button" className="btn btn-primary btn-xs" disabled={pct === null} onClick={onCompact}>
+            <div className="mt-2">
+              <button type="button" className="btn btn-primary btn-xs w-full" disabled={pct === null} onClick={onCompact}>
                 {t("chat.compactNow")}
               </button>
-              <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-base-content/60">
-                <input
-                  type="checkbox"
-                  className="checkbox checkbox-xs"
-                  checked={(autoRatio ?? 0) > 0}
-                  onChange={(e) => onAutoRatioChange?.(e.target.checked ? 90 : 0)}
-                />
-                {t("chat.autoCompact")}
-              </label>
-            </div>
-          )}
-          {(autoRatio ?? 0) > 0 && (
-            <div className="mt-1.5 flex items-center gap-1.5">
-              <span className="shrink-0 text-[11px] text-base-content/60">{t("chat.autoCompactAt")}</span>
-              <input
-                type="range"
-                min={50}
-                max={100}
-                step={5}
-                className="range range-xs min-w-0 flex-1"
-                value={autoRatio}
-                onChange={(e) => onAutoRatioChange?.(Number(e.target.value))}
-              />
-              <span className="w-8 shrink-0 text-right text-[11px] tabular-nums text-base-content/70">{autoRatio}%</span>
             </div>
           )}
         </div>

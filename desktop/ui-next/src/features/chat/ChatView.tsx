@@ -36,7 +36,7 @@ function extractOutputPath(text: string): string | null {
 import { fmtCompact, showTokenPopover } from "@/features/sidebar/listKit";
 import { useI18n } from "@/lib/i18n";
 import { sessionCompact, sessionOutline, type OutlineItem } from "@/lib/ipc/controls";
-import { readAutoCompactRatio } from "@/lib/util/prefs";
+import { getConfig } from "@/lib/ipc/config";
 import { repoChanges, repoRecentFiles, repoReveal } from "@/lib/ipc/repo";
 import { sessionFrame, sessionPatch, type SessionMeta } from "@/lib/ipc/sessions";
 import { buildSessionUsageMap, usageStats, type TokenUsage } from "@/lib/ipc/usageStats";
@@ -611,12 +611,21 @@ export function ChatView({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [changesToken, setChangesToken] = useState(0);
   const prevTurnEnded = useRef(false);
+  // 模型配置里的自动压缩阈值:当前会话所用模型的 auto_compact_ratio(0 = 关闭)
+  const modelRatioRef = useRef(0);
+  useEffect(() => {
+    void getConfig()
+      .then((cfg) => {
+        modelRatioRef.current = cfg?.models?.find((m) => m.model === meta.model)?.auto_compact_ratio ?? 0;
+      })
+      .catch(() => {});
+  }, [meta.id, meta.model]);
   useEffect(() => {
     // 轮次结束边沿:改动列表需要重拉(抽屉开着时立即,关着时下次打开取新)
     if (state.turnEnded && !prevTurnEnded.current) {
       setChangesToken((n) => n + 1);
-      // 自动压缩:回合结束检查上下文用量,达到阈值即自动触发压缩
-      const ratio = readAutoCompactRatio();
+      // 自动压缩:回合结束检查上下文用量,达到当前模型的阈值即自动触发压缩
+      const ratio = modelRatioRef.current;
       if (ratio > 0 && state.usage && state.usage.size > 0) {
         const pct = (state.usage.used / state.usage.size) * 100;
         if (pct >= ratio) void sessionCompact(meta.id).catch(() => {});

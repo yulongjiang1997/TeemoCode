@@ -22,6 +22,8 @@ export interface HostModel {
   default?: boolean;
   /** 上下文窗口(token),高级项;缺省内核按 200k 处理 */
   context_window?: number;
+  /** 自动压缩阈值(上下文使用百分比,0 = 关闭):回合结束超阈自动压缩 */
+  auto_compact_ratio?: number;
   /** 最大输出(token),高级项;缺省由协议/服务端默认值决定 */
   max_output?: number;
   /** 思考深度默认档:low|medium|high|off;缺省("")= 产品默认「低」 */

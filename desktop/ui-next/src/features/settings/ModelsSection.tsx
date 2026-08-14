@@ -283,6 +283,25 @@ export function ModelsSection({
                   />
                 </fieldset>
                 <fieldset className="fieldset gap-1.5">
+                  <legend className="fieldset-legend">{t("settings.models.autoCompact")}</legend>
+                  {/* 上下文使用达到该百分比时,回合结束自动压缩;0/空 = 关闭 */}
+                  <input
+                    className="input input-sm w-full font-mono text-xs"
+                    type="number"
+                    min={0}
+                    max={100}
+                    aria-label={t("settings.models.autoCompact")}
+                    placeholder={t("settings.models.autoCompact.placeholder")}
+                    title={t("settings.models.autoCompact.hint")}
+                    value={m.auto_compact_ratio ?? ""}
+                    onChange={(e) => {
+                      const v = e.target.value.trim();
+                      const n = v === "" ? undefined : Number(v);
+                      patch(i, { auto_compact_ratio: n && Number.isFinite(n) && n > 0 ? Math.min(Math.max(Math.round(n), 50), 100) : undefined });
+                    }}
+                  />
+                </fieldset>
+                <fieldset className="fieldset gap-1.5">
                   <legend className="fieldset-legend">{t("settings.models.maxOutput")}</legend>
                   <input
                     className="input input-sm w-full font-mono text-xs"

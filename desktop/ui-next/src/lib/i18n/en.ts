@@ -226,6 +226,9 @@ export const en: Record<MessageKey, string> = {
   "settings.models.model": "Model ID",
   "settings.models.contextWindow": "Context window (tokens)",
   "settings.models.contextWindow.placeholder": "200000 (default)",
+  "settings.models.autoCompact": "Auto-compact threshold (%)",
+  "settings.models.autoCompact.placeholder": "0 = off",
+  "settings.models.autoCompact.hint": "Auto-compact when context usage reaches this % at turn end (50-100; 0/blank = off)",
   "settings.models.maxOutput": "Max output (tokens)",
   "settings.models.maxOutput.placeholder": "32768 (default)",
   "settings.models.maxOutput.hint":
