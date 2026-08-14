@@ -104,6 +104,10 @@ impl Inner {
                         None => (false, HashMap::new()),
                     }
                 };
+                // 轮已停:该会话挂着的提问/审批全部失效——过期(不发 question/cancelled)、
+                // 中断、引擎重启后 resume 重发但已无人答复,都从这里清掉,否则
+                // waiting_ask 卡死、侧栏/桌宠永远"等待确认"
+                self.clear_pending_of(&sid);
                 // 中断轮次可能留下已暂存未被 tool_result 消费的 agent_result
                 if !open.is_empty() {
                     let mut ar = self.sub.agent_results.lock_ok();

@@ -2264,6 +2264,11 @@ impl Inner {
         let (err, end) = {
             let mut sessions = self.sess.sessions.lock_ok();
             let Some(s) = sessions.get_mut(sid) else { return Vec::new() };
+            // 合成帧不经过 normalize 的 turn/stopped:running 必须在这里显式复位,
+            // 否则发送守卫("还有任务")永远拦截该会话的新指令
+            s.running = false;
+            s.open_tools.clear();
+            s.model_text.clear();
             s.seq += 1;
             let err = frame::task_error(COLD_REPAIR_REASON, s.seq);
             s.seq += 1;
@@ -2290,6 +2295,9 @@ impl Inner {
         // sidecar 落终态:侧栏(读 sidecar)与聊天区(读帧)此前会一个显示
         // "已中断"、一个显示"运行中",两个来源就此对齐
         self.write_sidecar(sid, |m| m["status"] = json!(SessionStatus::Interrupted.as_str()));
+        // 冷修复=该轮彻底收尾:挂着的提问/审批一并清掉(否则重启后 resume
+        // 重发提问 → pending 残留 → waiting_ask 卡死)
+        self.clear_pending_of(sid);
         eprintln!("[desktop] 冷修复未闭合轮次: sid={sid}");
         vec![err, end]
     }
@@ -2331,6 +2339,31 @@ impl Inner {
             "session-event",
             json!({ "type": "session-ask", "id": sid, "title": title, "open": open }),
         );
+    }
+
+    /// 清掉该会话挂着的提问/审批(轮次收尾/冷修复时调用):
+    /// 提问过期、中断、引擎重启 resume 重发但无人答复,都会让 pending 残留 →
+    /// waiting_ask 卡死(侧栏/桌宠永远"等待确认")。这里按 sid 全清。
+    pub(super) fn clear_pending_of(&self, sid: &str) {
+        let mut removed_asks = false;
+        {
+            let mut pq = self.sess.pending_questions.lock_ok();
+            pq.retain(|_, (s, _)| {
+                if s == sid {
+                    removed_asks = true;
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        {
+            let mut pp = self.sess.pending_perms.lock_ok();
+            pp.retain(|_, s| *s != sid);
+        }
+        if removed_asks {
+            self.emit_session_ask(sid, false);
+        }
     }
 
     pub(super) fn resolve_perm(&self, sid: &str, req_id: &str, outcome: PermOutcome) {
