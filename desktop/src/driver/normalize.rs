@@ -192,6 +192,24 @@ impl Inner {
         // 认领判断返回:不为一条重试日志物化子会话
         if etype == "error" && data.get("kind").and_then(|v| v.as_str()) == Some("transient_retry") {
             let msg = data.get("error").and_then(|v| v.as_str()).unwrap_or("");
+            // 认证/额度/限流错误重试无意义(坏 key 重试不会变好),按终止性错误
+            // 收尾:发 task-error + task-ended + running 复位——前端才能触发
+            // 多密钥/备用模型自动切换;否则引擎内部退避重试,前端永远收不到
+            // 失败信号,turn 一直"执行中"且新指令被守卫拦截
+            if is_key_auth_error(&msg) {
+                eprintln!("[desktop] 认证/额度错误按终止收尾,交给前端轮换: {msg}");
+                self.push_frame(&sid, |seq| frame::task_error(&msg, seq));
+                self.push_frame(&sid, frame::task_ended);
+                if let Some(s) = self.sess.sessions.lock_ok().get_mut(&sid) {
+                    s.running = false;
+                    s.open_tools.clear();
+                    s.model_text.clear();
+                }
+                self.write_sidecar(&sid, |m| m["status"] = json!(SessionStatus::Error.as_str()));
+                self.emit_session_event(&sid, SessionStatus::Error.as_str());
+                self.emit_session_ask(&sid, false);
+                return;
+            }
             eprintln!("[desktop] 引擎瞬时错误,自动重试中: {msg}");
             return;
         }
@@ -522,6 +540,22 @@ impl Inner {
             output,
         );
     }
+}
+
+/// 认证/额度/限流错误(多密钥/备用模型自动切换的触发条件):重试无意义。
+pub(super) fn is_key_auth_error(msg: &str) -> bool {
+    let m = msg.to_lowercase();
+    m.contains("401")
+        || m.contains("unauthorized")
+        || m.contains("invalid api key")
+        || m.contains("authentication")
+        || m.contains("insufficient_quota")
+        || m.contains("insufficient quota")
+        || m.contains("quota")
+        || m.contains("rate limit")
+        || m.contains("rate_limit")
+        || m.contains("429")
+        || m.contains("permission denied")
 }
 
 /// 上下文占用字段防腐层。13c8adc 起所有新入口统一为扁平
