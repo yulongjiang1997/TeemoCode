@@ -201,6 +201,22 @@ export function Composer({
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const imeRef = useRef(createImeGuard());
   const [models, setModels] = useState<ModelInfo[]>([]);
+  // 备用模型链(按会话存 localStorage):主模型 key 全部失败后按此顺序自动切换
+  const [fallbackModels, setFallbackModels] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(`mc.fallbackModels.${sessionId}`) ?? "[]");
+    } catch {
+      return [];
+    }
+  });
+  const changeFallback = (names: string[]) => {
+    setFallbackModels(names);
+    try {
+      localStorage.setItem(`mc.fallbackModels.${sessionId}`, JSON.stringify(names));
+    } catch {
+      // 只丢持久化
+    }
+  };
 
   // 模型清单一次拉取(锁定项禁选;浏览器模式为空,触发器仍显当前名)。
   // 失败保留上一份而不是清空:modelsList 自 2026-08-09 起会**抛**(此前吞成
@@ -531,6 +547,8 @@ export function Composer({
             onPick={pickModel}
             disabled={state.running}
             title={state.running ? t("chat.switchWhileRunning") : t("chat.model.tip")}
+            fallbackModels={fallbackModels}
+            onFallbackChange={changeFallback}
           />
 
           {/* 布局规范:上下文用量是输入侧元信息,归 composer 集群右端

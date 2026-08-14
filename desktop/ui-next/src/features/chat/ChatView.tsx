@@ -35,7 +35,7 @@ function extractOutputPath(text: string): string | null {
 }
 import { fmtCompact, showTokenPopover } from "@/features/sidebar/listKit";
 import { useI18n } from "@/lib/i18n";
-import { sessionCompact, sessionOutline, type OutlineItem } from "@/lib/ipc/controls";
+import { sessionCompact, sessionOutline, sessionSetModel, type OutlineItem } from "@/lib/ipc/controls";
 import { getConfig, saveConfig, type DesktopConfig } from "@/lib/ipc/config";
 import { repoChanges, repoRecentFiles, repoReveal } from "@/lib/ipc/repo";
 import { sessionFrame, sessionPatch, sessionSend, type SessionMeta } from "@/lib/ipc/sessions";
@@ -60,6 +60,16 @@ function isKeyError(reason: string): boolean {
     r.includes("rate_limit") ||
     r.includes("429")
   );
+}
+
+/** 读取会话的备用模型链(与 composer 同一 localStorage 键)。 */
+function readFallbackModels(sid: string): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(`mc.fallbackModels.${sid}`) ?? "[]");
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 import {
@@ -661,27 +671,10 @@ export function ChatView({
       try {
         const cfg = await getConfig();
         const model = cfg?.models?.find((m) => m.model === meta.model);
-        const keys = model?.api_keys?.filter((k) => k.trim()) ?? [];
-        if (!model || keys.length < 2) return; // 无备用 key,不自动切换
-        if (keyFailRef.current >= keys.length) return; // 全部试过,任务失败
+        if (!model) return;
+        const keys = model.api_keys?.filter((k) => k.trim()) ?? [];
         keyFailRef.current += 1;
-        // 轮换:当前 key 移到末尾,下一个顶上
-        const cur = model.api_key;
-        const idx = keys.indexOf(cur);
-        const next = keys[(idx + 1) % keys.length];
-        const rotated = [...keys];
-        if (idx >= 0) {
-          rotated.splice(idx, 1);
-          rotated.push(cur);
-        }
-        const nextCfg = {
-          ...cfg,
-          models: (cfg?.models ?? []).map((m) =>
-            m.model === model.model ? { ...m, api_keys: rotated, api_key: next } : m,
-          ),
-        } as DesktopConfig;
-        await saveConfig(nextCfg); // 壳写盘并重启引擎,返回时已 Ready
-        // 重发该回合的用户指令(自动切换后继续任务)
+        // 重发该回合的用户指令(切换 key/模型后继续任务)
         let lastText = "";
         for (let i = state.items.length - 1; i >= 0; i--) {
           const it = state.items[i];
@@ -690,9 +683,35 @@ export function ChatView({
             break;
           }
         }
-        if (lastText) {
-          await sessionSend(meta.id, "user-input", { content: b64encode(lastText) });
+        const resend = async () => {
+          if (lastText) await sessionSend(meta.id, "user-input", { content: b64encode(lastText) });
+        };
+        // 当前模型还有备用 key 没试 → 轮换 key
+        if (keys.length > 1 && keyFailRef.current < keys.length) {
+          const cur = model.api_key;
+          const idx = keys.indexOf(cur);
+          const next = keys[(idx + 1) % keys.length];
+          const rotated = [...keys];
+          if (idx >= 0) {
+            rotated.splice(idx, 1);
+            rotated.push(cur);
+          }
+          await saveConfig({
+            ...cfg,
+            models: (cfg?.models ?? []).map((m) => (m.model === model.model ? { ...m, api_keys: rotated, api_key: next } : m)),
+          } as DesktopConfig); // 壳写盘并重启引擎,返回时已 Ready
+          await resend();
+          return;
         }
+        // 当前模型 key 全部试过 → 按配置顺序切到下一个备用模型
+        const chain = [meta.model, ...readFallbackModels(meta.id)];
+        const pos = chain.indexOf(meta.model);
+        const nextModel = chain[pos + 1];
+        const nextCfg = cfg?.models?.find((m) => m.model === nextModel);
+        if (!nextModel || !nextCfg) return; // 没有备用模型了:任务失败,留失败态
+        keyFailRef.current = 0; // 新模型从头试 key
+        await sessionSetModel(meta.id, nextModel);
+        await resend();
       } catch {
         // 轮换失败:交给失败态人工处理
       } finally {

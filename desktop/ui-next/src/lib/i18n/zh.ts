@@ -534,6 +534,7 @@ export const zh = {
   "chat.slash.hint": "↑↓ 选择 · ↩ 填入 · Esc 关闭",
   "chat.model.label": "切换模型",
   "chat.model.tip": "点击切换模型(下一轮生效)",
+  "chat.model.fallback": "备用模型(主模型 key 全部失败后按勾选顺序自动切换)",
   "chat.model.empty": "尚未配置模型",
   "chat.model.noMatch": "无匹配模型",
   "chat.option.empty": "暂无可选项",

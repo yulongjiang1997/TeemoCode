@@ -87,6 +87,8 @@ export function ModelMenu({
   title,
   ariaLabel,
   align = "end",
+  fallbackModels,
+  onFallbackChange,
 }: {
   models: ModelInfo[];
   current: string;
@@ -97,6 +99,9 @@ export function ModelMenu({
   /** 触发器 aria-label;不传则可及名 = 当前模型展示名(composer 契约) */
   ariaLabel?: string;
   align?: "start" | "end";
+  /** 备用模型链(主模型 key 全部失败后按此顺序切换);缺省不渲染备用区 */
+  fallbackModels?: string[];
+  onFallbackChange?: (names: string[]) => void;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -235,6 +240,36 @@ export function ModelMenu({
                 ])
               : tabItems.map((m) => itemOf(m))}
           </ul>
+          {/* 备用模型(故障转移链):主模型所有 key 失败后按勾选顺序自动切换 */}
+          {onFallbackChange && (
+            <>
+              <div className="menu-title mt-1 flex flex-row items-baseline gap-2 text-xs">
+                <span className="min-w-0 flex-1 truncate">{t("chat.model.fallback")}</span>
+              </div>
+              <ul className="menu w-full flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto p-0">
+                {models
+                  .filter((m) => m.name !== current && !m.locked)
+                  .map((m) => (
+                    <li key={m.name}>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          className="checkbox checkbox-xs shrink-0"
+                          checked={fallbackModels?.includes(m.name) ?? false}
+                          onChange={(e) => {
+                            const next = new Set(fallbackModels ?? []);
+                            if (e.target.checked) next.add(m.name);
+                            else next.delete(m.name);
+                            onFallbackChange([...next]);
+                          }}
+                        />
+                        <span className="min-w-0 flex-1 truncate text-xs">{modelDisplay(m).label}</span>
+                      </label>
+                    </li>
+                  ))}
+              </ul>
+            </>
+          )}
         </div>
       )}
     </div>

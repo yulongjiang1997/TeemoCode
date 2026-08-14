@@ -519,6 +519,7 @@ export const en: Record<MessageKey, string> = {
   "chat.slash.hint": "↑↓ select · ↩ fill in · Esc close",
   "chat.model.label": "Switch model",
   "chat.model.tip": "Click to switch model (takes effect next turn)",
+  "chat.model.fallback": "Fallback models (auto-switched in checked order when the primary model's keys all fail)",
   "chat.model.empty": "No models configured",
   "chat.model.noMatch": "No matching models",
   "chat.option.empty": "No options available",
