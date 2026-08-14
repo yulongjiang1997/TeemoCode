@@ -108,24 +108,28 @@ function QueueArea({ ctl }: { ctl: ComposerCtl }) {
         {pauseBtn}
       </div>
       <ul className="flex flex-col gap-0.5">
-        {queue.map((item, i) => (
+        {queue.map((item, i) => {
+          // 执行中的指令 = 队首:锁在首位,不可拖动/删除/编辑(其余待发送才可排序)
+          const executing = i === 0;
+          return (
           <li
             key={item.id}
             className={`flex items-center gap-1.5 rounded px-1.5 py-1 ${item.state === "failed" ? "bg-error/10" : "hover:bg-base-content/5"} ${dragIdx === i ? "opacity-50" : ""}`}
             onDragOver={(e) => {
-              if (dragIdx !== null && dragIdx !== i) e.preventDefault();
+              if (dragIdx !== null && dragIdx !== i && !executing) e.preventDefault();
             }}
             onDrop={(e) => {
               e.preventDefault();
-              if (dragIdx !== null && dragIdx !== i) reorderInstr(dragIdx, i);
+              // 不允许插到执行中指令之前:落点 0 视为落到 1(紧随其后)
+              if (dragIdx !== null && dragIdx !== i) reorderInstr(dragIdx, executing ? Math.max(1, i) : i);
               setDragIdx(null);
             }}
           >
-            {/* 仅此图标可拖:拖动排序不误触其它区域 */}
+            {/* 仅此图标可拖(队首执行中不可拖):拖动排序不误触其它区域 */}
             <span
-              draggable
-              className="shrink-0 cursor-grab text-base-content/30 hover:text-base-content/60 active:cursor-grabbing"
-              title={t("chat.queue.drag")}
+              draggable={!executing}
+              className={`shrink-0 ${executing ? "text-base-content/20" : "cursor-grab text-base-content/30 hover:text-base-content/60 active:cursor-grabbing"}`}
+              title={executing ? t("chat.queue.executing") : t("chat.queue.drag")}
               onDragStart={(e) => {
                 e.dataTransfer.effectAllowed = "move";
                 e.dataTransfer.setData("text/plain", String(i));
@@ -136,6 +140,12 @@ function QueueArea({ ctl }: { ctl: ComposerCtl }) {
               <IconGripVertical size={13} stroke={1.75} aria-hidden />
             </span>
             <span className="w-4 shrink-0 text-center tabular-nums text-base-content/40">{i + 1}</span>
+            {executing && (
+              <span className="shrink-0 text-[10px] font-medium text-info">
+                <span className="status status-info mr-1 motion-safe:animate-pulse" aria-hidden />
+                {t("chat.queue.executing")}
+              </span>
+            )}
             {editingId === item.id ? (
               <input
                 autoFocus
@@ -157,8 +167,10 @@ function QueueArea({ ctl }: { ctl: ComposerCtl }) {
               <button
                 type="button"
                 className="min-w-0 flex-1 truncate text-left text-base-content/80 hover:text-base-content"
-                title={t("chat.queue.edit")}
-                onClick={() => setEditingId(item.id)}
+                title={executing ? t("chat.queue.executing") : t("chat.queue.edit")}
+                onClick={() => {
+                  if (!executing) setEditingId(item.id);
+                }}
               >
                 {item.text}
               </button>
@@ -171,14 +183,16 @@ function QueueArea({ ctl }: { ctl: ComposerCtl }) {
             <button
               type="button"
               className="btn btn-ghost btn-square btn-xs shrink-0 text-base-content/50"
-              aria-label={t("chat.queue.remove")}
-              title={t("chat.queue.remove")}
+              aria-label={executing ? t("chat.queue.executing") : t("chat.queue.remove")}
+              title={executing ? t("chat.queue.executing") : t("chat.queue.remove")}
+              disabled={executing}
               onClick={() => removeInstr(item.id)}
             >
               <IconX size={12} stroke={1.75} aria-hidden />
             </button>
           </li>
-        ))}
+          );
+        })}
       </ul>
     </div>
   );

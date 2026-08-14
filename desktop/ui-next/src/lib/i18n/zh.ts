@@ -521,6 +521,7 @@ export const zh = {
   "chat.queue.remove": "移除",
   "chat.queue.edit": "点击编辑",
   "chat.queue.drag": "拖动排序",
+  "chat.queue.executing": "执行中",
   "chat.queue.clear": "清空待发送",
   "chat.queue.expand": "展开队列",
   "chat.queue.collapse": "折叠队列",

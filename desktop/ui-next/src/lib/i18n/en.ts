@@ -506,6 +506,7 @@ export const en: Record<MessageKey, string> = {
   "chat.queue.remove": "Remove",
   "chat.queue.edit": "Click to edit",
   "chat.queue.drag": "Drag to reorder",
+  "chat.queue.executing": "Executing",
   "chat.queue.clear": "Clear pending",
   "chat.queue.expand": "Expand queue",
   "chat.queue.collapse": "Collapse queue",

@@ -485,14 +485,19 @@ describe("运行态 / 停止 / 排队", () => {
     const box = await ready();
     emit("frames:s1", [{ type: "task-started", timestamp: 5, seq: 5 }]);
     await waitFor(() => expect(screen.getByText("思考中")).toBeTruthy());
-    await userEvent.type(box, "先排着{Enter}");
-    // 折叠态只显示首条;展开才能移除
+    await userEvent.type(box, "第一条{Enter}");
+    await userEvent.type(box, "待移除的{Enter}");
+    // 折叠态只显示首条;展开才能移除(队首执行中锁定,只能删后面的待发送项)
     await userEvent.click(screen.getByRole("button", { name: "展开队列" }));
     await userEvent.click(screen.getByRole("button", { name: "移除" }));
-    expect(screen.queryByText("先排着")).toBeNull();
+    expect(screen.queryByText("待移除的")).toBeNull();
+    expect(screen.getByText("第一条")).toBeTruthy(); // 执行中条目保留
     emit("frames:s1", [{ type: "task-ended", timestamp: 7, seq: 7 }]);
     await new Promise((r) => setTimeout(r, 20));
-    expect(sends(ops, "user-input")).toHaveLength(0);
+    // 移除后只剩执行中的第一条;轮结束补投它,不再投被移除的
+    const sent = sends(ops, "user-input");
+    expect(sent).toHaveLength(1);
+    expect(b64decode((sent[0]?.args?.payload as { content: string }).content)).toBe("第一条");
   });
 });
 
