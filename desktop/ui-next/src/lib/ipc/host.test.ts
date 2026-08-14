@@ -100,8 +100,8 @@ describe("hostInfo", () => {
     vi.stubGlobal("window", {});
     expect(await hostInfo()).toBeNull();
 
-    stubShell("Windows NT 10.0", vi.fn(() => Promise.resolve({ version: "1.2.3", engine_version: null })));
-    expect(await hostInfo()).toEqual({ version: "1.2.3", engine_version: null });
+    stubShell("Windows NT 10.0", vi.fn(() => Promise.resolve({ version: "1.2.3", engine_version: null, build: "work" })));
+    expect(await hostInfo()).toEqual({ version: "1.2.3", engine_version: null, build: "work" });
 
     stubShell("Windows NT 10.0", vi.fn(() => Promise.reject(new Error("boom"))));
     expect(await hostInfo()).toBeNull();

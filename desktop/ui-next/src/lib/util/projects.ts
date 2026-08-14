@@ -309,7 +309,6 @@ export function groupLocalSessions(
 
   // 未分配自定义组的项目 → 走原自动项目分组(上游排序:活跃排前 + 手动序)。
   // 置顶项目再提到最前,保持 groupSessions 的相对顺序。
-  const unassigned = [...byProject.keys()].filter((k) => !assigned.has(k));
   const { projects: allProjects, archivedProjects: archived } = groupSessions(
     sessions.filter((m) => !assigned.has(projectKey(m.workdir))),
     order,

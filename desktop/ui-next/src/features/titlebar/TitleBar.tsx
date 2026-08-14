@@ -23,6 +23,7 @@ import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useI18n } from "@/lib/i18n";
 
 import { inDesktopShell, listen } from "@/lib/ipc/ipc";
+import { hostInfo } from "@/lib/ipc/host";
 import {
   isWindowsShell,
   windowClose,
@@ -71,19 +72,22 @@ function useWindowBlurred(): boolean {
 
 const CAPTION_GLYPH = { strokeWidth: 1.1, stroke: "currentColor", fill: "none" } as const;
 
-/** 品牌字后的小徽标。文案与含义由产品定,这里只保证它跟着品牌走。 */
-const BRAND_BADGE = "Dev";
-
-/** 品牌组合(字标 + 徽标),侧栏头与 Windows 标题栏共用。
- *  每个可见子节点自带 data-tauri-drag-region(LAYOUT.md §7)。 */
+/** 品牌字后的小徽标。文案与含义由产品定,这里只保证它跟着品牌走。
+ *  debug 壳显示 Dev,发布版显示 work(经 host_info 查询,浏览器模式回落 work)。 */
 export function Brand() {
+  const [build, setBuild] = useState("work");
+  useEffect(() => {
+    void hostInfo().then((info) => {
+      if (info?.build) setBuild(info.build === "dev" ? "Dev" : "work");
+    });
+  }, []);
   return (
     <>
       <span data-tauri-drag-region="" className="shrink-0 text-xs font-bold tracking-tight text-base-content/80">
         TeemoCode
       </span>
       <span data-tauri-drag-region="" className="badge badge-soft badge-primary badge-xs shrink-0 font-bold">
-        {BRAND_BADGE}
+        {build}
       </span>
     </>
   );

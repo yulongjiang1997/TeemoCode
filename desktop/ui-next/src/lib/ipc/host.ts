@@ -40,6 +40,8 @@ export function applyPlatformAttr(): void {
 export interface HostInfo {
   version: string;
   engine_version: string | null;
+  /** 构建类型:debug 壳 "dev",发布版 "work"(角标用) */
+  build: string;
 }
 
 export async function hostInfo(): Promise<HostInfo | null> {
