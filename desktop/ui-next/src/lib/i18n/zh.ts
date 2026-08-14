@@ -516,6 +516,7 @@ export const zh = {
   "chat.running.thinking": "思考中",
   "chat.running.acting": "执行中",
   "chat.running.waitPerm": "等待权限确认",
+  "chat.fallbackSwitched": "主模型 {model} 失败({reason}),已切换到备用模型 {next}",
   "chat.stop": "停止",
   "chat.queued": "已排队",
   "chat.queuedHint": "运行结束后自动发送",

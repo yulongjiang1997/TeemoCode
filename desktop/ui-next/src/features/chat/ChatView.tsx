@@ -713,6 +713,10 @@ export function ChatView({
         const nextCfg = cfg?.models?.find((m) => m.model === nextModel);
         if (!nextModel || !nextCfg) return; // 没有备用模型了:任务失败,留失败态
         keyFailRef.current = 0; // 新模型从头试 key
+        // 切换提示:主模型错误原因 + 切到哪个备用模型
+        composerRef.current.notifyError(
+          t("chat.fallbackSwitched", { model: meta.model, reason, next: nextModel }),
+        );
         await sessionSetModel(meta.id, nextModel);
         await resend();
       } catch {
