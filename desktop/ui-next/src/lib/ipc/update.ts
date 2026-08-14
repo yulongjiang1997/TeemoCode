@@ -23,7 +23,7 @@ export function updateCheck(): Promise<UpdateInfo | null> {
  *  进度经「update-download」事件下发(onDownloadProgress 可订阅)。 */
 export function updateDownload(onProgress?: (e: UpdateDownloadEvent) => void): Promise<void> {
   if (!inDesktopShell()) return Promise.resolve();
-  const off = onProgress ? listen<UpdateDownloadEvent>("update-download", (e) => onProgress(e.payload)) : undefined;
+  const off = onProgress ? listen<UpdateDownloadEvent>("update-download", onProgress) : undefined;
   return invoke<void>("update_download")
     .catch((e) => {
       throw e;

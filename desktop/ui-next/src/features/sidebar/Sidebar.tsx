@@ -10,7 +10,7 @@
 //   btn、右键菜单走 lib/contextMenu(menu 皮相)。
 // 行交互:右键 = 行菜单(重命名/归档/删除二段确认)。
 // 行/组头/小节折叠的呈现件收口在 listKit(三列表统一,不做两套)。
-import { IconArchive, IconDownload, IconFolder, IconFolderOpen, IconInbox, IconMessages, IconPin, IconPlus, IconRefresh, IconX } from "@tabler/icons-react";
+import { IconArchive, IconChevronLeft, IconChevronRight, IconDownload, IconFolder, IconFolderOpen, IconInbox, IconMessages, IconPin, IconPlus, IconRefresh, IconX } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
@@ -47,6 +47,7 @@ import {
   type ProjectGroup,
 } from "@/lib/util/projects";
 import type { Space } from "@/lib/util/prefs";
+import { readSidebarCollapsed, writeSidebarCollapsed } from "@/lib/util/prefs";
 import { renameIsNoop } from "@/lib/util/rename";
 import { importMcApply, importMcScan, importMcScanDir, pickDirectory, type ImportMcSession } from "@/lib/ipc/host";
 
@@ -1339,6 +1340,31 @@ export function Sidebar({
     );
   };
 
+  // 侧栏折叠(会话列表收起成窄条):状态持久化,展开按钮在窄条上
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
+  const toggleSidebarCollapsed = () => {
+    setSidebarCollapsed((c) => {
+      writeSidebarCollapsed(!c);
+      return !c;
+    });
+  };
+
+  if (sidebarCollapsed) {
+    return (
+      <aside aria-label={t("sidebar.label")} className="flex w-6 shrink-0 flex-col items-center border-e border-base-300 bg-base-200/70 backdrop-blur-xs">
+        <button
+          type="button"
+          aria-label={t("sidebar.expand")}
+          title={t("sidebar.expand")}
+          className="btn btn-ghost btn-square btn-xs mt-1 text-base-content/50"
+          onClick={toggleSidebarCollapsed}
+        >
+          <IconChevronRight size={14} stroke={1.75} aria-hidden />
+        </button>
+      </aside>
+    );
+  }
+
   return (
     <aside aria-label={t("sidebar.label")} className="flex w-side shrink-0 flex-col border-e border-base-300 bg-base-200/70 backdrop-blur-xs">
       {/* 列头部:与 rail 角落/主区视图头部同一 h-13(52px)基线;空白处可拖拽窗口。
@@ -1346,6 +1372,16 @@ export function Sidebar({
       <div data-tauri-drag-region="" className="flex h-13 shrink-0 items-center gap-1.5 border-b border-base-300 ps-5 pe-3">
         <Brand />
         <span data-tauri-drag-region="" className="min-w-0 flex-1" />
+        {/* 折叠侧栏(会话列表收起成窄条) */}
+        <button
+          type="button"
+          aria-label={t("sidebar.collapse")}
+          title={t("sidebar.collapse")}
+          className="btn btn-ghost btn-square btn-xs text-base-content/50"
+          onClick={toggleSidebarCollapsed}
+        >
+          <IconChevronLeft size={14} stroke={1.75} aria-hidden />
+        </button>
         <button
           type="button"
           aria-label={t("sidebar.newTask")}

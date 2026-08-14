@@ -31,6 +31,8 @@ export const en: Record<MessageKey, string> = {
   "sidebar.searchTasks": "Search projects or tasks",
   "sidebar.clearSearch": "Clear search",
   "sidebar.newTask": "New task",
+  "sidebar.collapse": "Collapse sidebar",
+  "sidebar.expand": "Expand sidebar",
   "sidebar.importMc": "Import from MonkeyCode",
   "sidebar.importMc.title": "Import MonkeyCode tasks",
   "sidebar.importMc.loading": "Scanning MonkeyCode data…",

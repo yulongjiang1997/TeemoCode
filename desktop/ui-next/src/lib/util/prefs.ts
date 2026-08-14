@@ -68,6 +68,23 @@ export function writeFold(key: FoldKey, open: boolean): void {
   }
 }
 
+/** 侧栏折叠态(会话列表收起成窄条;展开按钮在窄条上)。 */
+export function readSidebarCollapsed(): boolean {
+  try {
+    return localStorage.getItem("mc.sidebarCollapsed") === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function writeSidebarCollapsed(c: boolean): void {
+  try {
+    localStorage.setItem("mc.sidebarCollapsed", c ? "1" : "0");
+  } catch {
+    // 只丢持久化
+  }
+}
+
 /** 自定义背景图(data URL;空 = 未自定义,用默认纯色背景)。 */
 export function readBgImage(): string {
   try {
