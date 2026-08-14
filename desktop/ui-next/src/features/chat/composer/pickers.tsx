@@ -110,8 +110,10 @@ export function ModelMenu({
   const boxRef = useRef<HTMLDivElement | null>(null);
   useDismiss(open, boxRef, () => setOpen(false));
   // 向上弹:高度按锚点到最近上边界(标题栏/视图头)的真实距离算,
-  // 写死上限在矮窗口下会把菜单顶出视口(lib/util/menuHeight)
-  const { anchorRef, maxHeight: menuMax } = useUpwardMenuHeight<HTMLButtonElement>(open);
+  // 写死上限在矮窗口下会把菜单顶出视口(lib/util/menuHeight)。
+  // cap 取 460:模型菜单带「备用模型」区,上下各 5 行 + 标签/过滤 ≈ 400px,
+  // 默认 288 会把备用区裁到一行。
+  const { anchorRef, maxHeight: menuMax } = useUpwardMenuHeight<HTMLButtonElement>(open, 460);
 
   // 模型菜单派生(纯逻辑在 lib/models/modelMenu):过滤框在模型多时才有
   // 意义;tab 行只要 ≥2 来源就恒显(它是来源间唯一导航);过滤在 tab 内;
