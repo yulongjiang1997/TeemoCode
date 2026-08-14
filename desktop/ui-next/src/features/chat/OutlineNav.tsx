@@ -117,14 +117,13 @@ export const OutlineNav = memo(function OutlineNav({
   const [open, setOpen] = useState(false);
   const panelRef = useRef<HTMLUListElement>(null);
 
-  // 当前项始终可见:提问多到面板要内滚时,打开就已经停在「我现在在哪」上
-  // (移植旧 outline.tsx 的居中滚动;jsdom 几何全 0 时是无害空转)
+  // 默认定位到最底部(最新指令):打开面板即停在最新一条上,而不是当前项的
+  // 居中(用户定案 2026-08-14)。只随「打开」滚,打开后自由翻看不打扰。
   useEffect(() => {
     const box = panelRef.current;
-    const target = box?.querySelector<HTMLElement>('[aria-current="true"]');
-    if (!open || !box || !target) return;
-    box.scrollTop = Math.max(0, target.offsetTop - box.clientHeight / 2 + target.offsetHeight / 2);
-  }, [open, activeSeq, entries.length]);
+    if (!open || !box) return;
+    box.scrollTop = box.scrollHeight;
+  }, [open]);
 
   // 一条提问的会话不值得占一条轨道
   if (entries.length < 2) return null;
