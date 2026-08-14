@@ -91,7 +91,7 @@ fn default_locations() -> Value {
 
 /// 自动探测并扫描(标准安装路径)。
 #[tauri::command]
-pub async fn import_mc_scan(app: AppHandle) -> Result<Value, String> {
+pub async fn import_mc_scan(_app: AppHandle) -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(move || -> Result<Value, String> {
         let Some(root) = original_mc_dir().and_then(|d| find_config_root(&d)) else {
             return Ok(json!({ "found": false, "sessions": [], "candidates": default_locations() }));
@@ -104,7 +104,7 @@ pub async fn import_mc_scan(app: AppHandle) -> Result<Value, String> {
 
 /// 用户手动指定的目录扫描(自动路径落空时的兜底)。
 #[tauri::command]
-pub async fn import_mc_scan_dir(app: AppHandle, path: String) -> Result<Value, String> {
+pub async fn import_mc_scan_dir(_app: AppHandle, path: String) -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(move || -> Result<Value, String> {
         let dir = std::path::PathBuf::from(&path);
         if !dir.is_dir() {

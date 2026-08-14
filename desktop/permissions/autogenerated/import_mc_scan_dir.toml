@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-import-mc-scan-dir"
+description = "Enables the import_mc_scan_dir command without any pre-configured scope."
+commands.allow = ["import_mc_scan_dir"]
+
+[[permission]]
+identifier = "deny-import-mc-scan-dir"
+description = "Denies the import_mc_scan_dir command without any pre-configured scope."
+commands.deny = ["import_mc_scan_dir"]
