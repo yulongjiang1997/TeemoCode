@@ -32,7 +32,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFCOTI3REE5M0FDMjQ1MzcKUldRM1JjSTZxWDJTcTNmQW9qUkRmbUZWTkMrRUtJU1NWa1Rhc2pSbHIvMWZ5TTNRcDhoK3Vpb0oK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM4ODFGNkQ5QTI2NTk4RjMKUldUem1HV2kyZmFCeUc0blRCTUcyaFUycmF2MXRyQjloOEpJd3pzMEhCUnpRQVNKQWpqdUE5TmgK",
       "endpoints": ["https://gitee.com/xiaotimor/teemo-code-update/raw/master/latest.json"]
     }
   }
