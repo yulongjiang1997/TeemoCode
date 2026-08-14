@@ -251,7 +251,7 @@ export function ModelsSection({
                     onChange={(e) => patch(i, { base_url: e.target.value })}
                   />
                 </fieldset>
-                <fieldset className="fieldset gap-1.5">
+                <fieldset className="fieldset col-span-2 gap-1.5">
                   <legend className="fieldset-legend">{t("settings.models.apiKey")}</legend>
                   {/* 多密钥:每行一个(默认掩码,可查看明文/删除);使用中失败/额度用完自动换下一个 */}
                   <div className="flex flex-col gap-1">
