@@ -653,23 +653,32 @@ export function ChatView({
   }, [meta.id, meta.model]);
 
   // ===== 多密钥自动切换:key 失败/额度用完 → 轮换到下一个 → 重发该指令 =====
-  // 连续失败计数(按会话):达到备用 key 数则不再自动重试,任务留失败态。
+  // 连续失败计数(按会话):达到备用 key 数则切下一个模型/任务失败。
   const keyFailRef = useRef(0);
   const rotatingRef = useRef(false);
+  // 本轮失败是否已处理(一回合发多个 task-error,只处理一次) + 本轮是否含 key 错误
+  const failHandledRef = useRef(false);
+  const keyErrThisTurnRef = useRef(false);
   useEffect(() => {
-    // 开轮不清计数:轮换 key 后的重发回合也要累计——否则 key1 失败→换 key2→
-    // 开轮清零→key2 失败→又换回 key1,永远轮换不到下一个备用模型
-    if (state.running) return;
-    if (state.turnEnded) {
-      keyFailRef.current = 0; // 成功回合清零
+    if (state.running) {
+      failHandledRef.current = false; // 新轮开始,复位"本轮失败已处理"
       return;
     }
-    if (rotatingRef.current) return; // 正在轮换
+    if (state.turnEnded) {
+      // 轮次结束:成功(本轮无 key 错误)才清零计数;失败回合不清,跨回合累计
+      if (!keyErrThisTurnRef.current) keyFailRef.current = 0;
+      keyErrThisTurnRef.current = false;
+      failHandledRef.current = false;
+      return;
+    }
+    if (failHandledRef.current || rotatingRef.current) return; // 本轮已处理/正在轮换
     // 本轮失败:取最后一条 sys 错误消息判断是否 key 问题
     const errItem = [...state.items].reverse().find((it) => it.kind === "sys" && it.error);
     const reason =
       errItem && errItem.kind === "sys" && errItem.params?.reason ? String(errItem.params.reason) : "";
     if (!isKeyError(reason)) return;
+    keyErrThisTurnRef.current = true;
+    failHandledRef.current = true; // 本轮失败只处理一次(一回合可能多个 task-error)
     void (async () => {
       rotatingRef.current = true;
       try {
