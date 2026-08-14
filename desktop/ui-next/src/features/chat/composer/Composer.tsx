@@ -27,7 +27,7 @@ import {
 
 import { useI18n } from "@/lib/i18n";
 import { useEscLayer } from "@/lib/util/escLayer";
-import { sessionSetMode, sessionSetModel, sessionSetSkills, sessionSetThink } from "@/lib/ipc/controls";
+import { sessionCompact, sessionSetMode, sessionSetModel, sessionSetSkills, sessionSetThink } from "@/lib/ipc/controls";
 import { afterEngineReady } from "@/lib/ipc/engine";
 import { modelMenuList, resolveModelName } from "@/lib/models/modelMenu";
 import { modelsList, type ModelInfo, type SessionMeta } from "@/lib/ipc/sessions";
@@ -35,6 +35,7 @@ import { defaultEnabledSkills, skillsList, type SkillInfo } from "@/lib/ipc/skil
 import { pickAttachmentPaths } from "@/lib/ipc/uploads";
 import type { ChatState, SlashCommand } from "@/lib/protocol/types";
 import { fmtK } from "@/lib/util/fmt";
+import { readAutoCompactRatio, writeAutoCompactRatio } from "@/lib/util/prefs";
 import { commandText, createImeGuard, cycleIndex, filterCommands, slashQuery } from "@/lib/util/slash";
 import { ComposerCard, ComposerTextarea, ErrorBar, RunBar, SlashPanel, UsageRing } from "./composerKit";
 import { ModelMenu, SkillsMenu, ThinkMenu } from "./pickers";
@@ -423,6 +424,17 @@ export function Composer({
     (state.usage && state.usage.used > 0 ? ` · ${fmtK(state.usage.used)} tokens` : "");
   const usagePct =
     state.usage && state.usage.size > 0 ? Math.round((state.usage.used / state.usage.size) * 100) : null;
+  // 自动压缩阈值(全局偏好;回合结束超阈自动压缩的检查在 ChatView)
+  const [autoRatio, setAutoRatio] = useState(readAutoCompactRatio);
+  const setAuto = (pct: number) => {
+    setAutoRatio(pct);
+    writeAutoCompactRatio(pct);
+  };
+  const compact = () => {
+    void sessionCompact(sessionId).catch((e: unknown) => {
+      ctl.notifyError(t("chat.compact.failed", { reason: errText(e) }));
+    });
+  };
 
   return (
     <div className="flex flex-col gap-2">
@@ -533,6 +545,9 @@ export function Composer({
           <UsageRing
             pct={usagePct}
             label={t("chat.contextUsage")}
+            onCompact={compact}
+            autoRatio={autoRatio}
+            onAutoRatioChange={setAuto}
             tip={
               usagePct !== null && state.usage
                 ? t("chat.usageTip", {

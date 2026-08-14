@@ -67,3 +67,21 @@ export function writeFold(key: FoldKey, open: boolean): void {
     // 只丢持久化
   }
 }
+
+/** 自动压缩阈值(上下文使用百分比,0 = 关闭)。回合结束检查超阈即压缩。 */
+export function readAutoCompactRatio(): number {
+  try {
+    const v = Number(localStorage.getItem("mc.autoCompactRatio"));
+    return Number.isFinite(v) && v > 0 ? Math.min(Math.max(v, 50), 100) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function writeAutoCompactRatio(pct: number): void {
+  try {
+    localStorage.setItem("mc.autoCompactRatio", String(pct > 0 ? Math.min(Math.max(pct, 50), 100) : 0));
+  } catch {
+    // 只丢持久化
+  }
+}

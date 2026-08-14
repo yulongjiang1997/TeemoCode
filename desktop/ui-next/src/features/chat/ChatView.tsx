@@ -35,7 +35,8 @@ function extractOutputPath(text: string): string | null {
 }
 import { fmtCompact, showTokenPopover } from "@/features/sidebar/listKit";
 import { useI18n } from "@/lib/i18n";
-import { sessionOutline, type OutlineItem } from "@/lib/ipc/controls";
+import { sessionCompact, sessionOutline, type OutlineItem } from "@/lib/ipc/controls";
+import { readAutoCompactRatio } from "@/lib/util/prefs";
 import { repoChanges, repoRecentFiles, repoReveal } from "@/lib/ipc/repo";
 import { sessionFrame, sessionPatch, type SessionMeta } from "@/lib/ipc/sessions";
 import { buildSessionUsageMap, usageStats, type TokenUsage } from "@/lib/ipc/usageStats";
@@ -612,7 +613,15 @@ export function ChatView({
   const prevTurnEnded = useRef(false);
   useEffect(() => {
     // 轮次结束边沿:改动列表需要重拉(抽屉开着时立即,关着时下次打开取新)
-    if (state.turnEnded && !prevTurnEnded.current) setChangesToken((n) => n + 1);
+    if (state.turnEnded && !prevTurnEnded.current) {
+      setChangesToken((n) => n + 1);
+      // 自动压缩:回合结束检查上下文用量,达到阈值即自动触发压缩
+      const ratio = readAutoCompactRatio();
+      if (ratio > 0 && state.usage && state.usage.size > 0) {
+        const pct = (state.usage.used / state.usage.size) * 100;
+        if (pct >= ratio) void sessionCompact(meta.id).catch(() => {});
+      }
+    }
     prevTurnEnded.current = state.turnEnded;
   }, [state.turnEnded]);
   // 改动数徽标:轮末(changesToken 边沿)拉一次计数;浏览器模式 repoChanges

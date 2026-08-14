@@ -571,7 +571,10 @@ describe("运行条 detail 与上下文用量", () => {
     render(<ChatView meta={META} />);
     await ready();
     const ring = await screen.findByRole("img", { name: "上下文用量" });
-    expect(ring.closest("[data-tip]")?.getAttribute("data-tip")).toBe("暂无数据,本轮请求后更新");
+    // 悬停环形图弹出悬浮窗:说明文案 + 手动压缩/自动压缩
+    fireEvent.mouseEnter(ring);
+    expect(screen.getByText("暂无数据,本轮请求后更新")).toBeTruthy();
+    fireEvent.mouseLeave(ring);
     // 空态只有轨道,没有用量弧
     expect(screen.queryByRole("progressbar", { name: "上下文用量" })).toBeNull();
   });
@@ -591,7 +594,10 @@ describe("运行条 detail 与上下文用量", () => {
     ]);
     const bar = await screen.findByRole("progressbar", { name: "上下文用量" });
     expect(bar.getAttribute("aria-valuenow")).toBe("90");
-    expect(bar.closest("[data-tip]")?.getAttribute("data-tip")).toBe("上下文 90% · 180k/200k");
+    // 悬停弹出悬浮窗:紧凑摘要
+    fireEvent.mouseEnter(bar);
+    expect(screen.getByText(/上下文 90% · 180k\/200k/)).toBeTruthy();
+    fireEvent.mouseLeave(bar);
 
     // 弧线底下必须垫一整圈轨道(--value:100 的同几何层,aria-hidden 不进无障碍树):
     // daisyUI radial-progress 未填充段全透明,缺轨道时低用量看着像半截残环

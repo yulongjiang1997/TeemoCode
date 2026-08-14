@@ -4,7 +4,7 @@
 // 搬迁的定稿形态(-mx-2.5 出血、ps-1/pe-2 光学对齐等口径见 Composer 内注),
 // 改形态只改这里。
 import { IconAlertCircle, IconPlayerStopFilled, IconX } from "@tabler/icons-react";
-import { type CSSProperties, type ReactNode, type RefObject, type TextareaHTMLAttributes } from "react";
+import { type CSSProperties, type ReactNode, type RefObject, type TextareaHTMLAttributes, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
 import type { SlashCommand } from "@/lib/protocol/types";
@@ -72,10 +72,28 @@ export function RunBar({
  *  本轮请求后更新」——旧 UI 的 ContextRing 就是恒显的(chat.tsx:1203),
  *  ui-next 首版把整个圆环 gate 掉了:元素时有时无本身就是干扰,而且用户
  *  无从知道"这里本该有个东西、只是还没数据"。 */
-export function UsageRing({ pct, tip, label }: { pct: number | null; tip: string; label: string }) {
+export function UsageRing({
+  pct,
+  tip,
+  label,
+  onCompact,
+  autoRatio,
+  onAutoRatioChange,
+}: {
+  pct: number | null;
+  tip: string;
+  label: string;
+  /** 手动压缩上下文(悬浮窗内的按钮;缺省不渲染) */
+  onCompact?: () => void;
+  /** 自动压缩阈值(%):>0 时回合结束超阈自动压缩 */
+  autoRatio?: number;
+  onAutoRatioChange?: (pct: number) => void;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
   const geom = { "--size": "1rem", "--thickness": "2px" } as CSSProperties;
   return (
-    <div className="tooltip tooltip-left mx-1 shrink-0" data-tip={tip}>
+    <div className="relative mx-1 shrink-0" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
       {/* 同格叠放(col/row-start-1),不用 absolute:两层几何完全一致才不会错圈 */}
       <div className="grid size-4 place-items-center align-middle">
         <div
@@ -94,6 +112,43 @@ export function UsageRing({ pct, tip, label }: { pct: number | null; tip: string
           />
         )}
       </div>
+      {/* 悬浮窗:用量说明 + 手动压缩 + 自动压缩阈值(可交互,悬停显示) */}
+      {open && (
+        <div className="absolute right-0 top-full z-50 mt-1.5 w-60 rounded-box border border-base-300 bg-base-100 p-2.5 shadow-lg">
+          <div className="text-[11px] leading-relaxed text-base-content/70">{tip}</div>
+          {onCompact && (
+            <div className="mt-2 flex items-center gap-2">
+              <button type="button" className="btn btn-primary btn-xs" disabled={pct === null} onClick={onCompact}>
+                {t("chat.compactNow")}
+              </button>
+              <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-base-content/60">
+                <input
+                  type="checkbox"
+                  className="checkbox checkbox-xs"
+                  checked={(autoRatio ?? 0) > 0}
+                  onChange={(e) => onAutoRatioChange?.(e.target.checked ? 90 : 0)}
+                />
+                {t("chat.autoCompact")}
+              </label>
+            </div>
+          )}
+          {(autoRatio ?? 0) > 0 && (
+            <div className="mt-1.5 flex items-center gap-1.5">
+              <span className="shrink-0 text-[11px] text-base-content/60">{t("chat.autoCompactAt")}</span>
+              <input
+                type="range"
+                min={50}
+                max={100}
+                step={5}
+                className="range range-xs min-w-0 flex-1"
+                value={autoRatio}
+                onChange={(e) => onAutoRatioChange?.(Number(e.target.value))}
+              />
+              <span className="w-8 shrink-0 text-right text-[11px] tabular-nums text-base-content/70">{autoRatio}%</span>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
