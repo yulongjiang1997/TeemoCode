@@ -248,6 +248,21 @@ impl Inner {
                         seq,
                     )
                 });
+                // 认证/额度错误:引擎吞在内部重试后静默 task-ended(不产 error 事件),
+                // 壳收不到任何失败信号 → 前端多密钥/备用模型轮换不触发。这里按
+                // 终止错误给父会话收尾,前端才能及时轮换 key/切换备用模型。
+                if super::normalize::is_key_auth_error(&msg) {
+                    eprintln!("[desktop] 子代理认证/额度错误,父会话按终止收尾: {msg}");
+                    self.push_frame(&psid, |seq| frame::task_error(&msg, seq));
+                    self.push_frame(&psid, frame::task_ended);
+                    if let Some(s) = self.sess.sessions.lock_ok().get_mut(&psid) {
+                        s.running = false;
+                        s.open_tools.clear();
+                        s.model_text.clear();
+                    }
+                    self.write_sidecar(&psid, |m| m["status"] = json!(SessionStatus::Error.as_str()));
+                    self.emit_session_event(&psid, SessionStatus::Error.as_str());
+                }
             }
             // thinking_delta/model_done:进度窗不展示思考流与轮界
             _ => {}
