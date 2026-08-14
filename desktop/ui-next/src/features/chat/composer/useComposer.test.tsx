@@ -1,269 +1,290 @@
-// composer 状态机的独立契约测试(此前只被 Composer.test 间接覆盖):
-// 切会话留档/恢复、排队单槽、失败不丢草稿、迟到回执的纪元守卫,以及
-// 补投三道闸(历史未落地不抢投 / 切会话不投错人 / 上行在途不直发)与
-// 失败后的退避重试。
+// useComposer 数据面:指令队列(追加/顺序补投/失败标红+暂停/重试/移除)。
+// 并发语义:running 为真=壳在跑轮,直发必被拒,只能进队列;running 假但
+// 无帧水位(lastSeq 不动)=上行在途,同样只进队列;帧水位一到才代表壳已
+// 把上行物化成帧,可以继续补投。
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { b64encode } from "@/lib/protocol/codec";
+import { useComposer, type ComposerFeed, type QueuedInstr } from "./useComposer";
 import { resetStashForTests, stashGet, stashSet } from "./stash";
-import { useComposer, type ComposerFeed } from "./useComposer";
-
-function stubSend(impl: (cmd: string) => unknown) {
-  const calls: Array<{ cmd: string; args?: Record<string, unknown> }> = [];
-  (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
-    core: {
-      invoke: (cmd: string, args?: Record<string, unknown>) => {
-        calls.push({ cmd, args });
-        try {
-          return Promise.resolve(impl(cmd));
-        } catch (e) {
-          return Promise.reject(e);
-        }
-      },
-    },
-  };
-  return calls;
-}
 
 /** 数据面默认信号:历史已落地、无新帧;各用例只覆写关心的那一项。 */
 const feed = (over: Partial<ComposerFeed> = {}): ComposerFeed => ({
   running: false,
   historyLoaded: true,
   lastSeq: 0,
+  turnEnded: false,
   ...over,
 });
 
-/** 让在途的 IPC promise 与它引发的 setState 全部落地。 */
-const settle = () => act(async () => { await Promise.resolve(); });
+const qi = (text: string, state: QueuedInstr["state"] = "pending"): QueuedInstr => ({
+  id: `q-${text}`,
+  text,
+  atts: [],
+  state,
+});
+
+/** 壳侧 stub:回执可编程(默认立即成功);录制所有 session_send。 */
+function stubSend(impl?: (cmd: string) => unknown) {
+  const calls: { cmd: string; args: { id: string; payload: { content: string } } }[] = [];
+  (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
+    core: {
+      invoke: (cmd: string, args?: { id: string; payload: { content: string } }) => {
+        if (cmd !== "session_send") return Promise.resolve(null);
+        calls.push({ cmd, args: args! });
+        return Promise.resolve().then(() => {
+          const r = impl?.(cmd);
+          if (r === undefined) return null;
+          throw r;
+        });
+      },
+    },
+  };
+  const sends = () => calls.filter((c) => c.cmd === "session_send");
+  return { calls, sends };
+}
+
+/** 一轮完整周期:投出后引擎开轮(running true)、回合结束(running false)。 */
+function turnCycle(rerender: (p: { running: boolean; turnEnded: boolean }) => void, ended = true) {
+  rerender({ running: true, turnEnded: false });
+  rerender({ running: false, turnEnded: ended });
+}
+
+const settle = () => act(async () => {
+  await Promise.resolve();
+});
+
+const textOf = (c: { payload: { content: string } }) => decodeURIComponent(escape(atob(c.payload.content)));
 
 beforeEach(() => {
   resetStashForTests();
-  delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
-});
-
-afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("useComposer:跨会话留档/恢复", () => {
-  it("切会话留档草稿与排队,切回恢复;新会话是干净的", async () => {
-    stubSend(() => null);
+afterEach(() => {
+  delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+});
+
+describe("useComposer:留档与恢复", () => {
+  it("切会话留档草稿与队列,切回恢复;新会话是干净的", async () => {
+    stubSend();
     const { result, rerender } = renderHook(({ id, running }) => useComposer(id, feed({ running })), {
       initialProps: { id: "a", running: true },
     });
     // send 的闭包按渲染帧取 draft:setDraft 与 send 必须分属两个 act
     act(() => result.current.setDraft("排我"));
     act(() => {
-      result.current.send(); // running=true → 入单槽
+      result.current.send();
     });
     act(() => result.current.setDraft("A 的草稿"));
-    expect(result.current.queued).toBe("排我");
+    expect(result.current.queue[0]?.text).toBe("排我");
 
     rerender({ id: "b", running: false });
     expect(result.current.draft).toBe("");
-    expect(result.current.queued).toBeNull();
+    expect(result.current.queue).toHaveLength(0);
 
     rerender({ id: "a", running: true });
     expect(result.current.draft).toBe("A 的草稿");
-    expect(result.current.queued).toBe("排我");
+    expect(result.current.queue[0]?.text).toBe("排我");
   });
 
-  it("排队单槽:后发覆盖先发", () => {
-    stubSend(() => null);
+  it("运行中发送无限追加队尾(按顺序执行)", () => {
+    stubSend();
     const { result } = renderHook(() => useComposer("a", feed({ running: true })));
-    act(() => result.current.setDraft("第一条"));
-    act(() => {
-      result.current.send();
-    });
-    act(() => result.current.setDraft("第二条"));
-    act(() => {
-      result.current.send();
-    });
-    expect(result.current.queued).toBe("第二条");
+    for (const txt of ["第一条", "第二条", "第三条"]) {
+      act(() => result.current.setDraft(txt));
+      act(() => {
+        result.current.send();
+      });
+    }
+    expect(result.current.queue.map((x) => x.text)).toEqual(["第一条", "第二条", "第三条"]);
+    expect(result.current.queue.every((x) => x.state === "pending")).toBe(true);
   });
+});
 
-  it("发送失败不丢草稿(壳契约 Err ⟺ 未入会话)", async () => {
-    stubSend(() => {
-      throw new Error("engine down");
-    });
-    const { result } = renderHook(() => useComposer("a", feed()));
-    act(() => result.current.setDraft("要发的话"));
-    act(() => {
-      result.current.send(); // setDraft 已提交,本 act 里的 send 闭包是新 draft
-    });
-    expect(result.current.draft).toBe("");
-    await waitFor(() => expect(result.current.draft).toBe("要发的话"));
-  });
-
-  it("迟到的失败回执 + 已切会话:草稿回原会话留档,不污染当前会话", async () => {
-    stubSend(() => {
-      throw new Error("engine down");
-    });
-    const { result, rerender } = renderHook(({ id }) => useComposer(id, feed()), {
-      initialProps: { id: "a" },
-    });
-    act(() => result.current.setDraft("迟到的话"));
-    act(() => {
-      result.current.send();
-    });
-    rerender({ id: "b" }); // 回执落地前切走
-    await waitFor(() => expect(stashGet("a")?.draft).toBe("迟到的话"));
-    expect(result.current.draft).toBe("");
-
-    rerender({ id: "a" });
-    expect(result.current.draft).toBe("迟到的话");
-  });
-
-  it("轮结束自动补投排队消息(payload 走 base64)", async () => {
-    const calls = stubSend(() => null);
-    const { result, rerender } = renderHook(({ running }) => useComposer("a", feed({ running })), {
-      initialProps: { running: true },
-    });
+describe("useComposer:队列补投", () => {
+  it("轮结束自动补投队头;成功出队后继续投下一条", async () => {
+    const { calls, sends } = stubSend();
+    const { result, rerender } = renderHook(
+      ({ running, turnEnded }) => useComposer("a", feed({ running, turnEnded })),
+      { initialProps: { running: true, turnEnded: false } },
+    );
     act(() => result.current.setDraft("排队中"));
     act(() => {
       result.current.send();
     });
-    rerender({ running: false });
-    await waitFor(() =>
-      expect(calls.some((c) => c.cmd === "session_send" && JSON.stringify(c.args).includes(b64encode("排队中")))).toBe(true),
-    );
-    expect(result.current.queued).toBeNull();
+    rerender({ running: false, turnEnded: true }); // 轮结束 → 投出队头
+    await waitFor(() => expect(sends().length).toBe(1));
+    expect(textOf(calls[0]!.args)).toBe("排队中");
+    turnCycle(rerender, true); // 新轮跑完(task-ended)→ 成功出队
+    await waitFor(() => expect(result.current.queue).toHaveLength(0));
   });
-});
 
-describe("useComposer:排队补投的三道闸", () => {
-  const sends = (calls: Array<{ cmd: string; args?: Record<string, unknown> }>) =>
-    calls.filter((c) => c.cmd === "session_send");
+  it("task-error 失败结束:当前指令标 failed + 自动暂停,不再自动补投", async () => {
+    const { sends } = stubSend();
+    const { result, rerender } = renderHook(
+      ({ running, turnEnded }) => useComposer("a", feed({ running, turnEnded })),
+      { initialProps: { running: true, turnEnded: false } },
+    );
+    act(() => result.current.setDraft("会失败的"));
+    act(() => {
+      result.current.send();
+    });
+    rerender({ running: false, turnEnded: true }); // 投出
+    await waitFor(() => expect(sends().length).toBe(1));
+    turnCycle(rerender, false); // 新轮以 task-error 结束(turnEnded 未置)
+    await waitFor(() => expect(result.current.queue[0]?.state).toBe("failed"));
+    expect(result.current.paused).toBe(true); // 自动暂停
+  });
 
-  it("切会话不把上一个会话的排队消息投进新会话", async () => {
-    const calls = stubSend(() => null);
+  it("重试:failed 项复位 pending + 解除暂停,立即补投", async () => {
+    const { sends } = stubSend();
+    const { result, rerender } = renderHook(
+      ({ running, turnEnded }) => useComposer("a", feed({ running, turnEnded })),
+      { initialProps: { running: true, turnEnded: false } },
+    );
+    act(() => result.current.setDraft("要重试的"));
+    act(() => {
+      result.current.send();
+    });
+    rerender({ running: false, turnEnded: true });
+    await waitFor(() => expect(sends().length).toBe(1));
+    turnCycle(rerender, false); // 失败
+    await waitFor(() => expect(result.current.queue[0]?.state).toBe("failed"));
+
+    act(() => result.current.retryInstr(result.current.queue[0]!.id));
+    await waitFor(() => expect(sends().length).toBe(2)); // 立即重投
+    turnCycle(rerender, true); // 重试成功
+    await waitFor(() => expect(result.current.queue).toHaveLength(0));
+    expect(result.current.paused).toBe(false);
+  });
+
+  it("移除:failed 项移除后,后续指令照常补投", async () => {
+    const { sends } = stubSend();
+    const { result, rerender } = renderHook(
+      ({ running, turnEnded }) => useComposer("a", feed({ running, turnEnded })),
+      { initialProps: { running: true, turnEnded: false } },
+    );
+    act(() => result.current.setDraft("失败项"));
+    act(() => {
+      result.current.send();
+    });
+    act(() => result.current.setDraft("后续项"));
+    act(() => {
+      result.current.send();
+    });
+    rerender({ running: false, turnEnded: true });
+    await waitFor(() => expect(sends().length).toBe(1));
+    turnCycle(rerender, false); // 首条失败
+    await waitFor(() => expect(result.current.queue[0]?.state).toBe("failed"));
+
+    act(() => result.current.removeInstr(result.current.queue[0]!.id));
+    act(() => result.current.togglePaused()); // 解除暂停
+    await waitFor(() => expect(sends().length).toBe(2));
+    expect(textOf(sends()[1]!.args)).toBe("后续项");
+    turnCycle(rerender, true);
+    await waitFor(() => expect(result.current.queue).toHaveLength(0));
+  });
+
+  it("暂停:轮结束不自动补投;恢复后才投", async () => {
+    const { sends } = stubSend();
+    const { result, rerender } = renderHook(
+      ({ running, turnEnded }) => useComposer("a", feed({ running, turnEnded })),
+      { initialProps: { running: true, turnEnded: false } },
+    );
+    act(() => result.current.setDraft("排队中"));
+    act(() => {
+      result.current.send();
+    });
+    act(() => result.current.togglePaused()); // 先暂停
+    rerender({ running: false, turnEnded: true });
+    await settle();
+    expect(sends().length).toBe(0); // 暂停不投
+
+    act(() => result.current.togglePaused()); // 恢复
+    await waitFor(() => expect(sends().length).toBe(1));
+  });
+
+  it("切会话不把上一个会话的队列消息投进新会话", async () => {
+    const { sends } = stubSend();
     const { result, rerender } = renderHook(({ id, running }) => useComposer(id, feed({ running })), {
       initialProps: { id: "a", running: true },
     });
     act(() => result.current.setDraft("给 A 的话"));
     act(() => {
-      result.current.send(); // running=true → 入单槽
+      result.current.send();
     });
-    expect(result.current.queued).toBe("给 A 的话");
-
-    // 切到空闲的 b:这一帧里 sessionId 已是 b,而 queued 还是 A 的
-    // (留档-恢复 effect 的 setState 要下一次渲染才回流)——补投 effect 与它
-    // 同一次提交,不对表就把 A 的话发进了 b
+    // 切到空闲的 b:这一帧里 sessionId 已是 b,而 queue 还属于 A
     rerender({ id: "b", running: false });
     await settle();
-    expect(sends(calls).filter((c) => c.args?.id === "b")).toHaveLength(0);
+    expect(sends().filter((c) => c.args.id === "b")).toHaveLength(0);
 
-    // 消息还在 A 的槽里,切回来照样在
+    // 消息还在 A 的队列里,切回来照样在
     rerender({ id: "a", running: true });
-    expect(result.current.queued).toBe("给 A 的话");
+    expect(result.current.queue[0]?.text).toBe("给 A 的话");
   });
 
-  it("首份历史落地前不抢投恢复出来的排队消息(running 还不可信)", async () => {
-    const calls = stubSend(() => null);
-    stashSet("a", { draft: "", queued: "切回来要补投的", atts: [] });
-    const { result, rerender } = renderHook(({ historyLoaded }) => useComposer("a", feed({ historyLoaded })), {
-      initialProps: { historyLoaded: false },
+  it("首份历史落地前不抢投恢复出来的队列消息(running 还不可信)", async () => {
+    const { sends } = stubSend();
+    stashSet("a", { draft: "", queue: [qi("切回来要补投的")], atts: [] });
+    const { result, rerender } = renderHook(({ historyLoaded, running, turnEnded }) => useComposer("a", feed({ historyLoaded, running, turnEnded })), {
+      initialProps: { historyLoaded: false, running: false, turnEnded: false },
     });
     await settle();
-    // 恢复出来了,但会话可能正在后台跑轮:此刻直投必被壳的忙碌守卫拒掉
-    expect(result.current.queued).toBe("切回来要补投的");
-    expect(sends(calls)).toHaveLength(0);
+    expect(result.current.queue[0]?.text).toBe("切回来要补投的");
+    expect(sends()).toHaveLength(0);
 
-    rerender({ historyLoaded: true });
+    rerender({ historyLoaded: true, running: false, turnEnded: false });
     await settle();
-    expect(sends(calls)).toHaveLength(1);
-    expect(result.current.queued).toBeNull();
+    expect(sends()).toHaveLength(1);
+    // 完整轮次:开轮 → task-ended 结束 → 成功出队
+    rerender({ historyLoaded: true, running: true, turnEnded: false });
+    rerender({ historyLoaded: true, running: false, turnEnded: true });
+    await waitFor(() => expect(result.current.queue).toHaveLength(0));
   });
 
   it("上行在途(壳已 ack、回显帧未到)时第二条进队列;帧到达才补投", async () => {
-    const calls = stubSend(() => null);
-    const { result, rerender } = renderHook(({ lastSeq }) => useComposer("a", feed({ lastSeq })), {
-      initialProps: { lastSeq: 0 },
+    const { sends } = stubSend();
+    const { result, rerender } = renderHook(({ lastSeq, running, turnEnded }) => useComposer("a", feed({ lastSeq, running, turnEnded })), {
+      initialProps: { lastSeq: 0, running: false, turnEnded: false },
     });
     act(() => result.current.setDraft("第一条"));
     act(() => {
-      result.current.send(); // 空闲 → 直发
+      result.current.send();
     });
-    await settle(); // session_send 已 resolve = 引擎 ack,但回显帧还在路上
-    expect(sends(calls)).toHaveLength(1);
-
     act(() => result.current.setDraft("第二条"));
     act(() => {
       result.current.send();
     });
-    // 此前 IPC 一 resolve 就摘在途标记,第二条直发撞壳的忙碌守卫,
-    // catch 静默把草稿放回输入框(用户看到"消息自己跳回来了")
-    expect(result.current.queued).toBe("第二条");
-    expect(sends(calls)).toHaveLength(1);
-
-    rerender({ lastSeq: 7 }); // 回显帧到达:这才是"上行已被壳接收"
     await settle();
-    expect(sends(calls)).toHaveLength(2);
-    expect(result.current.queued).toBeNull();
+    expect(result.current.queue[0]?.text).toBe("第二条");
+    expect(sends()).toHaveLength(1);
+
+    rerender({ lastSeq: 7, running: false, turnEnded: false }); // 回显帧到达
+    await settle();
+    expect(sends()).toHaveLength(2);
+    turnCycle(rerender, true);
+    await waitFor(() => expect(result.current.queue).toHaveLength(0));
   });
 });
 
-describe("useComposer:补投失败后的重试", () => {
-  it("失败后 running 再也不变,退避重试仍把消息投出去(此前永久卡在 chip 里)", async () => {
-    vi.useFakeTimers();
-    let broken = true;
-    const calls = stubSend((cmd) => {
-      if (cmd === "session_send" && broken) throw new Error("engine busy");
-      return null;
+describe("useComposer:投递被壳拒", () => {
+  it("session_send 拒绝:该指令标 failed + 自动暂停,不再自动重试", async () => {
+    const { sends } = stubSend(() => {
+      throw new Error("engine busy");
     });
     const { result, rerender } = renderHook(({ running }) => useComposer("a", feed({ running })), {
       initialProps: { running: true },
     });
-    act(() => result.current.setDraft("排一条"));
-    act(() => {
-      result.current.send();
-    });
-    expect(result.current.queued).toBe("排一条");
-
-    rerender({ running: false }); // 轮结束 → 补投 → 壳拒
-    await act(async () => {
-      await Promise.resolve();
-    });
-    const sends = () => calls.filter((c) => c.cmd === "session_send").length;
-    expect(sends()).toBe(1);
-    expect(result.current.queued).toBe("排一条"); // 失败回队
-
-    // 此后引擎恢复,但**没有任何 running 边沿**(壳一直没接活):
-    // 抑制闸只等 running 变化的话,这条消息永远发不出去
-    broken = false;
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(800);
-    });
-    expect(sends()).toBe(2);
-    expect(result.current.queued).toBeNull();
-  });
-
-  it("取消排队即撤销在途重试(定时器不该把已撤的消息再投一次)", async () => {
-    vi.useFakeTimers();
-    const calls = stubSend((cmd) => {
-      if (cmd === "session_send") throw new Error("engine busy");
-      return null;
-    });
-    const { result, rerender } = renderHook(({ running }) => useComposer("a", feed({ running })), {
-      initialProps: { running: true },
-    });
-    act(() => result.current.setDraft("不要了"));
+    act(() => result.current.setDraft("会被拒的"));
     act(() => {
       result.current.send();
     });
     rerender({ running: false });
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(calls.filter((c) => c.cmd === "session_send")).toHaveLength(1);
-
-    act(() => result.current.clearQueued());
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(3000);
-    });
-    expect(calls.filter((c) => c.cmd === "session_send")).toHaveLength(1);
-    expect(result.current.queued).toBeNull();
+    await settle();
+    expect(sends()).toHaveLength(1);
+    await waitFor(() => expect(result.current.queue[0]?.state).toBe("failed"));
+    expect(result.current.paused).toBe(true);
   });
 });
 

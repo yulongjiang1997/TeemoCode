@@ -113,7 +113,12 @@ export function ChatView({
   }, [meta.id]);
   // lastSeq 也喂给 composer:帧到达才是"上行已被壳接收"的可信信号
   // (useComposer 的 ComposerFeed 头注写了三个信号各自兜住的故障)
-  const composer = useComposer(meta.id, { running: state.running, historyLoaded, lastSeq: state.lastSeq });
+  const composer = useComposer(meta.id, {
+    running: state.running,
+    historyLoaded,
+    lastSeq: state.lastSeq,
+    turnEnded: state.turnEnded,
+  });
   // 稳定引用:传给 memo 化 LogList 的回调、拖拽/原生落盘回调都经它取最新
   // ctl,不随 composer 对象每渲染换新
   const composerRef = useRef(composer);

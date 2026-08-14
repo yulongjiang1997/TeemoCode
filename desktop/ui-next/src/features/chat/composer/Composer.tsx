@@ -4,7 +4,17 @@
 // 发送面契约见 useComposer 文件头;切模型/思考/模式经 lib/ipc/controls
 // (session_call),成功不乐观回写——壳会补 model_update / think_update /
 // permission_mode_update 帧,ChatState 是唯一真值。
-import { IconClock, IconPaperclip, IconSend, IconX } from "@tabler/icons-react";
+import {
+  IconChevronDown,
+  IconChevronUp,
+  IconGripVertical,
+  IconList,
+  IconPaperclip,
+  IconPlayerPause,
+  IconPlayerPlay,
+  IconSend,
+  IconX,
+} from "@tabler/icons-react";
 import {
   useCallback,
   useEffect,
@@ -36,6 +46,142 @@ import type { ComposerCtl } from "./useComposer";
 
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/** 指令队列区:待发送/失败的指令(输入区上方)。折叠只显示首条+暂停/展开;
+ *  展开可拖拽排序(仅拖动图标可拖)/点击编辑/移除;失败项带重试。 */
+function QueueArea({ ctl }: { ctl: ComposerCtl }) {
+  const { t } = useI18n();
+  const { queue, queueOpen, toggleQueueOpen, paused, togglePaused, retryInstr, removeInstr, reorderInstr, editInstr, clearQueue } = ctl;
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  const pauseBtn = (
+    <button
+      type="button"
+      className={`btn btn-ghost btn-square btn-xs ${paused ? "text-warning" : "text-base-content/50"}`}
+      aria-label={paused ? t("chat.queue.resume") : t("chat.queue.pause")}
+      title={paused ? t("chat.queue.resume") : t("chat.queue.pause")}
+      onClick={togglePaused}
+    >
+      {paused ? <IconPlayerPlay size={13} stroke={1.75} aria-hidden /> : <IconPlayerPause size={13} stroke={1.75} aria-hidden />}
+    </button>
+  );
+
+  // 折叠态(默认):一行——首条摘要 + 条数 + 暂停/失败角标 + 展开箭头 + 暂停按钮
+  if (!queueOpen) {
+    const first = queue[0];
+    if (!first) return null;
+    const failed = queue.filter((x) => x.state === "failed").length;
+    return (
+      <div className="-mx-2.5 flex items-center gap-1.5 rounded-box border border-base-300/60 bg-base-200/50 px-1.5 py-1 text-xs">
+        <button type="button" className="btn btn-ghost btn-square btn-xs" aria-label={t("chat.queue.expand")} onClick={toggleQueueOpen}>
+          <IconChevronUp size={13} stroke={1.75} aria-hidden />
+        </button>
+        <IconList size={13} stroke={1.75} aria-hidden className="shrink-0 text-base-content/50" />
+        <span className="shrink-0 font-medium text-base-content/70">{t("chat.queue.count", { n: queue.length })}</span>
+        {paused && <span className="shrink-0 rounded bg-warning/15 px-1 text-[10px] font-medium text-warning">{t("chat.queue.paused")}</span>}
+        <span className={`min-w-0 flex-1 truncate ${first.state === "failed" ? "text-error" : "text-base-content/80"}`}>{first.text}</span>
+        {failed > 0 && <span className="shrink-0 font-medium text-error">{t("chat.queue.failed", { n: failed })}</span>}
+        {pauseBtn}
+      </div>
+    );
+  }
+
+  // 展开态:全部列出,每条 = 拖动图标 + 序号 + 文本(点击编辑) + 移除;失败项加重试
+  return (
+    <div className="-mx-2.5 rounded-box border border-base-300/60 bg-base-200/50 px-2 py-1.5 text-xs">
+      <div className="mb-1 flex items-center gap-1.5">
+        <button type="button" className="btn btn-ghost btn-square btn-xs" aria-label={t("chat.queue.collapse")} onClick={toggleQueueOpen}>
+          <IconChevronDown size={13} stroke={1.75} aria-hidden />
+        </button>
+        <IconList size={13} stroke={1.75} aria-hidden className="shrink-0 text-base-content/50" />
+        <span className="shrink-0 font-medium text-base-content/70">{t("chat.queue.title")}</span>
+        <span className="shrink-0 text-base-content/50">{t("chat.queue.count", { n: queue.length })}</span>
+        {paused && <span className="shrink-0 rounded bg-warning/15 px-1 font-medium text-warning">{t("chat.queue.paused")}</span>}
+        <div className="min-w-0 flex-1" />
+        {queue.some((x) => x.state === "pending") && (
+          <button type="button" className="btn btn-ghost btn-xs text-base-content/60" onClick={clearQueue}>
+            {t("chat.queue.clear")}
+          </button>
+        )}
+        {pauseBtn}
+      </div>
+      <ul className="flex flex-col gap-0.5">
+        {queue.map((item, i) => (
+          <li
+            key={item.id}
+            className={`flex items-center gap-1.5 rounded px-1.5 py-1 ${item.state === "failed" ? "bg-error/10" : "hover:bg-base-content/5"} ${dragIdx === i ? "opacity-50" : ""}`}
+            onDragOver={(e) => {
+              if (dragIdx !== null && dragIdx !== i) e.preventDefault();
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (dragIdx !== null && dragIdx !== i) reorderInstr(dragIdx, i);
+              setDragIdx(null);
+            }}
+          >
+            {/* 仅此图标可拖:拖动排序不误触其它区域 */}
+            <span
+              draggable
+              className="shrink-0 cursor-grab text-base-content/30 hover:text-base-content/60 active:cursor-grabbing"
+              title={t("chat.queue.drag")}
+              onDragStart={(e) => {
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", String(i));
+                setDragIdx(i);
+              }}
+              onDragEnd={() => setDragIdx(null)}
+            >
+              <IconGripVertical size={13} stroke={1.75} aria-hidden />
+            </span>
+            <span className="w-4 shrink-0 text-center tabular-nums text-base-content/40">{i + 1}</span>
+            {editingId === item.id ? (
+              <input
+                autoFocus
+                className="input input-bordered input-xs min-w-0 flex-1"
+                defaultValue={item.text}
+                onBlur={() => setEditingId(null)}
+                onKeyDown={(e) => {
+                  if (e.nativeEvent.isComposing) return;
+                  if (e.key === "Enter") {
+                    const v = e.currentTarget.value.trim();
+                    if (v) editInstr(item.id, v);
+                    setEditingId(null);
+                  } else if (e.key === "Escape") {
+                    setEditingId(null);
+                  }
+                }}
+              />
+            ) : (
+              <button
+                type="button"
+                className="min-w-0 flex-1 truncate text-left text-base-content/80 hover:text-base-content"
+                title={t("chat.queue.edit")}
+                onClick={() => setEditingId(item.id)}
+              >
+                {item.text}
+              </button>
+            )}
+            {item.state === "failed" && (
+              <button type="button" className="btn btn-ghost btn-xs shrink-0 text-error" onClick={() => retryInstr(item.id)}>
+                {t("chat.queue.retry")}
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn btn-ghost btn-square btn-xs shrink-0 text-base-content/50"
+              aria-label={t("chat.queue.remove")}
+              title={t("chat.queue.remove")}
+              onClick={() => removeInstr(item.id)}
+            >
+              <IconX size={12} stroke={1.75} aria-hidden />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 export function Composer({
@@ -284,22 +430,8 @@ export function Composer({
           soft 底 + 14px 语义图标 + truncate 正文 + 右端关闭 */}
       {ctl.error && <ErrorBar text={ctl.error} onDismiss={ctl.dismissError} />}
 
-      {ctl.queued && (
-        <div className="alert alert-soft -mx-2.5 flex items-center gap-2 px-3 py-1.5 text-xs">
-          <IconClock size={14} stroke={1.75} aria-hidden className="shrink-0 text-base-content/50" />
-          <span className="shrink-0 font-medium">{t("chat.queued")}</span>
-          <span className="min-w-0 flex-1 truncate">{ctl.queued}</span>
-          <span className="shrink-0 text-base-content/50">{t("chat.queuedHint")}</span>
-          <button
-            type="button"
-            aria-label={t("chat.queuedCancel")}
-            className="btn btn-ghost btn-square btn-xs"
-            onClick={ctl.clearQueued}
-          >
-            <IconX size={14} stroke={1.75} aria-hidden />
-          </button>
-        </div>
-      )}
+      {/* 指令队列:待发送/失败的指令,折叠显示首条,展开可拖拽排序/重试/移除/编辑 */}
+      {ctl.queue.length > 0 && <QueueArea ctl={ctl} />}
 
       {/* 输入卡外框(形态收口在 composerKit:出血/聚焦边线/禁挂 dropdown 类
           的缘由见 ComposerCard 头注)。斜杠面板是卡内自绘浮层(绝对定位,

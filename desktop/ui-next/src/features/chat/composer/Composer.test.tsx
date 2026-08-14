@@ -446,7 +446,7 @@ describe("运行态 / 停止 / 排队", () => {
     expect(cancels[0]?.args?.payload).toEqual({});
   });
 
-  it("运行中发送进入单槽排队(chip 可取消);轮结束自动补投", async () => {
+  it("运行中发送追加进指令队列(折叠区可见首条);轮结束按序自动补投", async () => {
     const { ops, emit } = stubShell();
     render(<ChatView meta={META} />);
     const box = await ready();
@@ -454,34 +454,42 @@ describe("运行态 / 停止 / 排队", () => {
     await waitFor(() => expect(screen.getByText("思考中")).toBeTruthy());
 
     await userEvent.type(box, "补充问题{Enter}");
-    expect(screen.getByText("已排队")).toBeTruthy();
-    expect(screen.getByText("补充问题")).toBeTruthy();
+    expect(screen.getByText("补充问题")).toBeTruthy(); // 队列折叠区显示首条
     expect((box as HTMLTextAreaElement).value).toBe("");
     expect(sends(ops, "user-input")).toHaveLength(0); // 运行中不直发
 
-    // 后发覆盖先发(单槽语义)
+    // 队列无限追加(非单槽覆盖):折叠区显示条数与队首
     await userEvent.type(box, "换个问法{Enter}");
-    expect(screen.queryByText("补充问题")).toBeNull();
-    expect(screen.getByText("换个问法")).toBeTruthy();
+    expect(screen.getByText("2 条")).toBeTruthy();
+    expect(screen.getByText("补充问题")).toBeTruthy(); // 队首不变
 
     emit("frames:s1", [{ type: "task-ended", timestamp: 7, seq: 7 }]);
     await waitFor(() => {
       const sent = sends(ops, "user-input");
       expect(sent).toHaveLength(1);
-      expect(b64decode((sent[0]?.args?.payload as { content: string }).content)).toBe("换个问法");
+      expect(b64decode((sent[0]?.args?.payload as { content: string }).content)).toBe("补充问题"); // 队首先发
     });
-    expect(screen.queryByText("已排队")).toBeNull();
+    // 投出的"补充问题"开启新轮,结束后出队,自动补投下一条
+    emit("frames:s1", [{ type: "task-started", timestamp: 8, seq: 8 }]);
+    emit("frames:s1", [{ type: "task-ended", timestamp: 9, seq: 9 }]);
+    await waitFor(() => {
+      const sent = sends(ops, "user-input");
+      expect(sent).toHaveLength(2);
+      expect(b64decode((sent[1]?.args?.payload as { content: string }).content)).toBe("换个问法");
+    });
   });
 
-  it("排队可取消:清掉后轮结束不补投", async () => {
+  it("队列项可移除:展开后移除,轮结束不补投", async () => {
     const { ops, emit } = stubShell();
     render(<ChatView meta={META} />);
     const box = await ready();
     emit("frames:s1", [{ type: "task-started", timestamp: 5, seq: 5 }]);
     await waitFor(() => expect(screen.getByText("思考中")).toBeTruthy());
     await userEvent.type(box, "先排着{Enter}");
-    await userEvent.click(screen.getByRole("button", { name: "取消排队" }));
-    expect(screen.queryByText("已排队")).toBeNull();
+    // 折叠态只显示首条;展开才能移除
+    await userEvent.click(screen.getByRole("button", { name: "展开队列" }));
+    await userEvent.click(screen.getByRole("button", { name: "移除" }));
+    expect(screen.queryByText("先排着")).toBeNull();
     emit("frames:s1", [{ type: "task-ended", timestamp: 7, seq: 7 }]);
     await new Promise((r) => setTimeout(r, 20));
     expect(sends(ops, "user-input")).toHaveLength(0);
