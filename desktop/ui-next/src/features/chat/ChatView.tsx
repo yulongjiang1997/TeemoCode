@@ -664,19 +664,18 @@ export function ChatView({
       failHandledRef.current = false; // 新轮开始,复位"本轮失败已处理"
       return;
     }
-    if (state.turnEnded) {
-      // 轮次结束:成功(本轮无 key 错误)才清零计数;失败回合不清,跨回合累计
-      if (!keyErrThisTurnRef.current) keyFailRef.current = 0;
-      keyErrThisTurnRef.current = false;
-      failHandledRef.current = false;
-      return;
-    }
     if (failHandledRef.current || rotatingRef.current) return; // 本轮已处理/正在轮换
-    // 本轮失败:取最后一条 sys 错误消息判断是否 key 问题
+    // 失败判定不看 running/turnEnded:壳把 task-error 与 task-ended 几乎同时
+    // 发出,React 批量渲染时 turnEnded 已为 true——原逻辑在 turnEnded 分支
+    // 直接复位返回,轮换永远不触发。这里统一查错误项再决定。
     const errItem = [...state.items].reverse().find((it) => it.kind === "sys" && it.error);
     const reason =
       errItem && errItem.kind === "sys" && errItem.params?.reason ? String(errItem.params.reason) : "";
-    if (!isKeyError(reason)) return;
+    if (!isKeyError(reason)) {
+      // 不是 key 错误:轮次结束才清零计数(成功回合)
+      if (state.turnEnded) keyFailRef.current = 0;
+      return;
+    }
     keyErrThisTurnRef.current = true;
     failHandledRef.current = true; // 本轮失败只处理一次(一回合可能多个 task-error)
     void (async () => {
@@ -685,9 +684,13 @@ export function ChatView({
         const cfg = await getConfig();
         // meta.model 是显示名(model_name),配置里可能叫 model(ID)或 name(显示名)
         const model = cfg?.models?.find((m) => m.model === meta.model || m.name === meta.model);
-        if (!model) return;
+        if (!model) {
+          composerRef.current.notifyError(`[轮换] 找不到模型 ${meta.model}`);
+          return;
+        }
         const keys = model.api_keys?.filter((k) => k.trim()) ?? [];
         keyFailRef.current += 1;
+        composerRef.current.notifyError(`[轮换] 命中 key 错误,keyFail=${keyFailRef.current},keys=${keys.length}`);
         // 重发该回合的用户指令(切换 key/模型后继续任务)
         let lastText = "";
         for (let i = state.items.length - 1; i >= 0; i--) {
@@ -742,8 +745,8 @@ export function ChatView({
         );
         await sessionSetModel(meta.id, nextModel);
         await resend();
-      } catch {
-        // 轮换失败:交给失败态人工处理
+      } catch (e) {
+        composerRef.current.notifyError(`[轮换] 失败: ${e instanceof Error ? e.message : String(e)}`);
       } finally {
         rotatingRef.current = false;
       }
