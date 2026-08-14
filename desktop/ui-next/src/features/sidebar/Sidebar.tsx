@@ -47,7 +47,7 @@ import {
 } from "@/lib/util/projects";
 import type { Space } from "@/lib/util/prefs";
 import { renameIsNoop } from "@/lib/util/rename";
-import { importMcApply, importMcScan, type ImportMcSession } from "@/lib/ipc/host";
+import { importMcApply, importMcScan, importMcScanDir, pickDirectory, type ImportMcSession } from "@/lib/ipc/host";
 
 export interface SidebarActions {
   onSelect: (meta: SessionMeta) => void;
@@ -727,6 +727,18 @@ function Overview({
           没有那个元素"决定**。 */}
       <div className="flex min-h-[calc(var(--size-field,0.25rem)*6)] items-center gap-1">
         <div className="min-w-0 flex-1 truncate text-xs font-semibold">{title}</div>
+        {/* 一键导入原版 MonkeyCode 本地任务:仅本地空间,样式同云端刷新钮 */}
+        {space === "local" && (
+          <button
+            type="button"
+            aria-label={t("sidebar.importMc")}
+            title={t("sidebar.importMc")}
+            className="btn btn-ghost btn-square btn-xs -me-1 shrink-0 text-base-content/50"
+            onClick={() => setImportOpen(true)}
+          >
+            <IconDownload size={13} stroke={1.75} aria-hidden />
+          </button>
+        )}
         {/* 刷新是**列表级**操作,归概览块;品牌头只放品牌与新建
             (用户报障 2026-08-06:刷新钮不该在 header) */}
         {space === "cloud" && onRefresh && (
@@ -782,18 +794,37 @@ function EmptySlate({ icon, title, detail }: { icon: ReactNode; title: string; d
 function ImportMcModal({ onClose, onImported }: { onClose: () => void; onImported?: () => void }) {
   const { t } = useI18n();
   const [found, setFound] = useState<boolean | null>(null); // null = 扫描中
+  const [candidates, setCandidates] = useState<{ kind: string; path: string }[]>([]);
   const [sessions, setSessions] = useState<ImportMcSession[]>([]);
+  const [sourceDir, setSourceDir] = useState<string | undefined>(undefined); // 手动选择的源目录
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [applying, setApplying] = useState(false);
   const [done, setDone] = useState<number | null>(null);
+  const [dirErr, setDirErr] = useState("");
 
   useEffect(() => {
     void importMcScan().then((r) => {
       setFound(r.found);
+      setCandidates(r.candidates ?? []);
       setSessions(r.sessions);
       setSelected(new Set(r.sessions.map((s) => s.sid))); // 默认全选
     });
   }, []);
+
+  const pickFolder = async () => {
+    const dir = await pickDirectory();
+    if (!dir) return;
+    setDirErr("");
+    const r = await importMcScanDir(dir);
+    if (r.found && r.sessions.length > 0) {
+      setFound(true);
+      setSourceDir(r.source_dir ?? dir);
+      setSessions(r.sessions);
+      setSelected(new Set(r.sessions.map((s) => s.sid)));
+    } else {
+      setDirErr(dir); // 选了目录但没扫到任务:提示给用户
+    }
+  };
 
   // 按工作目录(项目)分组,便于逐项目勾选
   const groups = useMemo(() => {
@@ -827,7 +858,7 @@ function ImportMcModal({ onClose, onImported }: { onClose: () => void; onImporte
   const apply = async () => {
     setApplying(true);
     try {
-      const r = await importMcApply([...selected]);
+      const r = await importMcApply([...selected], sourceDir);
       setDone(r.imported);
       onImported?.();
     } finally {
@@ -850,7 +881,28 @@ function ImportMcModal({ onClose, onImported }: { onClose: () => void; onImporte
           </button>
         </div>
         {found === null && <div className="py-10 text-center text-xs text-base-content/50">{t("sidebar.importMc.loading")}</div>}
-        {found === false && <div className="py-10 text-center text-xs text-base-content/60">{t("sidebar.importMc.notFound")}</div>}
+        {found === false && (
+          <div className="py-4">
+            <div className="mb-3 text-center text-xs text-base-content/60">{t("sidebar.importMc.notFound")}</div>
+            {candidates.length > 0 && (
+              <div className="mb-3 rounded-box border border-base-300/60 bg-base-200/40 p-2.5">
+                <div className="mb-1 text-[11px] text-base-content/50">{t("sidebar.importMc.candidates")}</div>
+                {candidates.map((c, i) => (
+                  <div key={i} className="truncate py-0.5 font-mono text-[11px] text-base-content/70">
+                    {c.path}
+                  </div>
+                ))}
+              </div>
+            )}
+            {dirErr && <div className="mb-3 text-center text-xs text-error">{t("sidebar.importMc.dirEmpty", { dir: dirErr })}</div>}
+            <div className="flex justify-center">
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => void pickFolder()}>
+                <IconFolderOpen size={13} stroke={1.75} aria-hidden />
+                {t("sidebar.importMc.pick")}
+              </button>
+            </div>
+          </div>
+        )}
         {found === true && sessions.length === 0 && (
           <div className="py-10 text-center text-xs text-base-content/60">{t("sidebar.importMc.empty")}</div>
         )}
@@ -1284,17 +1336,6 @@ export function Sidebar({
       <div data-tauri-drag-region="" className="flex h-13 shrink-0 items-center gap-1.5 border-b border-base-300 ps-5 pe-3">
         <Brand />
         <span data-tauri-drag-region="" className="min-w-0 flex-1" />
-        {space === "local" && (
-          <button
-            type="button"
-            aria-label={t("sidebar.importMc")}
-            title={t("sidebar.importMc")}
-            className="btn btn-ghost btn-square btn-xs text-base-content/60"
-            onClick={() => setImportOpen(true)}
-          >
-            <IconDownload size={14} stroke={1.75} aria-hidden />
-          </button>
-        )}
         <button
           type="button"
           aria-label={t("sidebar.newTask")}

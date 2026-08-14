@@ -1441,6 +1441,7 @@ fn main() {
             driver::session_delete,
             driver::session_patch,
             import_mc::import_mc_scan,
+            import_mc::import_mc_scan_dir,
             import_mc::import_mc_apply,
             driver::models_list,
             driver::usage_stats,
