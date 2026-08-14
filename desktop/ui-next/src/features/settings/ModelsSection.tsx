@@ -264,19 +264,24 @@ export function ModelsSection({
                         return (
                           <div key={ki} className="flex flex-col gap-0.5">
                             {/* 别名备注:仅显示用,不参与实际使用 */}
-                            <input
-                              className="input input-xs w-full font-mono text-xs text-base-content/70"
-                              type="text"
-                              aria-label={`${t("settings.models.apiKey.alias")} ${ki + 1}`}
-                              placeholder={t("settings.models.apiKey.aliasPlaceholder")}
-                              value={aliases[ki] ?? ""}
-                              onChange={(e) => {
-                                const ks = (m.api_keys?.length ? m.api_keys : m.api_key ? [m.api_key] : [""]).slice();
-                                const al = (m.api_key_aliases?.length ? m.api_key_aliases : ks.map(() => "")).slice();
-                                al[ki] = e.target.value;
-                                patch(i, { api_keys: ks, api_key: ks[0] ?? "", api_key_aliases: al });
-                              }}
-                            />
+                            <div className="flex items-center gap-1">
+                              <span className="w-9 shrink-0 text-right text-[10px] leading-none text-base-content/40">
+                                {t("settings.models.apiKey.alias")}
+                              </span>
+                              <input
+                                className="input input-xs min-w-0 flex-1 font-mono text-xs text-base-content/70"
+                                type="text"
+                                aria-label={`${t("settings.models.apiKey.alias")} ${ki + 1}`}
+                                placeholder={t("settings.models.apiKey.aliasPlaceholder")}
+                                value={aliases[ki] ?? ""}
+                                onChange={(e) => {
+                                  const ks = (m.api_keys?.length ? m.api_keys : m.api_key ? [m.api_key] : [""]).slice();
+                                  const al = (m.api_key_aliases?.length ? m.api_key_aliases : ks.map(() => "")).slice();
+                                  al[ki] = e.target.value;
+                                  patch(i, { api_keys: ks, api_key: ks[0] ?? "", api_key_aliases: al });
+                                }}
+                              />
+                            </div>
                             <div className="flex items-center gap-1">
                               <input
                                 className="input input-sm min-w-0 w-full flex-1 font-mono text-xs"
