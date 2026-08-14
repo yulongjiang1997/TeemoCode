@@ -387,7 +387,20 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
     flushBlockedRef.current = false;
     setQueue((cur) => cur.filter((x) => x.state === "failed")); // 只清待发送,失败项留给用户处置
   }, []);
-  const togglePaused = useCallback(() => setPaused((p) => !p), []);
+  // 暂停态 ref:启动(解除暂停)时据此判断是否要「失败项回队」
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
+  const togglePaused = useCallback(() => {
+    const next = !pausedRef.current;
+    setPaused(next);
+    // 启动:失败项自动回队标 pending,并推一把补投——
+    // 任务停止/失败后点「启动」应直接重新排队继续,而不是停在重试态
+    if (!next) {
+      flushBlockedRef.current = false;
+      setQueue((cur) => cur.map((x) => (x.state === "failed" ? { ...x, state: "pending" } : x)));
+      setFlushTick((n) => n + 1);
+    }
+  }, []);
   const toggleQueueOpen = useCallback(() => setQueueOpen((o) => !o), []);
 
   const stop = useCallback(() => {
