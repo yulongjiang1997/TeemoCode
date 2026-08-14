@@ -352,7 +352,7 @@ describe("模型增删改与设默认", () => {
     await userEvent.type(screen.getByRole("textbox", { name: "名称" }), "新模型");
     // 四项必填(见下一条用例):只填名称的半成品现在拦在保存之前
     await userEvent.type(screen.getByRole("textbox", { name: "接口地址" }), "https://api.example.com");
-    await userEvent.type(screen.getByLabelText("API Key"), "sk-test"); // type=password 无 textbox role
+    await userEvent.type(screen.getByLabelText("API Key 1"), "sk-test"); // type=password 无 textbox role
     await userEvent.type(screen.getByRole("textbox", { name: "模型标识" }), "gpt-5");
     await userEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(calls.some((c) => c.cmd === "save_config")).toBe(true));

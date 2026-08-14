@@ -11,7 +11,7 @@
 // 与自定义组恒在(空了也出组头 + 引导卡):组是"模型从哪来"的说明位,按现有
 // 条目派生的话,一个模型都没有的新装用户恰恰看不到该去哪里同步。会员组仍
 // 只在有条目时出现(引导在账号页卡片,不在这里堆空态)。
-import { IconChevronDown, IconPlus } from "@tabler/icons-react";
+import { IconChevronDown, IconEye, IconEyeOff, IconPlus, IconX } from "@tabler/icons-react";
 import { useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -65,6 +65,8 @@ export function ModelsSection({
 }) {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState<number | null>(null);
+  // 密钥明文显示开关(按 模型行:key 行 定位)
+  const [revealedKeys, setRevealedKeys] = useState<ReadonlySet<string>>(new Set());
   // 组折叠(旧工程 Section 折叠开关的等价物):默认全展开,点组头收起
   const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(new Set());
   const toggleGroup = (key: string) =>
@@ -251,23 +253,73 @@ export function ModelsSection({
                 </fieldset>
                 <fieldset className="fieldset gap-1.5">
                   <legend className="fieldset-legend">{t("settings.models.apiKey")}</legend>
-                  {/* 多密钥:每行一个,使用中失败/额度用完自动换下一个,全部用尽任务失败 */}
-                  <textarea
-                    className="textarea textarea-sm w-full font-mono text-xs"
-                    rows={3}
-                    aria-label={t("settings.models.apiKey")}
-                    placeholder={"sk-...\nsk-...(每行一个,多个自动切换)"}
-                    title={t("settings.models.apiKey.hint")}
-                    value={(m.api_keys?.length ? m.api_keys : m.api_key ? [m.api_key] : []).join("\n")}
-                    onChange={(e) => {
-                      const keys = e.target.value
-                        .split("\n")
-                        .map((k) => k.trim())
-                        .filter(Boolean);
-                      const first = keys[0] ?? "";
-                      patch(i, { api_keys: keys, api_key: first });
+                  {/* 多密钥:每行一个(默认掩码,可查看明文/删除);使用中失败/额度用完自动换下一个 */}
+                  <div className="flex flex-col gap-1">
+                    {(() => {
+                      // 空模型也保底一行,方便直接录入首个 key
+                      const keys = m.api_keys?.length ? m.api_keys : m.api_key ? [m.api_key] : [""];
+                      return keys.map((k, ki) => {
+                        const revealed = revealedKeys.has(`${i}:${ki}`);
+                        return (
+                          <div key={ki} className="flex items-center gap-1">
+                            <input
+                              className="input input-sm min-w-0 w-full flex-1 font-mono text-xs"
+                              type={revealed ? "text" : "password"}
+                              aria-label={`${t("settings.models.apiKey")} ${ki + 1}`}
+                              placeholder="sk-..."
+                              value={k}
+                              onChange={(e) => {
+                                const cur = m.api_keys?.length ? m.api_keys : m.api_key ? [m.api_key] : [""];
+                                const keys2 = cur.slice();
+                                keys2[ki] = e.target.value;
+                                patch(i, { api_keys: keys2, api_key: keys2[0] ?? "" });
+                              }}
+                            />
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-square btn-xs shrink-0"
+                              aria-label={revealed ? t("settings.models.apiKey.hide") : t("settings.models.apiKey.reveal")}
+                              title={revealed ? t("settings.models.apiKey.hide") : t("settings.models.apiKey.reveal")}
+                              onClick={() => {
+                                const next = new Set(revealedKeys);
+                                if (next.has(`${i}:${ki}`)) next.delete(`${i}:${ki}`);
+                                else next.add(`${i}:${ki}`);
+                                setRevealedKeys(next);
+                              }}
+                            >
+                              {revealed ? <IconEyeOff size={14} stroke={1.75} aria-hidden /> : <IconEye size={14} stroke={1.75} aria-hidden />}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-square btn-xs shrink-0 text-base-content/50"
+                              aria-label={t("settings.models.apiKey.remove")}
+                              title={t("settings.models.apiKey.remove")}
+                              onClick={() => {
+                                const cur = m.api_keys?.length ? m.api_keys : m.api_key ? [m.api_key] : [""];
+                                const keys2 = cur.slice();
+                                keys2.splice(ki, 1);
+                                patch(i, { api_keys: keys2, api_key: keys2[0] ?? "" });
+                              }}
+                            >
+                              <IconX size={14} stroke={1.75} aria-hidden />
+                            </button>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-xs w-fit"
+                    onClick={() => {
+                      const keys = (m.api_keys?.length ? m.api_keys : m.api_key ? [m.api_key] : [""]).slice();
+                      keys.push("");
+                      patch(i, { api_keys: keys, api_key: keys[0] ?? "" });
                     }}
-                  />
+                  >
+                    <IconPlus size={12} stroke={2} aria-hidden />
+                    {t("settings.models.apiKey.add")}
+                  </button>
                 </fieldset>
                 <fieldset className="fieldset gap-1.5">
                   <legend className="fieldset-legend">{t("settings.models.model")}</legend>
