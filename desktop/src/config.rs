@@ -3,9 +3,9 @@
 // DesktopConfig 是应用权威配置；引擎 settings.json/mcp.json 只是可重建的
 // 派生物。所有权威配置读改写经 ConfigStore 串行，并使用同目录临时文件
 // 原子替换；损坏的主文件只允许从有效备份恢复，绝不能静默退成默认配置后
-// 覆盖用户的模型/API Key。pet_*(托盘切换)、sound_enabled(设置页/托盘即时
-// 开关)与 telemetry_enabled(仅改文件)都不在设置页表单里，设置页保存时必须
-// 从磁盘合并，否则会被默认值打回。
+// 覆盖用户的模型/API Key。pet_*、main_window_state(窗口事件)、sound_enabled
+// (设置页/托盘即时开关)与 telemetry_enabled(仅改文件)都不在设置页表单里，
+// 设置页保存时必须从磁盘合并，否则会被默认值打回。
 
 use std::ffi::OsString;
 use std::fs;
@@ -57,6 +57,18 @@ fn default_engine() -> String {
     String::new() // 字段已废弃,仅兼容旧 config.json 反序列化
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MainWindowState {
+    /// 窗口外框左上角，物理像素（可跨多显示器为负坐标）。
+    pub x: i32,
+    pub y: i32,
+    /// 客户区逻辑尺寸，不随显示器缩放比例变化。
+    pub width: u32,
+    pub height: u32,
+    #[serde(default)]
+    pub maximized: bool,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DesktopConfig {
     #[serde(default = "json_array")]
@@ -97,6 +109,9 @@ pub struct DesktopConfig {
     /// 桌宠窗口位置(物理像素;拖动后记忆)
     #[serde(default)]
     pub pet_pos: Option<(i32, i32)>,
+    /// 主窗口正常态的位置、大小与最大化状态。
+    #[serde(default)]
+    pub main_window_state: Option<MainWindowState>,
     /// 装机统计开关。**刻意不做任何 UI**:载荷只有随机设备标识、版本、系统和
     /// 一个"用没用"的布尔,不含可关联到人的信息,装机计数不需要征求同意。留这个
     /// 字段是给客户合规问卷的出口(改 config.json 一行即可关),不是给普通用户的
@@ -118,6 +133,7 @@ impl Default for DesktopConfig {
             pet_enabled: true,
             sound_enabled: true,
             pet_pos: None,
+            main_window_state: None,
             telemetry_enabled: true,
         }
     }
@@ -386,6 +402,7 @@ fn merge_shell_prefs(incoming: DesktopConfig, disk: &DesktopConfig) -> DesktopCo
         pet_enabled: disk.pet_enabled,
         sound_enabled: disk.sound_enabled,
         pet_pos: disk.pet_pos,
+        main_window_state: disk.main_window_state,
         telemetry_enabled: disk.telemetry_enabled,
         ..incoming
     }
@@ -495,14 +512,17 @@ fn write_ohmyagent_config(
     let is_monkeycode = |m: &serde_json::Value| {
         m.get("source").and_then(|v| v.as_str()) == Some(crate::baizhi::monkeycode::SOURCE_MONKEYCODE)
     };
-    // locked = 超出会员档的展示专用条目(同步层打标):整条不物化。
+    // locked = 超出会员档的条目(同步层打标):**照常物化**——会员档权限由
+    // 服务端把关,引擎 settings 缺了条目反而让老会话(会员到期前选的模型)
+    // 一打开就 "unknown model",连恢复都进不去。locked 只影响 default 回退
+    // (不默认选禁用项)与显式选择(session.rs model_id_of 拒绝)。
     // 只认会员条目上的标记,手编条目的杂散 locked 忽略。
     let is_locked_member = |m: &serde_json::Value| {
         is_monkeycode(m) && m.get("locked").and_then(|v| v.as_bool()).unwrap_or(false)
     };
     let mc_key = models_arr
         .iter()
-        .any(|m| is_monkeycode(m) && !is_locked_member(m))
+        .any(is_monkeycode)
         .then(|| dir.parent().and_then(crate::baizhi::stored_ohmyagent_key))
         .flatten();
     let mc_key_field = |k: &str| {
@@ -517,9 +537,6 @@ fn write_ohmyagent_config(
     let mut models_out = serde_json::Map::new();
     let mut default_model = String::new();
     for m in models_arr {
-        if is_locked_member(m) {
-            continue; // 展示专用:引擎 settings 不该有它,default 回退自然跳过
-        }
         let get = |k: &str| m.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
         let (name, provider, model) = (get("name"), get("provider"), get("model"));
         // 会员条目的密钥由壳补齐(本机记录缺失时照常物化,请求时报错外显,
@@ -583,8 +600,10 @@ fn write_ohmyagent_config(
             _ => thinking_config(DEFAULT_MODEL_THINK),
         };
         models_out.insert(name.clone(), entry);
+        // default/首条回退滤 locked(降档后 config 的 default 可能落在锁定行,
+        // 宁可换成首个可用条目也不默认选禁用项;session.rs 空名回退同口径)
         let is_default = m.get("default").and_then(|v| v.as_bool()).unwrap_or(false);
-        if default_model.is_empty() || is_default {
+        if !is_locked_member(m) && (default_model.is_empty() || is_default) {
             default_model = name; // 别名即选择键(session/create、switchModel 同)
         }
     }
@@ -824,6 +843,13 @@ mod tests {
             pet_enabled: false,
             sound_enabled: false,
             pet_pos: Some((12, 34)),
+            main_window_state: Some(MainWindowState {
+                x: 56,
+                y: 78,
+                width: 1200,
+                height: 800,
+                maximized: true,
+            }),
             telemetry_enabled: false,
             ..Default::default()
         };
@@ -840,6 +866,7 @@ mod tests {
         assert!(!merged.pet_enabled);
         assert!(!merged.sound_enabled, "提示音开关同样不在表单里,必须保留关闭态");
         assert_eq!(merged.pet_pos, Some((12, 34)));
+        assert_eq!(merged.main_window_state, disk.main_window_state);
         assert_eq!(merged.kernel_env, "wsl:Ubuntu", "表单字段仍应生效");
     }
 
@@ -972,11 +999,11 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// locked(超会员档展示专用)会员条目:不进引擎 settings、default 回退
-    /// 到未锁条目;全锁时零条目物化,不写顶层 secret;手编条目上的杂散
-    /// locked 忽略(skip 只认会员条目)。
+    /// locked(超会员档)会员条目:**照常物化**(缺条目会让到期前选它的
+    /// 老会话恢复即 "unknown model";档位权限归服务端把关),但 default
+    /// 回退滤 locked;全锁时 secret 照写(条目在,请求得能签)。
     #[test]
-    fn ohmyagent_config_skips_locked_member_entries() {
+    fn ohmyagent_config_materializes_locked_member_entries() {
         let root = test_dir("locked-members");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
@@ -1001,13 +1028,13 @@ mod tests {
         write_ohmyagent_config(&engine_dir, &cfg, None).unwrap();
         let settings: serde_json::Value =
             serde_json::from_slice(&fs::read(engine_dir.join("settings.json")).unwrap()).unwrap();
-        assert!(settings["models"].get("旗舰模型").is_none(), "locked 会员条目不得物化");
+        assert_eq!(settings["models"]["旗舰模型"]["api_key"], "omk-1", "locked 会员条目照常物化并注入密钥");
         assert_eq!(settings["models"]["专业模型"]["api_key"], "omk-1", "未锁会员条目照常注入");
         assert_eq!(settings["models"]["手编"]["api_key"], "k", "杂散 locked 的手编条目不受影响");
-        assert_eq!(settings["default_model"], "专业模型", "default 落在被 skip 条目时回退首个物化条目");
+        assert_eq!(settings["default_model"], "专业模型", "default 落在 locked 条目时回退首个未锁条目");
         assert_eq!(settings["signing_secret"], "sec-9");
 
-        // 全部会员条目均 locked:零条目物化,不写顶层 signing_secret
+        // 全部会员条目均 locked:条目照常物化,secret 照写,default 落未锁的自定义条目
         let all_locked = DesktopConfig {
             models: serde_json::json!([
                 { "name": "旗舰模型", "provider": "anthropic", "base_url": "", "api_key": "",
@@ -1019,8 +1046,9 @@ mod tests {
         write_ohmyagent_config(&engine_dir, &all_locked, None).unwrap();
         let settings: serde_json::Value =
             serde_json::from_slice(&fs::read(engine_dir.join("settings.json")).unwrap()).unwrap();
-        assert!(settings.get("signing_secret").is_none(), "全锁时不写顶层 secret");
-        assert!(settings["models"].get("旗舰模型").is_none());
+        assert_eq!(settings["signing_secret"], "sec-9", "有会员条目(含全锁)就写顶层 secret");
+        assert_eq!(settings["models"]["旗舰模型"]["api_key"], "omk-1");
+        assert_eq!(settings["default_model"], "自定义", "default 不落在 locked 条目上");
         let _ = fs::remove_dir_all(&root);
     }
 

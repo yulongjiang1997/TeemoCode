@@ -48,6 +48,7 @@ import {
   markProgrammaticScroll,
   outlineActiveSeq,
 } from "@/lib/util/scrollAnchor";
+import { renameIsNoop } from "@/lib/util/rename";
 import { createImeGuard } from "@/lib/util/slash";
 import { useEscLayer } from "@/lib/util/escLayer";
 import { useDismiss } from "@/lib/util/useDismiss";
@@ -447,14 +448,11 @@ export function ChatView({
     renameDoneRef.current = true;
     setEditingTitle(false);
     const next = titleDraft.trim();
-    // 空提交要发:清空 = 撤销自定义、回落自动链(壳摘 title_custom 并把
-    // title 重填首句);只有「本就没改过名又提交空」才是纯空转。
+    // 空转判定收口在 lib/util/rename(空提交=撤销自定义;旧版缺
+    // title_custom 时原文确认也要发 patch 补标记,侧栏右键同一口径)。
     // 落盘后必须主动重拉:壳侧 session_patch 不广播 session-event,
     // 不拉就没有任何信号回流(标题看着「改了没反应」)
-    // 旧版本的用户改名只写 title、没有 title_custom；即使文本未变也要
-    // 发一次 patch 补上标记，否则头部仍按“未改名”优先显示 summary。
-    const noop = next ? next === meta.title && Boolean(meta.title_custom) : !meta.title_custom;
-    if (!noop)
+    if (!renameIsNoop(next, meta))
       void sessionPatch(meta.id, { title: next })
         .catch((e: unknown) => onActionError?.("notice.renameFailed", e instanceof Error ? e.message : String(e)))
         .then(() => onPatched?.());
@@ -1009,7 +1007,9 @@ export function ChatView({
       <OutlineNav entries={entries} activeSeq={activeSeq ?? undefined} onJump={onJump} />
       </div>
 
-      <footer className="shrink-0 border-t border-base-300 p-3">
+      {/* 无上边线(2026-08-13 用户定案):composer 卡自带边框已是分界,
+          再压一条通栏线是双重描边;云端视图同款 */}
+      <footer className="shrink-0 p-3">
         <div className="mx-auto flex chat-measure flex-col gap-2">
           {state.plan.length > 0 && <TaskPanel entries={state.plan} />}
           <Composer sessionId={meta.id} state={state} meta={meta} ctl={composer} onAfterSend={followBottom} />

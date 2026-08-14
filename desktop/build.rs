@@ -61,6 +61,12 @@ fn main() {
                 "session_close",
                 "session_send",
                 "session_call",
+                // 技能库(skills.rs;会话级启用走 session_call 的
+                // session_set_skills,不是独立命令)
+                "skills_list",
+                "skills_save",
+                "skills_delete",
+                "skills_set_default",
                 "upload_begin",
                 "upload_chunk",
                 "upload_finish",
@@ -72,6 +78,14 @@ fn main() {
                 "cloud_ws_open",
                 "cloud_ws_send",
                 "cloud_ws_close",
+                // 待办清单(todos.rs)
+                "todos_load",
+                "todos_save",
+                "todo_upload_begin",
+                "todo_upload_path",
+                "todo_upload_read",
+                "todo_upload_delete",
+                "todo_uploads_dir",
                 // 百智云/云端(baizhi/)
                 "baizhi_status",
                 "baizhi_send_code",

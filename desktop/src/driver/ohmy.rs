@@ -41,6 +41,10 @@ pub trait ShellCtx: Send + Sync + 'static {
     fn process_home(&self) -> Option<PathBuf> { crate::config::home_dir() }
     fn engine_env_overrides(&self) -> Vec<(String, OsString)> { Vec::new() }
 
+    /// 内置技能目录(bundle 资源;需要 Tauri 路径解析,故挂在 ShellCtx)。
+    /// 测试替身缺省 None = 只有用户技能。
+    fn skills_builtin_dir(&self) -> Option<PathBuf> { None }
+
     /// 引擎进程非 stop() 退出(reader 读到 stdout EOF)。driver 只负责**报告**
     /// 事实,摘句柄/置崩溃态/退避重启这些策略全在壳侧(main.rs),transport
     /// 因此不必知道 DriverHost 与 Tauri State 的存在。
@@ -62,6 +66,9 @@ impl ShellCtx for AppHandle {
     }
     fn on_engine_exit(&self, instance: u64, detail: &str, log_tail: &str) {
         crate::engine_exited(self, instance, detail, log_tail);
+    }
+    fn skills_builtin_dir(&self) -> Option<PathBuf> {
+        crate::skills::builtin_dir(self)
     }
 }
 
@@ -147,6 +154,15 @@ pub(super) struct Inner {
     pub(super) stats: crate::stats::UsageStats,
     /// WSL 运行环境上下文(本机模式 None;见 WslCtx)
     pub(super) wsl: Option<WslCtx>,
+    /// 技能库来源(skills.rs):内置(bundle 资源,可缺)与用户目录,
+    /// 及默认启用开关文件(skills-defaults.json)
+    pub(super) skills_builtin_dir: Option<PathBuf>,
+    pub(super) skills_user_dir: PathBuf,
+    pub(super) skills_defaults_path: PathBuf,
+    /// 技能物化闸:<engine_dir>/skills 是全局一份,"重写目录 → session/create"
+    /// 必须成对不被并发创建打断(引擎 catalog 按创建时刻的目录内容定格)。
+    /// tokio Mutex——守卫要跨 create RPC 的 await 持有。
+    pub(super) skills_gate: tokio::sync::Mutex<()>,
 }
 
 #[derive(Clone)]
@@ -160,8 +176,10 @@ pub(super) struct ManifestModel {
     /// 底层模型串(条目 "model" 字段)。name 可能是 remark 别名,UI 判
     /// 会员档位(monkeycode-{basic|pro|ultra}/…)只能靠它。
     pub(super) model: String,
-    /// 超出会员档的展示专用条目:引擎 settings 里没有它(物化跳过),
-    /// 选择键解析必须拒绝(见 session.rs model_id_of),UI 灰态禁选。
+    /// 超出会员档的条目:引擎 settings 照常物化(档位权限归服务端把关,
+    /// 缺条目会让到期前选它的老会话恢复即 unknown model);显式选择拒绝
+    /// (session.rs model_id_of),恢复/重建已有会话放行(model_id_of_any),
+    /// UI 灰态禁选。
     pub(super) locked: bool,
     /// 会员条目的服务端归属(public/private/team;非会员条目为空),
     /// UI 会员 tab 按它分「付费/我的/团队」节。

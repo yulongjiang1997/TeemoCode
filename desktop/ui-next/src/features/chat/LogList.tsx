@@ -869,7 +869,7 @@ export const LogList = memo(function LogList({
           </Fragment>
         );
       })}
-      {state.running && state.streamKind === "" && (
+      {state.running && (
         <span className="loading loading-dots loading-sm mt-3 text-base-content/40" aria-hidden />
       )}
     </div>

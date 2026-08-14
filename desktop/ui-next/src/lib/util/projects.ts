@@ -307,17 +307,19 @@ export function groupLocalSessions(
   });
   // 空分组也保留(用户刚建、还没放项目时分组必须可见)
 
-  // 未分配自定义组的项目 → 走原自动项目分组。
-  // 展示序 = 置顶项目(按置顶顺序) + 手动序 + 其余未分配(按 key)。
+  // 未分配自定义组的项目 → 走原自动项目分组(上游排序:活跃排前 + 手动序)。
+  // 置顶项目再提到最前,保持 groupSessions 的相对顺序。
   const unassigned = [...byProject.keys()].filter((k) => !assigned.has(k));
-  const pinnedKeys = [...pinnedProjects].filter((k) => unassigned.includes(k));
-  const manual = order.filter((k) => unassigned.includes(k) && !pinnedProjects.has(k));
-  const rest = unassigned.filter((k) => !pinnedProjects.has(k) && !order.includes(k));
-  const displayOrder = [...pinnedKeys, ...manual, ...rest];
-  const { projects, archivedProjects: archived } = groupSessions(
+  const { projects: allProjects, archivedProjects: archived } = groupSessions(
     sessions.filter((m) => !assigned.has(projectKey(m.workdir))),
-    displayOrder,
+    order,
     archivedProjects,
   );
+  const projects = [...allProjects].sort((a, b) => {
+    const pa = pinnedProjects.has(a.key) ? 0 : 1;
+    const pb = pinnedProjects.has(b.key) ? 0 : 1;
+    if (pa !== pb) return pa - pb;
+    return allProjects.indexOf(a) - allProjects.indexOf(b);
+  });
   return { custom, projects, archivedProjects: archived, assigned };
 }

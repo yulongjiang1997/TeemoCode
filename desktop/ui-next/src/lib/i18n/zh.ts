@@ -26,6 +26,7 @@ export const zh = {
   "rail.cloud": "云端任务",
   "rail.chat": "本地会话",
   "rail.stats": "用量统计",
+  "rail.todo": "待办",
   "rail.settings": "设置",
 
   "sidebar.label": "会话列表",
@@ -40,6 +41,7 @@ export const zh = {
   "sidebar.overview.stats.desc": "本地会话的 token 消耗,按天/会话/模型",
   "sidebar.overview.projects": "{n} 项目",
   "sidebar.overview.tasks": "{n} 任务",
+  "sidebar.overview.todos": "{n} 待办",
   "sidebar.overview.chats": "{n} 会话",
   "sidebar.overview.running": "{n} 运行中",
   "sidebar.overview.waiting": "{n} 等待确认",
@@ -132,6 +134,30 @@ export const zh = {
   "main.shellInfo": "壳 {version} · 引擎 {engine}",
   "main.engineNotReady": "未就绪",
 
+  // 待办(侧栏待办组:收集箱 + 调度台)
+  "todo.add": "添加",
+  "todo.addPlaceholder": "记一件要做的事,Enter 添加",
+  "todo.empty.title": "还没有待办",
+  "todo.done": "已完成",
+  // 文案两易(2026-08-13 用户两轮定案):「派发成任务」太行话,「交给
+  // Agent」也别扭——落定「启动任务」,与本地任务/新建任务同一套词汇。
+  // 动作本体 = 开新建任务视图预填正文与图片
+  "todo.dispatch": "启动任务",
+  "todo.editAction": "编辑",
+  "todo.delete": "删除",
+  "todo.deleteConfirm": "确认删除(不可恢复)",
+  "todo.markDone": "标记完成",
+  "todo.markUndone": "标记未完成",
+  "todo.openTask": "打开关联任务",
+  "todo.openCloud": "到云端任务空间查看",
+  "todo.linkGone": "关联任务已被删除",
+  "todo.attach": "添加图片",
+  "todo.imageRemove": "移除图片 {name}",
+  "todo.imageCount": "{n} 张图",
+  "todo.stagedHint": "已附 {n} 张图,随添加一并挂上",
+  "todo.detail": "待办详情",
+  "todo.dragHint": "拖动可调整顺序",
+
   "settings.appearance.theme": "外观主题",
   "settings.appearance.language": "语言",
   "settings.appearance.hint": "切换立即生效并记在本机。",
@@ -169,6 +195,7 @@ export const zh = {
   "settings.nav.general": "通用",
   "settings.nav.models": "模型",
   "settings.nav.mcp": "MCP",
+  "settings.nav.skills": "技能",
   "settings.nav.browser": "浏览器",
   "settings.nav.env": "运行环境",
   "settings.nav.about": "关于",
@@ -176,6 +203,7 @@ export const zh = {
   "settings.desc.account": "账号登录与用量",
   "settings.desc.models": "模型接入与默认模型,保存后重启引擎生效",
   "settings.desc.mcp": "MCP 服务器,为 Agent 扩展工具能力",
+  "settings.desc.skills": "内置与自定义技能库,对话里按会话启用",
   "settings.desc.browser": "连接 Chrome/Edge,让 Agent 操作网页",
   "settings.desc.env": "内核在本机或 WSL 发行版中运行",
   "settings.desc.about": "版本、更新与诊断",
@@ -230,6 +258,35 @@ export const zh = {
   "settings.mcp.disable": "停用",
   "settings.mcp.enable": "启用",
   "settings.mcp.disabledBadge": "已停用",
+  // 技能库:内置随包分发只读,同名自定义覆盖(壳 skills.rs 去重口径)。
+  // 保存即落盘、不重启引擎——生效时机必须讲清,否则"改了怎么没反应"
+  "settings.skills.hint": "技能是给 Agent 的可复用作业指引(SKILL.md)。对新会话即时生效;已打开的会话在调整启用集后生效。",
+  "settings.skills.add": "新建技能",
+  "settings.skills.name": "名称(目录名,也是 /指令名)",
+  "settings.skills.nameHint": "只能用字母、数字、-、_、.(不以 . 开头)",
+  "settings.skills.content": "内容(SKILL.md)",
+  // 空组引导(两组恒在,ModelsSection 同款):组头+引导卡是"技能从哪来"的唯一说明位
+  "settings.skills.builtinEmpty": "内置技能库未就绪:安装包未包含技能资源,或开发环境未初始化 plugins submodule。",
+  "settings.skills.userEmpty": "还没有自定义技能。点击「新建技能」创建,或在内置技能上「编辑副本」改出自己的版本。",
+  // 同名副本压过内置后,内置那条不再显示;官方更新也不会跟进副本,删副本才还原
+  "settings.skills.overridesBadge": "覆盖内置",
+  // 「默认启用」(skills-defaults.json):徽标表状态,hover 动作切换,
+  // 只改新会话的缺省集(MCP 停用/启用同款行惯例)
+  "settings.skills.defaultBadge": "默认启用",
+  "settings.skills.defaultOn": "设为默认",
+  "settings.skills.defaultOff": "取消默认",
+  "settings.skills.defaultTip": "新会话是否默认启用此技能;已打开的会话跟随各自的勾选,不受影响",
+  "settings.skills.edit": "编辑",
+  "settings.skills.delete": "删除",
+  "settings.skills.override": "编辑副本",
+  "settings.skills.readonlyHint": "内置技能随应用更新分发,只读;「编辑副本」会创建同名自定义技能覆盖它,删除副本即还原。",
+  "settings.skills.save": "保存",
+  "settings.skills.cancel": "取消",
+  "settings.skills.saveFailed": "保存失败:{reason}",
+  "settings.skills.deleteFailed": "删除失败:{reason}",
+  "settings.skills.loadFailed": "技能库读取失败:{reason}",
+  "settings.skills.tplDesc": "一句话说明这个技能做什么、何时使用",
+  "settings.skills.tplBody": "# 我的技能\n\n在这里写给 Agent 的分步指引。",
   "settings.env.kernel": "内核运行环境",
   "settings.env.local": "本机(Windows)",
   "settings.env.missing": "(未检测到)",
@@ -328,6 +385,11 @@ export const zh = {
   "notice.deleteFailed": "删除失败:{reason}",
   // 点了一条过期提醒/托盘意图,目标已经不在了:必须给回话,否则主区空白一片
   "notice.openMissing": "无法打开:对应的任务或会话可能已被删除",
+  // 待办落盘失败必须外显(乐观状态还在,但重启即丢);加载失败更要说——
+  // todos.json 损坏时静默空表会被下一次变更的全量落盘覆盖
+  "notice.todoLoadFailed": "待办加载失败:{reason}",
+  "notice.todoSaveFailed": "待办保存失败:{reason}",
+  "notice.todoUploadFailed": "待办图片上传失败:{reason}",
 
   "downloads.cancel": "取消下载",
   "downloads.dismiss": "关闭",
@@ -461,6 +523,19 @@ export const zh = {
   "chat.think.hint.medium": "日常任务,均衡",
   "chat.think.hint.high": "疑难任务,深入但更慢",
   "chat.think.failed": "调整思考深度失败:{reason}",
+  // 会话技能:启用集变更走 destroy+resume 重建(历史保留),触发器展示
+  // 启用数;已启用技能进斜杠面板(引擎原生 /技能名 展开)
+  "chat.skills.label": "会话技能",
+  "chat.skills.trigger": "技能·{n}",
+  "chat.skills.tip": "选择本会话启用的技能(切换即生效,对话历史保留)",
+  "chat.skills.empty": "技能库为空,到「设置 · 技能」添加",
+  "chat.skills.filter": "过滤技能…",
+  "chat.skills.noMatch": "无匹配技能",
+  "chat.skills.sourceTabs": "技能来源",
+  "chat.skills.failed": "调整技能失败:{reason}",
+  // 技能来源节头/组头(设置页与选择菜单共用,model.source.* 同款跨面词条)
+  "skill.source.builtin": "内置",
+  "skill.source.custom": "自定义",
 
   "model.tier.basic": "基础",
   "model.tier.pro": "专业",
