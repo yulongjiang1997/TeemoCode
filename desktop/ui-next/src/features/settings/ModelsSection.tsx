@@ -251,13 +251,22 @@ export function ModelsSection({
                 </fieldset>
                 <fieldset className="fieldset gap-1.5">
                   <legend className="fieldset-legend">{t("settings.models.apiKey")}</legend>
-                  <input
-                    className="input input-sm w-full font-mono text-xs"
-                    type="password"
+                  {/* 多密钥:每行一个,使用中失败/额度用完自动换下一个,全部用尽任务失败 */}
+                  <textarea
+                    className="textarea textarea-sm w-full font-mono text-xs"
+                    rows={3}
                     aria-label={t("settings.models.apiKey")}
-                    placeholder="sk-..."
-                    value={m.api_key}
-                    onChange={(e) => patch(i, { api_key: e.target.value })}
+                    placeholder={"sk-...\nsk-...(每行一个,多个自动切换)"}
+                    title={t("settings.models.apiKey.hint")}
+                    value={(m.api_keys?.length ? m.api_keys : m.api_key ? [m.api_key] : []).join("\n")}
+                    onChange={(e) => {
+                      const keys = e.target.value
+                        .split("\n")
+                        .map((k) => k.trim())
+                        .filter(Boolean);
+                      const first = keys[0] ?? "";
+                      patch(i, { api_keys: keys, api_key: first });
+                    }}
                   />
                 </fieldset>
                 <fieldset className="fieldset gap-1.5">

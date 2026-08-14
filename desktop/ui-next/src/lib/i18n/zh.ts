@@ -232,6 +232,7 @@ export const zh = {
   "settings.models.provider": "协议",
   "settings.models.baseUrl": "接口地址",
   "settings.models.apiKey": "API Key",
+  "settings.models.apiKey.hint": "每行一个密钥;使用中某 key 失败/额度用完自动换下一个,全部用尽则该轮任务失败",
   "settings.models.model": "模型标识",
   "settings.models.contextWindow": "上下文窗口(token)",
   "settings.models.contextWindow.placeholder": "200000(默认)",

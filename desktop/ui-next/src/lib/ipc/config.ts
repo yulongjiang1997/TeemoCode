@@ -18,6 +18,9 @@ export interface HostModel {
   provider: string;
   base_url: string;
   api_key: string;
+  /** 多密钥列表(自动切换):当前生效的是 api_key;某 key 失败/额度用完时
+   *  壳/前端轮换到下一个并重试,全部用尽则该轮任务失败 */
+  api_keys?: string[];
   model: string;
   default?: boolean;
   /** 上下文窗口(token),高级项;缺省内核按 200k 处理 */

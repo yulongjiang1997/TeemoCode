@@ -36,12 +36,32 @@ function extractOutputPath(text: string): string | null {
 import { fmtCompact, showTokenPopover } from "@/features/sidebar/listKit";
 import { useI18n } from "@/lib/i18n";
 import { sessionCompact, sessionOutline, type OutlineItem } from "@/lib/ipc/controls";
-import { getConfig } from "@/lib/ipc/config";
+import { getConfig, saveConfig, type DesktopConfig } from "@/lib/ipc/config";
 import { repoChanges, repoRecentFiles, repoReveal } from "@/lib/ipc/repo";
-import { sessionFrame, sessionPatch, type SessionMeta } from "@/lib/ipc/sessions";
+import { sessionFrame, sessionPatch, sessionSend, type SessionMeta } from "@/lib/ipc/sessions";
+import { b64encode } from "@/lib/protocol/codec";
 import { buildSessionUsageMap, usageStats, type TokenUsage } from "@/lib/ipc/usageStats";
 import { onNativeFileDrop, uploadFileURL } from "@/lib/ipc/uploads";
 import { workspaceRelativePath } from "@/lib/util/markdownPaths";
+
+/** 判断引擎错误消息是否为 key 相关(key 无效/额度/限流):这类错误才触发
+ *  多密钥自动切换。别的错误(网络/业务)不轮换,留给人工处理。 */
+function isKeyError(reason: string): boolean {
+  const r = reason.toLowerCase();
+  return (
+    r.includes("401") ||
+    r.includes("unauthorized") ||
+    r.includes("invalid api key") ||
+    r.includes("authentication") ||
+    r.includes("insufficient_quota") ||
+    r.includes("insufficient quota") ||
+    r.includes("quota") ||
+    r.includes("rate limit") ||
+    r.includes("rate_limit") ||
+    r.includes("429")
+  );
+}
+
 import {
   anchorScrollTop,
   consumeProgrammaticScroll,
@@ -620,6 +640,67 @@ export function ChatView({
       })
       .catch(() => {});
   }, [meta.id, meta.model]);
+
+  // ===== 多密钥自动切换:key 失败/额度用完 → 轮换到下一个 → 重发该指令 =====
+  // 连续失败计数(按会话):达到备用 key 数则不再自动重试,任务留失败态。
+  const keyFailRef = useRef(0);
+  const rotatingRef = useRef(false);
+  useEffect(() => {
+    if (state.running) {
+      keyFailRef.current = 0; // 开轮清计数
+      return;
+    }
+    if (state.turnEnded || rotatingRef.current) return; // 正常结束 / 正在轮换
+    // 本轮失败:取最后一条 sys 错误消息判断是否 key 问题
+    const errItem = [...state.items].reverse().find((it) => it.kind === "sys" && it.error);
+    const reason =
+      errItem && errItem.kind === "sys" && errItem.params?.reason ? String(errItem.params.reason) : "";
+    if (!isKeyError(reason)) return;
+    void (async () => {
+      rotatingRef.current = true;
+      try {
+        const cfg = await getConfig();
+        const model = cfg?.models?.find((m) => m.model === meta.model);
+        const keys = model?.api_keys?.filter((k) => k.trim()) ?? [];
+        if (!model || keys.length < 2) return; // 无备用 key,不自动切换
+        if (keyFailRef.current >= keys.length) return; // 全部试过,任务失败
+        keyFailRef.current += 1;
+        // 轮换:当前 key 移到末尾,下一个顶上
+        const cur = model.api_key;
+        const idx = keys.indexOf(cur);
+        const next = keys[(idx + 1) % keys.length];
+        const rotated = [...keys];
+        if (idx >= 0) {
+          rotated.splice(idx, 1);
+          rotated.push(cur);
+        }
+        const nextCfg = {
+          ...cfg,
+          models: (cfg?.models ?? []).map((m) =>
+            m.model === model.model ? { ...m, api_keys: rotated, api_key: next } : m,
+          ),
+        } as DesktopConfig;
+        await saveConfig(nextCfg); // 壳写盘并重启引擎,返回时已 Ready
+        // 重发该回合的用户指令(自动切换后继续任务)
+        let lastText = "";
+        for (let i = state.items.length - 1; i >= 0; i--) {
+          const it = state.items[i];
+          if (it?.kind === "user") {
+            lastText = it.text;
+            break;
+          }
+        }
+        if (lastText) {
+          await sessionSend(meta.id, "user-input", { content: b64encode(lastText) });
+        }
+      } catch {
+        // 轮换失败:交给失败态人工处理
+      } finally {
+        rotatingRef.current = false;
+      }
+    })();
+  }, [state.running, state.turnEnded, state.items]);
+
   useEffect(() => {
     // 轮次结束边沿:改动列表需要重拉(抽屉开着时立即,关着时下次打开取新)
     if (state.turnEnded && !prevTurnEnded.current) {

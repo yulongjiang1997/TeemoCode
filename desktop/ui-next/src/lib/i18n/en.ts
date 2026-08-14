@@ -223,6 +223,7 @@ export const en: Record<MessageKey, string> = {
   "settings.models.provider": "Protocol",
   "settings.models.baseUrl": "Base URL",
   "settings.models.apiKey": "API Key",
+  "settings.models.apiKey.hint": "One key per line; on failure/quota exhaustion the app rotates to the next key automatically, task fails only after all keys are tried",
   "settings.models.model": "Model ID",
   "settings.models.contextWindow": "Context window (tokens)",
   "settings.models.contextWindow.placeholder": "200000 (default)",
