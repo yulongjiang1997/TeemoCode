@@ -525,6 +525,8 @@ fn host_info(app: AppHandle, host: tauri::State<'_, DriverHost>) -> serde_json::
     serde_json::json!({
         "version": display_version(&app.package_info().version.to_string()),
         "engine_version": engine_version,
+        // 角标:debug 壳显示 Dev,发布版显示 work
+        "build": if cfg!(debug_assertions) { "dev" } else { "work" },
     })
 }
 
