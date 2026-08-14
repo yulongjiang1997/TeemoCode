@@ -66,6 +66,12 @@ impl Inner {
                 if req_id.is_empty() || sid.is_empty() {
                     return;
                 }
+                // 轮已停(提问过期/中断/冷修复收尾)时,引擎 resume 重发的过期提问
+                // 不重新挂起——否则 pending 复活,侧栏/桌宠 waiting_ask 卡死
+                let running = self.sess.sessions.lock_ok().get(&sid).map(|s| s.running).unwrap_or(false);
+                if !running {
+                    return;
+                }
                 self.sess.pending_questions
                     .lock_ok()
                     .insert(req_id.clone(), (sid.clone(), questions.clone()));
