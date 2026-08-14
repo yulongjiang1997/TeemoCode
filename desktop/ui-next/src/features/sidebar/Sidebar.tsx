@@ -12,6 +12,7 @@
 // 行/组头/小节折叠的呈现件收口在 listKit(三列表统一,不做两套)。
 import { IconArchive, IconDownload, IconFolder, IconFolderOpen, IconInbox, IconMessages, IconPin, IconPlus, IconRefresh, IconX } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 import { CloudTaskList, useCloudProjects, useCloudTasks, type CloudTasksFeed } from "@/features/cloud/CloudTaskList";
 import { fmtCompact, GroupLabel, levelPad, ListRow, NEST_NO_GUIDE, SectionFold, showTokenPopover } from "@/features/sidebar/listKit";
@@ -873,7 +874,9 @@ function ImportMcModal({ onClose, onImported }: { onClose: () => void; onImporte
     }
   };
 
-  return (
+  // 渲染到 body:工作区 backdrop-blur 会让 fixed 子级相对主区定位(位置错乱),
+  // 弹窗必须脱离该祖先(见 LAYOUT.md 弹窗契约)
+  return createPortal(
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/40" onClick={onClose}>
       <div
         className="flex max-h-[75vh] w-[540px] flex-col rounded-box border border-base-300 bg-base-100 p-4 shadow-xl"
@@ -958,7 +961,8 @@ function ImportMcModal({ onClose, onImported }: { onClose: () => void; onImporte
           </>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
