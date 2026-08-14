@@ -47,7 +47,7 @@ import {
 } from "@/lib/ipc/sessions";
 import { noticeForQueuedDelivery, noticeForSessionEvent, type NoticeKind, type SessionNotice } from "@/lib/notices";
 import { deliverQueued, dropStash } from "@/features/chat/composer/stash";
-import { readLastSession, writeLastSession, writeSpace, type Space } from "@/lib/util/prefs";
+import { readLastSession, writeLastSession, writeSpace, readBgImage, readBgOpacity, type Space } from "@/lib/util/prefs";
 import { projectKey, readArchivedProjects } from "@/lib/util/projects";
 
 // 统一图标族:@tabler/icons-react(2026-08-07 由 lucide 换过来;组件名
@@ -271,7 +271,7 @@ function MainArea({
     );
 
   return (
-    <main className="flex min-w-0 flex-1 flex-col bg-base-100">
+    <main className="flex min-w-0 flex-1 flex-col">
       <div data-tauri-drag-region="" className="h-13 shrink-0 border-b border-base-300" />
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 p-6">
       <img src="/logo.png" alt="" className="h-16 w-16 rounded-2xl shadow-sm" aria-hidden />
@@ -311,6 +311,17 @@ export function App() {
     files?: File[];
   } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // 自定义背景图(data URL + 透明度):通用设置里改,这里监听事件重读
+  const [bgImage, setBgImage] = useState(readBgImage);
+  const [bgOpacity, setBgOpacity] = useState(readBgOpacity);
+  useEffect(() => {
+    const refresh = () => {
+      setBgImage(readBgImage());
+      setBgOpacity(readBgOpacity());
+    };
+    window.addEventListener("mc-bg-changed", refresh);
+    return () => window.removeEventListener("mc-bg-changed", refresh);
+  }, []);
   const [cloudTask, setCloudTask] = useState<CloudTask | null>(null);
   const [cloudReload, setCloudReload] = useState(0);
   const [notices, setNotices] = useState<SessionNotice[]>([]);
@@ -652,16 +663,31 @@ export function App() {
   })();
 
   return (
-    <div className="flex h-full flex-col text-base-content">
-      {isCustomChromeShell() && <TitleBar />}
-      <ResizeEdges />
-      <EngineBanner />
-      <div className="flex min-h-0 flex-1">
-        <SpaceRail
-          space={space}
-          waiting={waiting}
-          onChange={setSpace}
-          settingsOpen={settingsOpen}
+    <div className="relative flex h-full flex-col text-base-content">
+      {/* 背景层:默认纯色 + 自定义图片(按透明度叠加) */}
+      <div className="absolute inset-0 bg-base-100" aria-hidden />
+      {bgImage && (
+        <div
+          className="absolute inset-0 bg-base-100"
+          aria-hidden
+          style={{
+            backgroundImage: `url(${bgImage})`,
+            backgroundSize: "cover",
+            backgroundPosition: "center",
+            opacity: bgOpacity / 100,
+          }}
+        />
+      )}
+      <div className="relative z-10 flex min-h-0 flex-1 flex-col">
+        {isCustomChromeShell() && <TitleBar />}
+        <ResizeEdges />
+        <EngineBanner />
+        <div className="flex min-h-0 flex-1">
+          <SpaceRail
+            space={space}
+            waiting={waiting}
+            onChange={setSpace}
+            settingsOpen={settingsOpen}
           onToggleSettings={() => { setCreating(null); setSettingsOpen((v) => !v); }}
         />
         <Sidebar
@@ -669,6 +695,7 @@ export function App() {
           sessions={sessions}
           currentId={currentId}
           attentionIds={attentionIds}
+          onImported={refresh}
           // 待办组接线(2026-08-12 定案清单本体进侧栏):数据 + 变更 ops +
           // 派发/跳转出口;跳关联任务与点会话行同一条 openSessionById 链
           todo={{
@@ -884,6 +911,7 @@ export function App() {
         </div>
       )}
       <DownloadsDock />
+      </div>
     </div>
   );
 }

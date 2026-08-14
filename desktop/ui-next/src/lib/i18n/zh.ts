@@ -171,6 +171,12 @@ export const zh = {
 
   "settings.appearance.theme": "外观主题",
   "settings.appearance.language": "语言",
+  "settings.appearance.background": "背景图",
+  "settings.appearance.backgroundHint": "上传后作为主界面背景;调整透明度;不设则用默认纯色",
+  "settings.appearance.backgroundPick": "选择图片",
+  "settings.appearance.backgroundChange": "更换",
+  "settings.appearance.backgroundReset": "恢复默认",
+  "settings.appearance.backgroundOpacity": "背景透明度",
   "settings.appearance.hint": "切换立即生效并记在本机。",
   "settings.appearance.custom": "自定义",
   "settings.appearance.customMode": "明暗",

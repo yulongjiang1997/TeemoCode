@@ -160,6 +160,12 @@ export const en: Record<MessageKey, string> = {
 
   "settings.appearance.theme": "Theme",
   "settings.appearance.language": "Language",
+  "settings.appearance.background": "Background image",
+  "settings.appearance.backgroundHint": "Shown as the main window background; adjust opacity; leave unset for the default solid color",
+  "settings.appearance.backgroundPick": "Choose image",
+  "settings.appearance.backgroundChange": "Change",
+  "settings.appearance.backgroundReset": "Reset to default",
+  "settings.appearance.backgroundOpacity": "Background opacity",
   "settings.appearance.hint": "Applies immediately and is remembered on this machine.",
   "settings.appearance.custom": "Custom",
   "settings.appearance.customMode": "Mode",

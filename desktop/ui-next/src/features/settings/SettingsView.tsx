@@ -23,6 +23,7 @@ import {
 import { isWindowsShell } from "@/lib/ipc/host";
 import { inDesktopShell } from "@/lib/ipc/ipc";
 import { readCustomTheme, readTheme, setCustomTheme, setTheme, THEMES, CUSTOM_THEME, type CustomTheme, type Theme } from "@/lib/theme";
+import { readBgImage, readBgOpacity, writeBgImage, writeBgOpacity } from "@/lib/util/prefs";
 import { customThemeVars, randomTheme, roleHex, COLOR_ROLES, DEFAULT_CUSTOM, BORDER_RANGE, RADIUS_RANGE, SIZE_RANGE, type ColorRole } from "@/lib/customTheme";
 import { useDismiss } from "@/lib/util/useDismiss";
 import { useEscLayer } from "@/lib/util/escLayer";
@@ -429,6 +430,37 @@ function ThemePicker({ theme, custom, onPick }: { theme: Theme; custom: CustomTh
 function GeneralSection() {
   const { t, locale } = useI18n();
   const [theme, setThemeState] = useState<Theme>(readTheme);
+  // 自定义背景图(data URL)与透明度;未自定义 → 默认纯色背景
+  const [bgImage, setBgImageState] = useState(readBgImage);
+  const [bgOpacity, setBgOpacityState] = useState(readBgOpacity);
+  const bgFileRef = useRef<HTMLInputElement | null>(null);
+  const pickBg = (file: File | null | undefined) => {
+    if (!file || !file.type.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      // 缩到最长边 1920 以内,控制 localStorage 体积
+      const img = new Image();
+      img.onload = () => {
+        const max = 1920;
+        const scale = Math.min(1, max / Math.max(img.width, img.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        canvas.getContext("2d")?.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+        setBgImageState(dataUrl);
+        writeBgImage(dataUrl);
+        window.dispatchEvent(new Event("mc-bg-changed"));
+      };
+      img.src = String(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+  const clearBg = () => {
+    setBgImageState("");
+    writeBgImage("");
+    window.dispatchEvent(new Event("mc-bg-changed"));
+  };
   // 没配过就给一份默认草稿:编辑器要有初值,选中「自定义」当场就该看到效果
   const [custom, setCustom] = useState<CustomTheme>(() => readCustomTheme() ?? DEFAULT_CUSTOM);
   const [soundOn, setSoundOn] = useState(true);
@@ -483,6 +515,59 @@ function GeneralSection() {
           </SettingRow>
           {theme === CUSTOM_THEME && <CustomThemeEditor value={custom} onChange={editCustom} />}
         </div>
+        <SettingRow label={t("settings.appearance.background")} hint={t("settings.appearance.backgroundHint")}>
+          <div className="flex items-center gap-2">
+            {bgImage && (
+              <img
+                src={bgImage}
+                alt=""
+                aria-hidden
+                className="h-9 w-14 rounded-box border border-base-300 object-cover"
+              />
+            )}
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs"
+              onClick={() => bgFileRef.current?.click()}
+            >
+              {bgImage ? t("settings.appearance.backgroundChange") : t("settings.appearance.backgroundPick")}
+            </button>
+            <input
+              ref={bgFileRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              aria-label={t("settings.appearance.backgroundPick")}
+              onChange={(e) => pickBg(e.target.files?.[0])}
+            />
+            {bgImage && (
+              <>
+                <input
+                  type="range"
+                  min={1}
+                  max={100}
+                  className="range range-xs w-24"
+                  aria-label={t("settings.appearance.backgroundOpacity")}
+                  value={bgOpacity}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    setBgOpacityState(v);
+                    writeBgOpacity(v);
+                    window.dispatchEvent(new Event("mc-bg-changed"));
+                  }}
+                />
+                <span className="w-8 text-right text-xs tabular-nums text-base-content/60">{bgOpacity}%</span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs text-base-content/50"
+                  onClick={clearBg}
+                >
+                  {t("settings.appearance.backgroundReset")}
+                </button>
+              </>
+            )}
+          </div>
+        </SettingRow>
         <SettingRow label={t("settings.appearance.language")}>
           <div role="radiogroup" aria-label={t("settings.appearance.language")} className="join shrink-0">
             {LOCALES.map((l) => seg(l.label, locale === l.value, () => setLocale(l.value)))}

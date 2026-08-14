@@ -67,3 +67,39 @@ export function writeFold(key: FoldKey, open: boolean): void {
     // 只丢持久化
   }
 }
+
+/** 自定义背景图(data URL;空 = 未自定义,用默认纯色背景)。 */
+export function readBgImage(): string {
+  try {
+    return localStorage.getItem("mc.bgImage") ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function writeBgImage(dataUrl: string): void {
+  try {
+    if (dataUrl) localStorage.setItem("mc.bgImage", dataUrl);
+    else localStorage.removeItem("mc.bgImage");
+  } catch {
+    // 只丢持久化
+  }
+}
+
+/** 背景图透明度(1-100;100 = 完全显示图片,默认 60)。 */
+export function readBgOpacity(): number {
+  try {
+    const v = Number(localStorage.getItem("mc.bgOpacity"));
+    return Number.isFinite(v) ? Math.min(Math.max(Math.round(v), 1), 100) : 60;
+  } catch {
+    return 60;
+  }
+}
+
+export function writeBgOpacity(pct: number): void {
+  try {
+    localStorage.setItem("mc.bgOpacity", String(Math.min(Math.max(Math.round(pct), 1), 100)));
+  } catch {
+    // 只丢持久化
+  }
+}
