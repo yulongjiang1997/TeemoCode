@@ -219,7 +219,7 @@ export function ModelMenu({
           )}
           <ul
             aria-label={t("chat.model.label")}
-            className="menu w-full flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto p-0"
+            className="menu w-full min-h-0 flex-1 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto p-0"
           >
             {tabItems.length === 0 && (
               <li className="menu-disabled">
@@ -242,11 +242,11 @@ export function ModelMenu({
           </ul>
           {/* 备用模型(故障转移链):主模型所有 key 失败后按勾选顺序自动切换 */}
           {onFallbackChange && (
-            <>
-              <div className="menu-title mt-1 flex flex-row items-baseline gap-2 text-xs">
+            <div className="shrink-0 border-t border-base-300/60 pt-1">
+              <div className="menu-title flex flex-row items-baseline gap-2 text-xs">
                 <span className="min-w-0 flex-1 truncate">{t("chat.model.fallback")}</span>
               </div>
-              <ul className="menu w-full flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto p-0">
+              <ul className="menu w-full max-h-36 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto p-0">
                 {models
                   .filter((m) => m.name !== current && !m.locked)
                   .map((m) => (
@@ -268,7 +268,7 @@ export function ModelMenu({
                     </li>
                   ))}
               </ul>
-            </>
+            </div>
           )}
         </div>
       )}
