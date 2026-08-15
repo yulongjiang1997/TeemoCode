@@ -1001,6 +1001,10 @@ export const zh = {
   "settings.team.skillPlaceholder": "技能/职责描述,如:需求分析、功能规划、方案设计",
   "settings.team.add": "添加成员",
   "settings.team.remove": "移除 {name}",
+  "settings.team.edit": "编辑 {name}",
+  "settings.team.save": "保存",
+  "settings.team.cancel": "取消",
+  "settings.team.addNew": "添加新成员",
 
 } as const;
 

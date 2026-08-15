@@ -983,4 +983,8 @@ export const en: Record<MessageKey, string> = {
   "settings.team.skillPlaceholder": "Skill / responsibility, e.g. requirements analysis, planning, design",
   "settings.team.add": "Add member",
   "settings.team.remove": "Remove {name}",
+  "settings.team.edit": "Edit {name}",
+  "settings.team.save": "Save",
+  "settings.team.cancel": "Cancel",
+  "settings.team.addNew": "Add new member",
 };
