@@ -761,8 +761,7 @@ export function ChatView({
         const cfg = await getConfig();
         // meta.model 是显示名(model_name),配置里可能叫 model(ID)或 name(显示名)
         const model = cfg?.models?.find((m) => m.model === meta.model || m.name === meta.model);
-        if (!model) return;
-        let lastText = "";
+        if (!model) return;        let lastText = "";
         for (let i = state.items.length - 1; i >= 0; i--) {
           const it = state.items[i];
           if (it?.kind === "user") {
@@ -784,8 +783,11 @@ export function ChatView({
         const current = fallbackRef.current?.current ?? meta.model;
         const nextName = nextFallbackModel(current, backups, resolveModel);
         const nextCfg = cfg?.models?.find((m) => m.model === nextName || m.name === nextName);
-        // 主模型 = 进入备用链前的模型;每次任务优先主模型由"结束时恢复"保证
-        const primary = fallbackRef.current?.primary ?? meta.model;
+        // 主模型 = 配置的默认模型(会话 meta.model 可能是残留的备用/手动切换,
+        // 不能当主模型——否则恢复会回到错误的模型)。进入备用链后固定用首次
+        // 认定的主模型,保证任务结束恢复回真实主模型。
+        const defaultModel = cfg?.models?.find((m) => m.default)?.name ?? cfg?.models?.[0]?.name;
+        const primary = fallbackRef.current?.primary ?? defaultModel ?? meta.model;
         // 无进展判定按"名字是否还是自己"(多个模型可能共用同一 model 字段,
         // 按 model 比较会把不同备用误判成同一个)。链走完/没进展:恢复主模型。
         dbg(
