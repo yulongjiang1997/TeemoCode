@@ -10,7 +10,7 @@
 //   btn、右键菜单走 lib/contextMenu(menu 皮相)。
 // 行交互:右键 = 行菜单(重命名/归档/删除二段确认)。
 // 行/组头/小节折叠的呈现件收口在 listKit(三列表统一,不做两套)。
-import { IconArchive, IconChevronLeft, IconChevronRight, IconDownload, IconFolder, IconFolderOpen, IconGripVertical, IconInbox, IconMessages, IconPin, IconPlus, IconRefresh, IconX } from "@tabler/icons-react";
+import { IconArchive, IconChevronLeft, IconChevronRight, IconDownload, IconFolder, IconFolderOpen, IconInbox, IconMessages, IconPin, IconPlus, IconRefresh, IconX } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
@@ -434,8 +434,6 @@ function CustomGroupSection({
 }) {
   const { t } = useI18n();
   const [dragOverGroup, setDragOverGroup] = useState(false);
-  // 组自身的拖动(重排组序):与项目拖拽(draggedKey)互斥
-  const [groupDragIdx, setGroupDragIdx] = useState<number | null>(null);
   const groupUsage = sumUsage(
     group.projects.flatMap((proj) => [...proj.sessions.map((s) => s.id), ...proj.archivedSessions.map((s) => s.id)]),
     p.usage,
@@ -473,45 +471,31 @@ function CustomGroupSection({
             openMenu({ x: e.clientX, y: e.clientY }, menuItems);
           }}
           onDragOver={(e: DragEvent) => {
-            if (draggedKey) {
-              e.preventDefault();
-              e.stopPropagation();
-              if (!dragOverGroup) setDragOverGroup(true);
-            } else if (groupDragIdx !== null && groupDragIdx !== groupIndex) {
-              e.preventDefault();
-              e.stopPropagation();
-            }
+            if (!draggedKey) return;
+            e.preventDefault();
+            e.stopPropagation();
+            if (!dragOverGroup) setDragOverGroup(true);
           }}
           onDragLeave={() => setDragOverGroup(false)}
           onDrop={(e: DragEvent) => {
-            if (!draggedKey && groupDragIdx === null) return;
+            if (!draggedKey) return;
             e.preventDefault();
             e.stopPropagation();
             setDragOverGroup(false);
-            if (draggedKey) {
+            if (draggedKey.startsWith("cg:")) {
+              // 分组拖动:重排到本组之前(与项目 dropBefore 同语义)
+              onReorderGroups(Number(draggedKey.slice(3)), groupIndex);
+            } else {
               assignProject(draggedKey, group.id);
-              drag?.onDragEnd(); // 立即清掉 draggedKey,否则源行卸载后落点残留
-            } else if (groupDragIdx !== null && groupDragIdx !== groupIndex) {
-              onReorderGroups(groupDragIdx, groupIndex);
             }
-            setGroupDragIdx(null);
+            drag?.onDragEnd(); // 立即清掉 draggedKey,否则源行卸载后落点残留
           }}
+          draggable={!!drag && !draggedKey}
+          onDragStart={() => {
+            if (drag && !draggedKey) drag.onDragStart(`cg:${groupIndex}`);
+          }}
+          onDragEnd={() => drag?.onDragEnd()}
         >
-          {/* 组自身拖动手柄:拖动重排组序(与项目拖拽互斥) */}
-          <span
-            draggable={!draggedKey}
-            className="shrink-0 cursor-grab text-base-content/25 hover:text-base-content/60 active:cursor-grabbing"
-            title={t("sidebar.group.drag")}
-            onDragStart={(e) => {
-              e.stopPropagation();
-              e.dataTransfer.effectAllowed = "move";
-              e.dataTransfer.setData("text/plain", String(groupIndex));
-              setGroupDragIdx(groupIndex);
-            }}
-            onDragEnd={() => setGroupDragIdx(null)}
-          >
-            <IconGripVertical size={12} stroke={1.75} aria-hidden />
-          </span>
           <GroupLabel icon={groupCollapsed ? IconFolder : IconFolderOpen} name={group.name} />
           {group.pinned && <span className="text-[10px] text-base-content/40">📌</span>}
           {groupUsage && groupUsage.input + groupUsage.output > 0 && (
@@ -1085,12 +1069,13 @@ export function Sidebar({
     commitCustomGroups(customGroups.map((g) => (g.id === id ? { ...g, pinned: !g.pinned } : g)));
   };
   const reorderGroups = (from: number, to: number) => {
-    const next = [...customGroups];
-    const m = next[from];
+    // 渲染用排序序(置顶在前);拖动索引是排序后的,存储也按排序后的序
+    const sorted = sortCustomGroups(customGroups);
+    const m = sorted[from];
     if (m === undefined) return;
-    next.splice(from, 1);
-    next.splice(to, 0, m);
-    commitCustomGroups(next);
+    sorted.splice(from, 1);
+    sorted.splice(to, 0, m);
+    commitCustomGroups(sorted);
   };
   const toggleProjectPin = (key: string) => {
     const next = new Set(pinnedProjects);
