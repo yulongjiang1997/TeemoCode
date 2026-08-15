@@ -48,19 +48,23 @@ import { workspaceRelativePath } from "@/lib/util/markdownPaths";
  *  多密钥自动切换。别的错误(网络/业务)不轮换,留给人工处理。 */
 function isKeyError(reason: string): boolean {
   const r = reason.toLowerCase();
+  // 只认"错误形态":壳会拿错误文本触发切换,裸 401/forbidden 等词
+  // 在错误正文里出现会误判(如 JSON 错误体里的字段)。网关错误形如
+  // "api error 4xx" 或明确的 key/quota 短语。
+  if (r.includes("api error ")) {
+    return r.includes("401") || r.includes("403") || r.includes("429");
+  }
   return (
-    r.includes("401") ||
-    r.includes("403") ||
-    r.includes("unauthorized") ||
-    r.includes("forbidden") ||
     r.includes("invalid api key") ||
-    r.includes("authentication") ||
+    r.includes("api key is invalid") ||
     r.includes("insufficient_quota") ||
     r.includes("insufficient quota") ||
-    r.includes("quota") ||
+    r.includes("quota exceeded") ||
     r.includes("rate limit") ||
     r.includes("rate_limit") ||
-    r.includes("429")
+    r.includes("permission denied") ||
+    r.includes("authentication failed") ||
+    (r.includes("unauthorized") && (r.includes("invalid") || r.includes("api key") || r.includes('{"code"')))
   );
 }
 

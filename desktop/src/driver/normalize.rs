@@ -542,22 +542,26 @@ impl Inner {
     }
 }
 
-/// 认证/额度/限流错误(多密钥/备用模型自动切换的触发条件):重试无意义。
+/// 认证/额度/限流错误(备用模型自动切换的触发条件):重试无意义。
+/// 注意必须"错误形态"才认:壳会拿它扫描回复正文,裸 "401"/"forbidden"/"quota"
+/// 等词出现在正常回复里会被误判成认证失败 → 壳掐断回复。
+/// 网关的认证错误形如 "api error 4xx" / `{"code":"INVALID_API_KEY"}` / 明确短语。
 pub(super) fn is_key_auth_error(msg: &str) -> bool {
     let m = msg.to_lowercase();
-    m.contains("401")
-        || m.contains("403")
-        || m.contains("unauthorized")
-        || m.contains("forbidden")
-        || m.contains("invalid api key")
-        || m.contains("authentication")
+    if m.contains("api error ") {
+        // 带错误前缀,4xx 状态码才是 key 错误
+        return m.contains("401") || m.contains("403") || m.contains("429");
+    }
+    m.contains("invalid api key")
+        || m.contains("api key is invalid")
         || m.contains("insufficient_quota")
         || m.contains("insufficient quota")
-        || m.contains("quota")
+        || m.contains("quota exceeded")
         || m.contains("rate limit")
         || m.contains("rate_limit")
-        || m.contains("429")
         || m.contains("permission denied")
+        || m.contains("authentication failed")
+        || (m.contains("unauthorized") && (m.contains("invalid") || m.contains("api key") || m.contains("{\"code\"")))
 }
 
 /// 上下文占用字段防腐层。13c8adc 起所有新入口统一为扁平
