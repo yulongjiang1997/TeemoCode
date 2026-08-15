@@ -122,6 +122,10 @@ impl Inner {
         if let Some(d) = event.get("parent_description").and_then(|v| v.as_str()).filter(|d| !d.is_empty()) {
             title = d.to_string();
         }
+        // P2 模型分配(尽力而为):子代理描述里标注 "模型：XXX"(或 模型:XXX)
+        // → 子会话模型名用指定模型。注意子代理的执行循环由引擎以父模型运行,
+        // 壳侧改的是子会话视图的模型名(打开子会话时显示/后续轮次参考)。
+        let model_name = parse_model_hint(&title).unwrap_or(model_name);
         self.sess.sessions.lock_ok().insert(
             child_sid.to_string(),
             SessionState {
@@ -412,6 +416,25 @@ fn agent_label(name: &str, desc: &str, agent_id: &str) -> String {
         (true, false) => desc.to_string(),
         (true, true) => agent_id.to_string(),
     }
+}
+
+/// 子代理描述里的模型标注:支持 "模型：XXX" / "模型:XXX" / "模型 XXX",
+/// 取到下一个分隔符(逗号/括号/竖线/句号)前的名字。解析不出返回 None。
+fn parse_model_hint(desc: &str) -> Option<String> {
+    for sep in ["模型：", "模型:", "模型 "] {
+        if let Some((_, rest)) = desc.rsplit_once(sep) {
+            let m = rest
+                .trim_start()
+                .split(|c| matches!(c, '，' | ',' | ')' | '）' | '|' | '。' | ';' | ';'))
+                .next()
+                .map(str::trim)
+                .unwrap_or("");
+            if !m.is_empty() && m.len() <= 64 {
+                return Some(m.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// 从 task_notification 渲染消息里取 Result 正文。形状对表引擎
