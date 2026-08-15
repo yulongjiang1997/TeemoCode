@@ -51,8 +51,9 @@ function isKeyError(reason: string): boolean {
   // 只认"错误形态":壳会拿错误文本触发切换,裸 401/forbidden 等词
   // 在错误正文里出现会误判(如 JSON 错误体里的字段)。网关错误形如
   // "api error 4xx" 或明确的 key/quota 短语。
+  // 注意:429/rate limit 是瞬时错误,引擎会内部重试,不能触发切换。
   if (r.includes("api error ")) {
-    return r.includes("401") || r.includes("403") || r.includes("429");
+    return r.includes("401") || r.includes("403");
   }
   return (
     r.includes("invalid api key") ||
@@ -60,8 +61,6 @@ function isKeyError(reason: string): boolean {
     r.includes("insufficient_quota") ||
     r.includes("insufficient quota") ||
     r.includes("quota exceeded") ||
-    r.includes("rate limit") ||
-    r.includes("rate_limit") ||
     r.includes("permission denied") ||
     r.includes("authentication failed") ||
     (r.includes("unauthorized") && (r.includes("invalid") || r.includes("api key") || r.includes('{"code"')))

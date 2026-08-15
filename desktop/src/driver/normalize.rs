@@ -549,16 +549,15 @@ impl Inner {
 pub(super) fn is_key_auth_error(msg: &str) -> bool {
     let m = msg.to_lowercase();
     if m.contains("api error ") {
-        // 带错误前缀,4xx 状态码才是 key 错误
-        return m.contains("401") || m.contains("403") || m.contains("429");
+        // 带错误前缀,4xx 状态码才是 key 错误(429 限流是瞬时错误,引擎会
+        // 内部重试——触发切换/掐断会让任务还在跑却把会话标记失败)
+        return m.contains("401") || m.contains("403");
     }
     m.contains("invalid api key")
         || m.contains("api key is invalid")
         || m.contains("insufficient_quota")
         || m.contains("insufficient quota")
         || m.contains("quota exceeded")
-        || m.contains("rate limit")
-        || m.contains("rate_limit")
         || m.contains("permission denied")
         || m.contains("authentication failed")
         || (m.contains("unauthorized") && (m.contains("invalid") || m.contains("api key") || m.contains("{\"code\"")))
