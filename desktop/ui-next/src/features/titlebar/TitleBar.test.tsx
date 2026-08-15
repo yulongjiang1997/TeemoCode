@@ -73,7 +73,7 @@ describe("自绘窗框条(Windows / Linux)", () => {
     const { done } = stubShell("Windows NT 10.0");
     const { container } = render(<TitleBar />);
     const bar = container.querySelector("[data-window-titlebar]") as HTMLElement;
-    expect(bar.className).toContain("bg-base-300");
+    expect(bar.className).toContain("bg-mask-300");
     expect(bar.className).not.toContain("border-b");
     // 列宽令牌一个都不许出现:品牌标记 2026-08-09 挪去 rail 角落格后,
     // 本条不再需要与任何列对齐,回归纯 chrome

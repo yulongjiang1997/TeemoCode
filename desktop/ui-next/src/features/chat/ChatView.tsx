@@ -36,7 +36,7 @@ function extractOutputPath(text: string): string | null {
 import { fmtCompact, showTokenPopover } from "@/features/sidebar/listKit";
 import { useI18n } from "@/lib/i18n";
 import { sessionCompact, sessionOutline, sessionSetModel, type OutlineItem } from "@/lib/ipc/controls";
-import { getConfig, saveConfig, type DesktopConfig } from "@/lib/ipc/config";
+import { getConfig } from "@/lib/ipc/config";
 import { repoChanges, repoRecentFiles, repoReveal } from "@/lib/ipc/repo";
 import { sessionFrame, sessionPatch, sessionSend, type SessionMeta } from "@/lib/ipc/sessions";
 import { b64encode } from "@/lib/protocol/codec";
@@ -676,9 +676,7 @@ export function ChatView({
       .catch(() => {});
   }, [meta.id, meta.model]);
 
-  // ===== 多密钥自动切换:key 失败/额度用完 → 轮换到下一个 → 重发该指令 =====
-  // 连续失败计数(按会话):达到备用 key 数则切下一个模型/任务失败。
-  const keyFailRef = useRef(0);
+  // ===== 备用模型链:key 失败 → 切下一个备用模型 → 重发该指令 =====
   const rotatingRef = useRef(false);
   // 本轮失败是否已处理(一回合发多个 task-error,只处理一次) + 本轮是否含 key 错误
   const failHandledRef = useRef(false);
@@ -699,8 +697,6 @@ export function ChatView({
     const reason =
       errItem && errItem.kind === "sys" && errItem.params?.reason ? String(errItem.params.reason) : "";
     if (!isKeyError(reason)) {
-      // 不是 key 错误:轮次结束才清零计数(成功回合)
-      if (state.turnEnded) keyFailRef.current = 0;
       return;
     }
     // 只处理"本回合新增"的错误:历史错误(seq ≤ 已处理)不再触发轮换
@@ -716,8 +712,6 @@ export function ChatView({
         // meta.model 是显示名(model_name),配置里可能叫 model(ID)或 name(显示名)
         const model = cfg?.models?.find((m) => m.model === meta.model || m.name === meta.model);
         if (!model) return;
-        const keys = model.api_keys?.filter((k) => k.trim()) ?? [];
-        keyFailRef.current += 1;
         let lastText = "";
         for (let i = state.items.length - 1; i >= 0; i--) {
           const it = state.items[i];
@@ -729,36 +723,7 @@ export function ChatView({
         const resend = async () => {
           if (lastText) await sessionSend(meta.id, "user-input", { content: b64encode(lastText) });
         };
-        // 当前模型还有备用 key 没试 → 轮换 key(别名数组同步旋转,保持对齐)
-        if (keys.length > 1 && keyFailRef.current < keys.length) {
-          const cur = model.api_key;
-          const idx = keys.indexOf(cur);
-          const ni = (idx + 1) % keys.length;
-          const next = keys[ni];
-          const aliases = model.api_key_aliases?.length ? model.api_key_aliases : keys.map(() => "");
-          const curLabel = aliases[idx]?.trim() || t("chat.keyN", { n: idx + 1 });
-          const nextLabel = aliases[ni]?.trim() || t("chat.keyN", { n: ni + 1 });
-          const rotated = [...keys];
-          const rotatedAliases = [...aliases];
-          if (idx >= 0) {
-            const ca = rotatedAliases[idx] ?? "";
-            rotated.splice(idx, 1);
-            rotated.push(cur);
-            rotatedAliases.splice(idx, 1);
-            rotatedAliases.push(ca);
-          }
-          // 切换提示:当前 key(别名或第几个)+ 错误摘要 + 切到哪个 key
-          composerRef.current.notifyError(t("chat.keySwitched", { key: curLabel, reason: shortReason(reason), next: nextLabel }));
-          await saveConfig({
-            ...cfg,
-            models: (cfg?.models ?? []).map((m) =>
-              m.model === model.model ? { ...m, api_keys: rotated, api_key: next, api_key_aliases: rotatedAliases } : m,
-            ),
-          } as DesktopConfig); // 壳写盘并重启引擎,返回时已 Ready
-          await resend();
-          return;
-        }
-        // 当前模型 key 全部试过 → 切到下一个备用模型。
+        // 备用模型链(多 key 已移除,单 key 失败直接切下一个备用模型)。
         // 备用链存显示名,但 meta.model 可能是引擎返回的模型 ID——直接 indexOf
         // 匹配不上就永远取第一个备用(无限重试)。这里按"配置项身份"匹配:
         // 当前模型对应的配置项在备用链中的位置 + 1。
@@ -769,7 +734,6 @@ export function ChatView({
         if (!nextName || !nextCfg || nextCfg.model === model.model) {
           return; // 没有备用/配置缺失/下一格就是自己(链没进展):停,留失败态
         }
-        keyFailRef.current = 0; // 新模型从头试 key
         // 切换提示:模型名 + 错误摘要 + 切到哪个备用模型
         composerRef.current.notifyError(
           t("chat.fallbackSwitched", { model: meta.model, reason: shortReason(reason), next: nextName }),

@@ -11,7 +11,7 @@
 // 与自定义组恒在(空了也出组头 + 引导卡):组是"模型从哪来"的说明位,按现有
 // 条目派生的话,一个模型都没有的新装用户恰恰看不到该去哪里同步。会员组仍
 // 只在有条目时出现(引导在账号页卡片,不在这里堆空态)。
-import { IconChevronDown, IconEye, IconEyeOff, IconPlus, IconX } from "@tabler/icons-react";
+import { IconChevronDown, IconEye, IconEyeOff, IconPlus } from "@tabler/icons-react";
 import { useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -253,96 +253,31 @@ export function ModelsSection({
                 </fieldset>
                 <fieldset className="fieldset col-span-2 gap-1.5">
                   <legend className="fieldset-legend">{t("settings.models.apiKey")}</legend>
-                  {/* 多密钥:每行一个(默认掩码,可查看明文/删除);使用中失败/额度用完自动换下一个 */}
-                  <div className="flex flex-col gap-1">
-                    {(() => {
-                      // 空模型也保底一行,方便直接录入首个 key;别名与 key 等长
-                      const keys = m.api_keys?.length ? m.api_keys : m.api_key ? [m.api_key] : [""];
-                      const aliases = m.api_key_aliases?.length ? m.api_key_aliases : keys.map(() => "");
-                      return keys.map((k, ki) => {
-                        const revealed = revealedKeys.has(`${i}:${ki}`);
-                        return (
-                          <div key={ki} className="flex flex-col gap-0.5">
-                            {/* 别名备注:仅显示用,不参与实际使用;与 key 同一行 */}
-                            <div className="flex items-center gap-1">
-                              <span className="w-6 shrink-0 text-right text-[10px] leading-none text-base-content/40">
-                                {t("settings.models.apiKey.alias")}
-                              </span>
-                              <input
-                                className="input input-xs w-28 shrink-0 font-mono text-xs text-base-content/70"
-                                type="text"
-                                aria-label={`${t("settings.models.apiKey.alias")} ${ki + 1}`}
-                                placeholder="备注"
-                                value={aliases[ki] ?? ""}
-                                onChange={(e) => {
-                                  const ks = (m.api_keys?.length ? m.api_keys : m.api_key ? [m.api_key] : [""]).slice();
-                                  const al = (m.api_key_aliases?.length ? m.api_key_aliases : ks.map(() => "")).slice();
-                                  al[ki] = e.target.value;
-                                  patch(i, { api_keys: ks, api_key: ks[0] ?? "", api_key_aliases: al });
-                                }}
-                              />
-                              <input
-                                className="input input-sm min-w-0 w-full flex-1 font-mono text-xs"
-                                type={revealed ? "text" : "password"}
-                                aria-label={`${t("settings.models.apiKey")} ${ki + 1}`}
-                                placeholder="sk-..."
-                                value={k}
-                                onChange={(e) => {
-                                  const ks = (m.api_keys?.length ? m.api_keys : m.api_key ? [m.api_key] : [""]).slice();
-                                  ks[ki] = e.target.value;
-                                  const al = (m.api_key_aliases?.length ? m.api_key_aliases : ks.map(() => "")).slice();
-                                  patch(i, { api_keys: ks, api_key: ks[0] ?? "", api_key_aliases: al });
-                                }}
-                              />
-                              <button
-                                type="button"
-                                className="btn btn-ghost btn-square btn-xs shrink-0"
-                                aria-label={revealed ? t("settings.models.apiKey.hide") : t("settings.models.apiKey.reveal")}
-                                title={revealed ? t("settings.models.apiKey.hide") : t("settings.models.apiKey.reveal")}
-                                onClick={() => {
-                                  const next = new Set(revealedKeys);
-                                  if (next.has(`${i}:${ki}`)) next.delete(`${i}:${ki}`);
-                                  else next.add(`${i}:${ki}`);
-                                  setRevealedKeys(next);
-                                }}
-                              >
-                                {revealed ? <IconEyeOff size={14} stroke={1.75} aria-hidden /> : <IconEye size={14} stroke={1.75} aria-hidden />}
-                              </button>
-                              <button
-                                type="button"
-                                className="btn btn-ghost btn-square btn-xs shrink-0 text-base-content/50"
-                                aria-label={t("settings.models.apiKey.remove")}
-                                title={t("settings.models.apiKey.remove")}
-                                onClick={() => {
-                                  const ks = (m.api_keys?.length ? m.api_keys : m.api_key ? [m.api_key] : [""]).slice();
-                                  const al = (m.api_key_aliases?.length ? m.api_key_aliases : ks.map(() => "")).slice();
-                                  ks.splice(ki, 1);
-                                  al.splice(ki, 1);
-                                  patch(i, { api_keys: ks, api_key: ks[0] ?? "", api_key_aliases: al });
-                                }}
-                              >
-                                <IconX size={14} stroke={1.75} aria-hidden />
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      });
-                    })()}
+                  {/* 单密钥(多 key/别名已移除;旧配置的 api_keys 只保留首个) */}
+                  <div className="flex items-center gap-1">
+                    <input
+                      className="input input-sm min-w-0 w-full flex-1 font-mono text-xs"
+                      type={revealedKeys.has(`k:${i}`) ? "text" : "password"}
+                      aria-label={t("settings.models.apiKey")}
+                      placeholder="sk-..."
+                      value={m.api_key ?? ""}
+                      onChange={(e) => patch(i, { api_key: e.target.value })}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-square btn-xs shrink-0"
+                      aria-label={revealedKeys.has(`k:${i}`) ? t("settings.models.apiKey.hide") : t("settings.models.apiKey.reveal")}
+                      title={revealedKeys.has(`k:${i}`) ? t("settings.models.apiKey.hide") : t("settings.models.apiKey.reveal")}
+                      onClick={() => {
+                        const next = new Set(revealedKeys);
+                        if (next.has(`k:${i}`)) next.delete(`k:${i}`);
+                        else next.add(`k:${i}`);
+                        setRevealedKeys(next);
+                      }}
+                    >
+                      {revealedKeys.has(`k:${i}`) ? <IconEyeOff size={14} stroke={1.75} aria-hidden /> : <IconEye size={14} stroke={1.75} aria-hidden />}
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    className="btn btn-outline btn-xs w-fit"
-                    onClick={() => {
-                      const keys = (m.api_keys?.length ? m.api_keys : m.api_key ? [m.api_key] : [""]).slice();
-                      const aliases = (m.api_key_aliases?.length ? m.api_key_aliases : keys.map(() => "")).slice();
-                      keys.push("");
-                      aliases.push("");
-                      patch(i, { api_keys: keys, api_key: keys[0] ?? "", api_key_aliases: aliases });
-                    }}
-                  >
-                    <IconPlus size={12} stroke={2} aria-hidden />
-                    {t("settings.models.apiKey.add")}
-                  </button>
                 </fieldset>
                 <fieldset className="fieldset gap-1.5">
                   <legend className="fieldset-legend">{t("settings.models.model")}</legend>
