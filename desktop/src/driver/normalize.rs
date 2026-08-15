@@ -546,7 +546,9 @@ impl Inner {
 pub(super) fn is_key_auth_error(msg: &str) -> bool {
     let m = msg.to_lowercase();
     m.contains("401")
+        || m.contains("403")
         || m.contains("unauthorized")
+        || m.contains("forbidden")
         || m.contains("invalid api key")
         || m.contains("authentication")
         || m.contains("insufficient_quota")

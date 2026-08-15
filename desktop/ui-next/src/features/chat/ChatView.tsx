@@ -50,7 +50,9 @@ function isKeyError(reason: string): boolean {
   const r = reason.toLowerCase();
   return (
     r.includes("401") ||
+    r.includes("403") ||
     r.includes("unauthorized") ||
+    r.includes("forbidden") ||
     r.includes("invalid api key") ||
     r.includes("authentication") ||
     r.includes("insufficient_quota") ||
@@ -67,6 +69,9 @@ function shortReason(reason: string): string {
   const r = reason.toLowerCase();
   if (r.includes("401") || r.includes("unauthorized") || r.includes("invalid api key") || r.includes("authentication")) {
     return "401 认证失败";
+  }
+  if (r.includes("403") || r.includes("forbidden") || r.includes("permission denied")) {
+    return "403 无权限";
   }
   if (r.includes("insufficient_quota") || r.includes("insufficient quota")) {
     return "额度不足";
