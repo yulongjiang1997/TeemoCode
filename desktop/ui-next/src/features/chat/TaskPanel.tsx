@@ -26,6 +26,12 @@ function feedLastText(s: ToolItem): string {
   return "";
 }
 
+/** 模型名剥来源后缀,卡片上只显示短名。 */
+function stripModelName(name: string): string {
+  const i = name.indexOf("@");
+  return i > 0 ? name.slice(0, i) : name;
+}
+
 export function TaskPanel({
   entries,
   subagents,
@@ -146,6 +152,11 @@ export function TaskPanel({
                     <div className="flex items-center gap-1.5">
                       <span aria-hidden className={`status ${statusTone(s.status)}`} />
                       <span className="min-w-0 flex-1 truncate text-xs">{s.title || t("chat.plan.subagentNameless")}</span>
+                      {s.model && (
+                        <span className="shrink-0 max-w-24 truncate rounded bg-base-300/60 px-1 py-px font-mono text-[9px] text-base-content/60" title={s.model}>
+                          {stripModelName(s.model)}
+                        </span>
+                      )}
                       <span className="shrink-0 text-[10px] text-base-content/50">
                         {s.status === "run" ? t("chat.plan.subagentRunning") : s.status === "ok" ? t("chat.plan.subagentDone") : t("chat.plan.subagentFailed")}
                       </span>

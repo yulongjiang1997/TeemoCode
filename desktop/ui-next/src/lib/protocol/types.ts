@@ -70,6 +70,8 @@ export interface ToolProgress {
   status?: string; // run | ok | fail
   line?: string;
   childSessionId?: string;
+  /** 子代理分配的模型(壳在 child_session 进度里注入;执行仍由引擎以父模型跑) */
+  model?: string;
 }
 
 /** 实时任务清单(plan 帧)的一条。 */
@@ -184,6 +186,8 @@ export interface ToolItem {
   lastLine?: string;
   /** 子代理子会话 ID(可打开完整回放) */
   childSessionId?: string;
+  /** 子代理分配的模型(壳在 child_session 进度里注入;执行仍由引擎以父模型跑) */
+  model?: string;
   /** Agent 工具已转后台,但子代理本身仍在运行 */
   background?: boolean;
   /** 后台终态已回填,等待吞掉紧随其后的重复 task_notification */

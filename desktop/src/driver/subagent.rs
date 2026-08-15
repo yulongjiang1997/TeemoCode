@@ -170,11 +170,11 @@ impl Inner {
             self.push_frame(child_sid, |seq| frame::user_input(&prompt, seq));
         }
         self.push_frame(child_sid, frame::task_started);
-        // 父卡挂子会话链接(UI 点开完整视图)
+        // 父卡挂子会话链接(UI 点开完整视图)+ 分配模型名(卡片显示)
         self.push_frame(&psid, |seq| {
             frame::tool_call_progress(
                 &ptc,
-                json!({ "kind": "child_session", "childSessionId": child_sid }),
+                json!({ "kind": "child_session", "childSessionId": child_sid, "model": model_name }),
                 seq,
             )
         });

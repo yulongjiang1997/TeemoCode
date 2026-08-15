@@ -235,7 +235,7 @@ function applyProgress(s: ChatState, tcId: string, p: ToolProgress): ChatState {
       patched = { ...prev, lastLine: p.line };
       break;
     case "child_session":
-      patched = { ...prev, childSessionId: p.childSessionId };
+      patched = { ...prev, childSessionId: p.childSessionId, model: p.model ?? prev.model };
       break;
     default:
       return s;
