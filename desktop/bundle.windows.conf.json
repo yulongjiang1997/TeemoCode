@@ -10,6 +10,7 @@
     "resources": {
       "../browser-extension/dist": "browser-extension",
       "binaries/ohmyagent-linux": "./",
+      "binaries/ohmyagent.exe": "./",
       "binaries/WebView2Loader.dll": "./",
       "../plugins/skills": "skills"
     },
