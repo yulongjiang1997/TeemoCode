@@ -487,8 +487,8 @@ describe("轮次与系统帧", () => {
 
   it("task-error 渲染错误系统行,缺 error 字段回退文案", () => {
     const s = run([frame("task-error", { error: "配额耗尽" })]);
-    expect(s.items.at(-1)).toEqual({ kind: "sys", tag: "error", text: "", key: "chat.sys.error", params: { reason: "配额耗尽" }, error: true });
-    expect(run([frame("task-error")]).items.at(-1)).toEqual({ kind: "sys", tag: "error", text: "", key: "chat.sys.errorUnknown", error: true });
+    expect(s.items.at(-1)).toEqual({ kind: "sys", tag: "error", text: "", key: "chat.sys.error", params: { reason: "配额耗尽" }, error: true, seq: 0 });
+    expect(run([frame("task-error")]).items.at(-1)).toEqual({ kind: "sys", tag: "error", text: "", key: "chat.sys.errorUnknown", error: true, seq: 0 });
   });
 
   it("user-input 解 base64(含多字节);坏编码回退原文", () => {
@@ -740,12 +740,12 @@ describe("旧格式帧兼容(data = base64(JSON) 字符串)", () => {
     ]);
     expect(s.items[0]).toEqual({ kind: "user", text: "旧格式输入" });
     expect(s.items[1]).toMatchObject({ kind: "perm", id: "p1", state: "expired" }); // task-error 过期开放卡
-    expect(s.items.at(-1)).toEqual({ kind: "sys", tag: "error", text: "", key: "chat.sys.error", params: { reason: "旧格式错误" }, error: true });
+    expect(s.items.at(-1)).toEqual({ kind: "sys", tag: "error", text: "", key: "chat.sys.error", params: { reason: "旧格式错误" }, error: true, seq: 0 });
   });
 
   it("裸 JSON 字符串形态的 data(云端观测形态)也可解", () => {
     const s = run([{ type: "task-error", data: JSON.stringify({ error: "裸串" }) }]);
-    expect(s.items.at(-1)).toEqual({ kind: "sys", tag: "error", text: "", key: "chat.sys.error", params: { reason: "裸串" }, error: true });
+    expect(s.items.at(-1)).toEqual({ kind: "sys", tag: "error", text: "", key: "chat.sys.error", params: { reason: "裸串" }, error: true, seq: 0 });
   });
 });
 

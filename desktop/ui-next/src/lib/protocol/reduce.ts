@@ -560,8 +560,8 @@ export function reduceFrame(s: ChatState, f: Frame): ChatState {
         items: [
           ...expireOpenAsks(s.items),
           data?.error
-            ? { kind: "sys" as const, tag: "error" as const, text: "", key: "chat.sys.error" as const, params: { reason: data.error }, error: true }
-            : { kind: "sys" as const, tag: "error" as const, text: "", key: "chat.sys.errorUnknown" as const, error: true },
+            ? { kind: "sys" as const, tag: "error" as const, text: "", key: "chat.sys.error" as const, params: { reason: data.error }, error: true, seq: (f as { seq?: number }).seq ?? 0 }
+            : { kind: "sys" as const, tag: "error" as const, text: "", key: "chat.sys.errorUnknown" as const, error: true, seq: (f as { seq?: number }).seq ?? 0 },
         ],
       };
     }

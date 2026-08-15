@@ -663,6 +663,9 @@ export function ChatView({
   // 本轮失败是否已处理(一回合发多个 task-error,只处理一次) + 本轮是否含 key 错误
   const failHandledRef = useRef(false);
   const keyErrThisTurnRef = useRef(false);
+  // 已处理过的错误 seq:切换成功后历史错误帧还在 items 里,没有这道闸会反复
+  // 触发轮换 + 重发(用户报障:切换成功还一直重发消息)
+  const handledErrSeqRef = useRef(0);
   useEffect(() => {
     if (state.running) {
       failHandledRef.current = false; // 新轮开始,复位"本轮失败已处理"
@@ -680,22 +683,22 @@ export function ChatView({
       if (state.turnEnded) keyFailRef.current = 0;
       return;
     }
+    // 只处理"本回合新增"的错误:历史错误(seq ≤ 已处理)不再触发轮换
+    const errSeq = (errItem as { seq?: number } | undefined)?.seq;
+    if (errSeq !== undefined && errSeq <= handledErrSeqRef.current) return;
     keyErrThisTurnRef.current = true;
     failHandledRef.current = true; // 本轮失败只处理一次(一回合可能多个 task-error)
+    handledErrSeqRef.current = errSeq ?? 0;
     void (async () => {
       rotatingRef.current = true;
       try {
         const cfg = await getConfig();
         // meta.model 是显示名(model_name),配置里可能叫 model(ID)或 name(显示名)
         const model = cfg?.models?.find((m) => m.model === meta.model || m.name === meta.model);
-        if (!model) {
-          composerRef.current.notifyError(`[轮换] 找不到模型 ${meta.model}`);
-          return;
-        }
+        if (!model) return;
         const keys = model.api_keys?.filter((k) => k.trim()) ?? [];
         keyFailRef.current += 1;
         composerRef.current.notifyError(`[轮换] 命中 key 错误,keyFail=${keyFailRef.current},keys=${keys.length}`);
-        // 重发该回合的用户指令(切换 key/模型后继续任务)
         let lastText = "";
         for (let i = state.items.length - 1; i >= 0; i--) {
           const it = state.items[i];
@@ -749,8 +752,8 @@ export function ChatView({
         );
         await sessionSetModel(meta.id, nextModel);
         await resend();
-      } catch (e) {
-        composerRef.current.notifyError(`[轮换] 失败: ${e instanceof Error ? e.message : String(e)}`);
+      } catch {
+        // 轮换失败:交给失败态人工处理
       } finally {
         rotatingRef.current = false;
       }

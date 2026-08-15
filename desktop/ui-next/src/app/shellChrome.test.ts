@@ -49,6 +49,7 @@ describe("windowContextLabel(原生窗口标题的上下文)", () => {
     settingsOpen: false,
     creating: false,
     cloudSpace: false,
+    statsSpace: false,
     ...over,
   });
 

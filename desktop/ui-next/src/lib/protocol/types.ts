@@ -208,6 +208,8 @@ export interface SysItem {
   /** key 的插值参数(原始值,非成品文案:think 的 level 要在渲染时再过一次
    *  词表才拿得到当前语言的档位名)。 */
   params?: Record<string, string>;
+  /** 帧 seq(轮换去重的错误判定等按它比对新旧)。 */
+  seq?: number;
 }
 
 /** 审批卡。 */

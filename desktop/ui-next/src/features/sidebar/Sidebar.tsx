@@ -681,7 +681,9 @@ function Overview({
       ? "sidebar.overview.cloud.desc"
       : space === "chat"
         ? "sidebar.overview.chat.desc"
-        : "sidebar.overview.local.desc",
+        : space === "stats"
+          ? "sidebar.overview.stats.desc"
+          : "sidebar.overview.local.desc",
   );
   // 统计口径 = **看得见的列表**。项目级归档也要排除(旧 UI sidebar.tsx 先
   // activeLocalAll = 过滤掉 isProjectArchived 再统计):只按会话级 m.archived
@@ -1109,6 +1111,7 @@ export function Sidebar({
   };
 
   const body = () => {
+    if (space === "stats") return null;
 
     if (space === "cloud") {
       return (
@@ -1382,7 +1385,7 @@ export function Sidebar({
           title={t("sidebar.newTask")}
           className="btn btn-primary btn-square btn-xs"
           onClick={actions.onNewTask}
-          disabled={false}
+          disabled={space === "stats"}
         >
           <IconPlus size={14} stroke={2} aria-hidden />
         </button>
