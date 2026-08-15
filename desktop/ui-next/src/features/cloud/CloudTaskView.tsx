@@ -735,7 +735,7 @@ export function CloudTaskView({
             </>
           ) : (
             <>
-              {h.chat.plan.length > 0 && <TaskPanel entries={h.chat.plan} />}
+              {h.chat.plan.length > 0 && <TaskPanel entries={h.chat.plan} onDismiss={() => {}} />}
               <CloudComposer h={h} pending={pending} onSend={send} />
             </>
           )}

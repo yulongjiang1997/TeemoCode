@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { PlanEntry } from "@/lib/protocol/types";
 import { TaskPanel } from "./TaskPanel";
@@ -13,19 +13,19 @@ const PLAN: PlanEntry[] = [
 
 describe("任务面板", () => {
   it("收起态:一行摘要 = 进度 + 正在项", () => {
-    render(<TaskPanel entries={PLAN} />);
+    render(<TaskPanel entries={PLAN} onDismiss={vi.fn()} />);
     expect(screen.getByText("任务 1/3")).toBeTruthy();
     expect(screen.getByText(/正在:改代码/)).toBeTruthy();
     expect(screen.getByRole("button", { expanded: false })).toBeTruthy();
   });
 
   it("无进行中项时摘要给「接下来」的 pending 项", () => {
-    render(<TaskPanel entries={[{ content: "读代码", status: "completed" }, { content: "写文档", status: "pending" }]} />);
+    render(<TaskPanel entries={[{ content: "读代码", status: "completed" }, { content: "写文档", status: "pending" }]} onDismiss={vi.fn()} />);
     expect(screen.getByText(/接下来:写文档/)).toBeTruthy();
   });
 
   it("展开:限高清单,checkbox 只读态映射 completed;摘要行收起", async () => {
-    render(<TaskPanel entries={PLAN} />);
+    render(<TaskPanel entries={PLAN} onDismiss={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { expanded: false }));
     expect(screen.getByRole("button", { expanded: true })).toBeTruthy();
     const boxes = screen.getAllByRole("checkbox") as HTMLInputElement[];
@@ -42,7 +42,7 @@ describe("任务面板", () => {
       { id: "b", content: "写接口", status: "pending", depends_on: ["a"] },
       { id: "c", content: "跑测试", status: "pending", depends_on: ["a", "b"] },
     ];
-    render(<TaskPanel entries={plan} />);
+    render(<TaskPanel entries={plan} onDismiss={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { expanded: false }));
     // 全员编号("等 #N" 才有落点)
     expect(screen.getByText("#1")).toBeTruthy();
@@ -63,6 +63,7 @@ describe("任务面板", () => {
           { id: "a", content: "建表", status: "completed" },
           { id: "b", content: "写接口", status: "in_progress", depends_on: ["a"] },
         ]}
+        onDismiss={vi.fn()}
       />,
     );
     await userEvent.click(screen.getByRole("button", { expanded: false }));
@@ -70,7 +71,7 @@ describe("任务面板", () => {
     expect(screen.getByText("写接口").className).toContain("text-primary"); // 照常进行中样式
     unmount();
 
-    render(<TaskPanel entries={PLAN} />);
+    render(<TaskPanel entries={PLAN} onDismiss={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { expanded: false }));
     expect(screen.queryByText("#1")).toBeNull(); // 无依赖关系不编号
   });
@@ -82,6 +83,7 @@ describe("任务面板", () => {
           { id: "a", content: "建表", status: "pending", blocked: true },
           { id: "b", content: "写接口", status: "pending", depends_on: ["a"], blocked: false },
         ]}
+        onDismiss={vi.fn()}
       />,
     );
     await userEvent.click(screen.getByRole("button", { expanded: false }));

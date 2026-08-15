@@ -119,8 +119,6 @@ import { TaskPanel } from "./TaskPanel";
 import { FilesDrawer } from "@/features/files/FilesDrawer";
 import { useSessionFeed } from "./useSessionFeed";
 import { stripSourceSuffix, stripTierPrefix } from "@/lib/models/modelMenu";
-// 临时诊断:备用切换运行计数(模块级,判断是否同一次运行被重复触发)
-let dbgRun = 0;
 
 const PIN_THRESHOLD = 40; // 距底多少像素内算"贴底"(scroll 只做进入贴底的单向判定)
 const SCROLLBAR_EDGE = 18; // 视口右缘按下算滚动条拖拽意图,解除跟随
@@ -695,6 +693,11 @@ export function ChatView({
   // ref 供逻辑用,state 供 Composer 显示标记 + 主模型选择不变。
   const fallbackRef = useRef<{ primary: string; current: string } | null>(null);
   const [fallbackUse, setFallbackUse] = useState<{ primary: string; current: string } | null>(null);
+  // 任务步骤面板手动关闭:结束未完成时保留供回顾,可收起;任务继续跑自动重现
+  const [planDismissed, setPlanDismissed] = useState(false);
+  useEffect(() => {
+    if (state.running && state.plan.length > 0) setPlanDismissed(false);
+  }, [state.running, state.plan.length]);
   const keyErrThisTurnRef = useRef(false);
   // 已处理过的错误 seq:切换成功后历史错误帧还在 items 里,没有这道闸会反复
   // 触发轮换 + 重发(用户报障:切换成功还一直重发消息)
@@ -718,9 +721,6 @@ export function ChatView({
     const isNewKeyError = isKeyError(reason) && errSeq !== undefined && errSeq !== handledErrSeqRef.current;
     if (!isNewKeyError) {
       // 任务成功 / 非 key 错误 / 历史错误重放:正在用备用则恢复主模型(一次性语义)
-      composerRef.current.notifyError(
-        `[dbg] NOT-new | reason=${reason.slice(0, 60) || "∅"} | isKey=${isKeyError(reason)} | errSeq=${String(errSeq ?? "∅")} | handled=${handledErrSeqRef.current} | failHandled=${failHandledRef.current}`,
-      );
       if (fallbackRef.current) {
         const fb = fallbackRef.current;
         fallbackRef.current = null;
@@ -729,9 +729,6 @@ export function ChatView({
       }
       return;
     }
-    composerRef.current.notifyError(
-      `[dbg] SWITCH#${++dbgRun} | reason=${reason.slice(0, 50)} | errSeq=${String(errSeq ?? "∅")} | handled=${handledErrSeqRef.current} | items=${state.items.length} | turnEnded=${state.turnEnded} | running=${state.running}`,
-    );
     keyErrThisTurnRef.current = true;
     failHandledRef.current = true; // 本轮失败只处理一次(一回合可能多个 task-error)
     handledErrSeqRef.current = errSeq ?? 0;
@@ -1211,7 +1208,9 @@ export function ChatView({
           再压一条通栏线是双重描边;云端视图同款 */}
       <footer className="shrink-0 p-3">
         <div className="mx-auto flex chat-measure flex-col gap-2">
-          {state.plan.length > 0 && <TaskPanel entries={state.plan} />}
+          {state.plan.length > 0 && !planDismissed && (
+            <TaskPanel entries={state.plan} onDismiss={() => setPlanDismissed(true)} />
+          )}
           <Composer
             sessionId={meta.id}
             state={state}
