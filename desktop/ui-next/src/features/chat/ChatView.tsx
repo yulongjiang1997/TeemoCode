@@ -62,6 +62,23 @@ function isKeyError(reason: string): boolean {
   );
 }
 
+/** 错误摘要:切换提示只显示关键信息,不刷整段报错。 */
+function shortReason(reason: string): string {
+  const r = reason.toLowerCase();
+  if (r.includes("401") || r.includes("unauthorized") || r.includes("invalid api key") || r.includes("authentication")) {
+    return "401 认证失败";
+  }
+  if (r.includes("insufficient_quota") || r.includes("insufficient quota")) {
+    return "额度不足";
+  }
+  if (r.includes("rate limit") || r.includes("rate_limit") || r.includes("429")) {
+    return "触发限流";
+  }
+  const first = (reason.split("\n")[0] ?? "").trim();
+  if (first) return first.length > 40 ? `${first.slice(0, 40)}…` : first;
+  return "key 错误";
+}
+
 /** 读取会话的备用模型链(与 composer 同一 localStorage 键)。 */
 function readFallbackModels(sid: string): string[] {
   try {
@@ -71,6 +88,9 @@ function readFallbackModels(sid: string): string[] {
     return [];
   }
 }
+
+/** 备用模型链的下一格(纯逻辑见 lib/util/fallbackModel.ts)。 */
+import { nextFallbackModel } from "@/lib/util/fallbackModel";
 
 import {
   anchorScrollTop,
@@ -698,7 +718,6 @@ export function ChatView({
         if (!model) return;
         const keys = model.api_keys?.filter((k) => k.trim()) ?? [];
         keyFailRef.current += 1;
-        composerRef.current.notifyError(`[轮换] 命中 key 错误,keyFail=${keyFailRef.current},keys=${keys.length}`);
         let lastText = "";
         for (let i = state.items.length - 1; i >= 0; i--) {
           const it = state.items[i];
@@ -728,8 +747,8 @@ export function ChatView({
             rotatedAliases.splice(idx, 1);
             rotatedAliases.push(ca);
           }
-          // 切换提示:当前 key(别名或第几个)+ 错误原因 + 切到哪个 key
-          composerRef.current.notifyError(t("chat.keySwitched", { key: curLabel, reason, next: nextLabel }));
+          // 切换提示:当前 key(别名或第几个)+ 错误摘要 + 切到哪个 key
+          composerRef.current.notifyError(t("chat.keySwitched", { key: curLabel, reason: shortReason(reason), next: nextLabel }));
           await saveConfig({
             ...cfg,
             models: (cfg?.models ?? []).map((m) =>
@@ -739,16 +758,18 @@ export function ChatView({
           await resend();
           return;
         }
-        // 当前模型 key 全部试过 → 按配置顺序切到下一个备用模型
-        const chain = [meta.model, ...readFallbackModels(meta.id)];
-        const pos = chain.indexOf(meta.model);
-        const nextModel = chain[pos + 1];
+        // 当前模型 key 全部试过 → 切到下一个备用模型。
+        // 链 = 勾选的备用模型列表;当前模型在链中的位置 +1 才是下一个——
+        // 用"meta.model 打头 + 全链"的方式,切换后 meta.model 仍在链首,
+        // chain[1] 恒等于自己,永远只切一次。
+        const backups = readFallbackModels(meta.id);
+        const nextModel = nextFallbackModel(meta.model, backups);
         const nextCfg = cfg?.models?.find((m) => m.model === nextModel || m.name === nextModel);
         if (!nextModel || !nextCfg) return; // 没有备用模型了:任务失败,留失败态
         keyFailRef.current = 0; // 新模型从头试 key
-        // 切换提示:主模型错误原因 + 切到哪个备用模型
+        // 切换提示:模型名 + 错误摘要 + 切到哪个备用模型
         composerRef.current.notifyError(
-          t("chat.fallbackSwitched", { model: meta.model, reason, next: nextModel }),
+          t("chat.fallbackSwitched", { model: meta.model, reason: shortReason(reason), next: nextModel }),
         );
         await sessionSetModel(meta.id, nextModel);
         await resend();
