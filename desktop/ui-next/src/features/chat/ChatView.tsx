@@ -685,6 +685,10 @@ export function ChatView({
   const rotatingRef = useRef(false);
   // 本轮失败是否已处理(一回合发多个 task-error,只处理一次) + 本轮是否含 key 错误
   const failHandledRef = useRef(false);
+  // 正在使用的备用模型(一次性:任务结束/耗尽恢复主模型,不永久切换)。
+  // ref 供逻辑用,state 供 Composer 显示标记 + 主模型选择不变。
+  const fallbackRef = useRef<{ primary: string; current: string } | null>(null);
+  const [fallbackUse, setFallbackUse] = useState<{ primary: string; current: string } | null>(null);
   const keyErrThisTurnRef = useRef(false);
   // 已处理过的错误 seq:切换成功后历史错误帧还在 items 里,没有这道闸会反复
   // 触发轮换 + 重发(用户报障:切换成功还一直重发消息)
@@ -702,11 +706,20 @@ export function ChatView({
     const reason =
       errItem && errItem.kind === "sys" && errItem.params?.reason ? String(errItem.params.reason) : "";
     if (!isKeyError(reason)) {
+      // 任务正常结束(成功或非 key 错误):正在用备用则恢复主模型(一次性语义)
+      if (fallbackRef.current) {
+        const fb = fallbackRef.current;
+        fallbackRef.current = null;
+        setFallbackUse(null);
+        void sessionSetModel(meta.id, fb.primary);
+      }
       return;
     }
-    // 只处理"本回合新增"的错误:历史错误(seq ≤ 已处理)不再触发轮换
+    // 只处理"本回合新增"的错误:历史错误帧还在 items 里,不做这道闸会反复触发
+    // 重发。注意 seq 不是单调的(回放/离线帧 seq 可能巨大),必须精确相等——
+    // 用 <= 会把之后所有真实错误(小 seq)误判成已处理,永不切换。
     const errSeq = (errItem as { seq?: number } | undefined)?.seq;
-    if (errSeq !== undefined && errSeq <= handledErrSeqRef.current) return;
+    if (errSeq !== undefined && errSeq === handledErrSeqRef.current) return;
     keyErrThisTurnRef.current = true;
     failHandledRef.current = true; // 本轮失败只处理一次(一回合可能多个 task-error)
     handledErrSeqRef.current = errSeq ?? 0;
@@ -737,11 +750,22 @@ export function ChatView({
         const nextName = nextFallbackModel(meta.model, backups, resolveModel);
         const nextCfg = cfg?.models?.find((m) => m.model === nextName || m.name === nextName);
         if (!nextName || !nextCfg || nextCfg.model === model.model) {
-          return; // 没有备用/配置缺失/下一格就是自己(链没进展):停,留失败态
+          // 没有备用/配置缺失/没进展:恢复主模型,留失败态
+          if (fallbackRef.current) {
+            const fb = fallbackRef.current;
+            fallbackRef.current = null;
+            setFallbackUse(null);
+            void sessionSetModel(meta.id, fb.primary);
+          }
+          return;
         }
-        // 切换提示:模型名 + 错误摘要 + 切到哪个备用模型
+        // 主模型 = 进入备用链前的模型;每次任务优先主模型由"结束时恢复"保证
+        const primary = fallbackRef.current?.primary ?? meta.model;
+        fallbackRef.current = { primary, current: nextName };
+        setFallbackUse({ primary, current: nextName });
+        // 切换提示:主模型 + 错误摘要 + 当前改用哪个备用模型(一次性)
         composerRef.current.notifyError(
-          t("chat.fallbackSwitched", { model: meta.model, reason: shortReason(reason), next: nextName }),
+          t("chat.fallbackSwitched", { model: primary, reason: shortReason(reason), next: nextName }),
         );
         await sessionSetModel(meta.id, nextName);
         await resend();
@@ -1173,6 +1197,7 @@ export function ChatView({
             state={state}
             meta={meta}
             ctl={composer}
+            fallbackUse={fallbackUse}
             onAfterSend={followBottom}
             focusRequest={focusRequest}
             onFocusRequestHandled={onFocusRequestHandled}

@@ -203,6 +203,7 @@ export function Composer({
   state,
   meta,
   ctl,
+  fallbackUse,
   onAfterSend,
   focusRequest = 0,
   onFocusRequestHandled,
@@ -211,6 +212,8 @@ export function Composer({
   state: ChatState;
   meta: SessionMeta;
   ctl: ComposerCtl;
+  /** 备用模型使用中:主模型选择保持不变,仅标记当前实际用的备用模型 */
+  fallbackUse?: { primary: string; current: string } | null;
   onAfterSend?: () => void;
   focusRequest?: number;
   onFocusRequestHandled?: (request: number) => void;
@@ -364,7 +367,9 @@ export function Composer({
   // modelThink 同样查不到 → 思考档触发器回落「低」给出错读数。
   // modelMenuList:模型被删/改名后补一条兜底项,否则连"当前用的是哪条"都看不出。
   const currentModel = resolveModelName(models, state.model || meta.model);
-  const menuModels = modelMenuList(models, currentModel);
+  // 备用模型使用中:主模型选择保持不变(shownModel = 主),标记条单独提示实际备用
+  const shownModel = fallbackUse ? fallbackUse.primary : currentModel;
+  const menuModels = modelMenuList(models, shownModel);
   const modelThink = models.find((m) => m.name === currentModel)?.think;
   const effThink = state.think || meta.think || modelThink || "low";
   const mode = state.permMode || meta.mode || "default";
@@ -573,13 +578,22 @@ export function Composer({
           />
           <ModelMenu
             models={menuModels}
-            current={currentModel}
+            current={shownModel}
             onPick={pickModel}
             disabled={state.running}
             title={state.running ? t("chat.switchWhileRunning") : t("chat.model.tip")}
             fallbackModels={fallbackModels}
             onFallbackChange={changeFallback}
           />
+          {/* 备用模型使用中标记:主模型选择不变,这里提示当前实际用的是备用 */}
+          {fallbackUse && (
+            <span
+              className="badge badge-outline badge-sm shrink-0 border-amber-500/60 text-[10px] text-amber-600/90"
+              title={t("chat.model.fallbackInUse")}
+            >
+              {t("chat.model.fallbackInUse")}: {fallbackUse.current}
+            </span>
+          )}
 
           {/* 布局规范:上下文用量是输入侧元信息,归 composer 集群右端
               (形态收口在 composerKit/UsageRing) */}

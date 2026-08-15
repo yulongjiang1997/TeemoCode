@@ -9,7 +9,7 @@
 // - SkillsMenu:会话技能启用集(唯一的多选:勾选不关菜单,整单全量提交)。
 // 关闭胶水统一 useDismiss(外点 pointerdown + Esc;不用 onBlur,WebKitGTK
 // 点按钮不移焦点会误关)。
-import { IconCheck, IconChevronDown } from "@tabler/icons-react";
+import { IconCheck, IconChevronDown, IconX } from "@tabler/icons-react";
 import { useRef, useState } from "react";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
@@ -242,33 +242,78 @@ export function ModelMenu({
                 ])
               : tabItems.map((m) => itemOf(m))}
           </ul>
-          {/* 备用模型(故障转移链):主模型所有 key 失败后按勾选顺序自动切换 */}
+          {/* 备用模型(故障转移链):主模型报错后按顺序逐个尝试,一次性使用 */}
           {onFallbackChange && (
             <div className="shrink-0 border-t border-base-300/60 pt-1">
               <div className="menu-title flex flex-row items-baseline gap-2 text-xs">
                 <span className="min-w-0 flex-1 truncate">{t("chat.model.fallback")}</span>
               </div>
-              <ul className="menu w-full h-40 shrink-0 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto p-0">
-                {models
-                  .filter((m) => m.name !== current && !m.locked)
-                  .map((m) => (
-                    <li key={m.name}>
-                      <label className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          className="checkbox checkbox-xs shrink-0"
-                          checked={fallbackModels?.includes(m.name) ?? false}
-                          onChange={(e) => {
-                            const next = new Set(fallbackModels ?? []);
-                            if (e.target.checked) next.add(m.name);
-                            else next.delete(m.name);
-                            onFallbackChange([...next]);
-                          }}
-                        />
-                        <span className="min-w-0 flex-1 truncate text-xs">{modelDisplay(m).label}</span>
-                      </label>
+              {/* 下拉选择 → 追加到备用列表 */}
+              <div className="flex items-center gap-1 px-2 pb-1">
+                <select
+                  className="select select-xs min-w-0 flex-1"
+                  value=""
+                  aria-label={t("chat.model.fallback")}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v && !(fallbackModels ?? []).includes(v)) {
+                      onFallbackChange([...(fallbackModels ?? []), v]);
+                    }
+                  }}
+                >
+                  <option value="">{t("chat.model.fallbackPlaceholder")}</option>
+                  {models
+                    .filter((m) => m.name !== current && !m.locked && !(fallbackModels ?? []).includes(m.name))
+                    .map((m) => (
+                      <option key={m.name} value={m.name}>
+                        {modelDisplay(m).label}
+                      </option>
+                    ))}
+                </select>
+              </div>
+              {/* 已追加列表:整行可拖动排序 */}
+              <ul className="menu w-full max-h-36 shrink-0 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto p-0">
+                {(fallbackModels ?? []).length === 0 && (
+                  <li className="px-3 py-1 text-[10px] text-base-content/40">{t("chat.model.fallbackEmpty")}</li>
+                )}
+                {(fallbackModels ?? []).map((name, fi) => {
+                  const fm = models.find((m) => m.name === name);
+                  return (
+                    <li key={name}>
+                      <div
+                        className="flex w-full items-center gap-1.5"
+                        draggable
+                        onDragStart={(e) => {
+                          e.dataTransfer.effectAllowed = "move";
+                          e.dataTransfer.setData("text/plain", String(fi));
+                        }}
+                        onDragOver={(e) => {
+                          if ((fallbackModels ?? []).length > 1) e.preventDefault();
+                        }}
+                        onDrop={(e) => {
+                          const from = Number(e.dataTransfer.getData("text/plain"));
+                          if (Number.isFinite(from) && from !== fi) {
+                            const next = [...(fallbackModels ?? [])];
+                            const [moved] = next.splice(from, 1);
+                            if (moved !== undefined) next.splice(fi, 0, moved);
+                            onFallbackChange(next);
+                          }
+                        }}
+                      >
+                        <span className="min-w-0 flex-1 truncate text-xs">{fm ? modelDisplay(fm).label : name}</span>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-square btn-xs shrink-0 text-base-content/50"
+                          aria-label={t("chat.model.fallbackRemove")}
+                          title={t("chat.model.fallbackRemove")}
+                          onClick={() => onFallbackChange((fallbackModels ?? []).filter((x) => x !== name))}
+                        >
+                          <IconX size={12} stroke={1.75} aria-hidden />
+                        </button>
+                      </div>
                     </li>
-                  ))}
+                  );
+                })}
               </ul>
             </div>
           )}
