@@ -276,6 +276,7 @@ export const zh = {
   "settings.models.sum.think": "思考{level}",
   "settings.models.sum.vision": "支持图片",
   "settings.models.setDefault": "设为默认",
+  "settings.models.duplicate": "复制模型(名称+copy)",
   "settings.models.delete": "删除",
   "settings.mcp.add": "添加 MCP",
   "settings.mcp.empty": "还没有 MCP 服务器,点击「添加 MCP」配置第一个。",

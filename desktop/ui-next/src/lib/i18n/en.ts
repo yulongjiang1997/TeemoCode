@@ -268,6 +268,7 @@ export const en: Record<MessageKey, string> = {
   "settings.models.sum.think": "thinking {level}",
   "settings.models.sum.vision": "vision",
   "settings.models.setDefault": "Set default",
+  "settings.models.duplicate": "Duplicate model (name + copy)",
   "settings.models.delete": "Delete",
   "settings.mcp.add": "Add MCP",
   "settings.mcp.empty": "No MCP servers yet. Click “Add MCP” to configure the first one.",

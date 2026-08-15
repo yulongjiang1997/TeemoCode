@@ -196,6 +196,26 @@ export function ModelsSection({
                   </button>
                 )
               )}
+              {/* 快捷复制:新增一条同配置的模型,名称 = 原名 + copy(仅可编辑条目) */}
+              {!managed && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs shrink-0 text-base-content/50 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                  title={t("settings.models.duplicate")}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    // 复制品转为自定义模型(source 清空):可自由改名/编辑/删除
+                    const copy = { ...m, source: undefined, name: `${m.name || m.model}copy` };
+                    onDraft((d) => {
+                      const next = [...d.models];
+                      next.splice(i + 1, 0, copy);
+                      return { ...d, models: next };
+                    });
+                  }}
+                >
+                  {t("settings.models.duplicate")}
+                </button>
+              )}
               {!m.source && (
                 <button
                   type="button"

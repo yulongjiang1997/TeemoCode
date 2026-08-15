@@ -708,6 +708,13 @@ export function ChatView({
       }
     }
   }, [meta.id]);
+  // 备用链详细调试日志(会话区持久显示,排查用;发布时移除)
+  const [debugLog, setDebugLog] = useState<string[]>([]);
+  const [debugCollapsed, setDebugCollapsed] = useState(false);
+  const dbg = useCallback((m: string) => {
+    const line = `[${new Date().toLocaleTimeString("zh-CN", { hour12: false })}] ${m}`;
+    setDebugLog((l) => [...l.slice(-200), line]);
+  }, []);
   // 任务步骤面板手动关闭:结束未完成时保留供回顾,可收起;任务继续跑自动重现
   const [planDismissed, setPlanDismissed] = useState(false);
   useEffect(() => {
@@ -729,11 +736,11 @@ export function ChatView({
     const errItem = [...state.items].reverse().find((it) => it.kind === "sys" && it.error);
     const reason =
       errItem && errItem.kind === "sys" && errItem.params?.reason ? String(errItem.params.reason) : "";
-    // 只处理"本回合新增"的 key 错误:历史错误帧还在 items 里,不做这道闸会反复
-    // 触发重发。注意 seq 不是单调的(回放/离线帧 seq 可能巨大),必须精确相等——
-    // 用 <= 会把之后所有真实错误(小 seq)误判成已处理,永不切换。
     const errSeq = (errItem as { seq?: number } | undefined)?.seq;
     const isNewKeyError = isKeyError(reason) && errSeq !== undefined && errSeq !== handledErrSeqRef.current;
+    dbg(
+      `run running=${state.running} turnEnded=${state.turnEnded} items=${state.items.length} | errSeq=${String(errSeq ?? "∅")} handled=${handledErrSeqRef.current} failHandled=${failHandledRef.current} isNewKey=${isNewKeyError} reason=${reason.slice(0, 60) || "∅"}`,
+    );
     if (!isNewKeyError) {
       // 任务成功 / 非 key 错误 / 历史错误重放:正在用备用则恢复主模型(一次性语义)
       if (fallbackRef.current) {
@@ -741,6 +748,7 @@ export function ChatView({
         fallbackRef.current = null;
         setFallbackUse(null);
         void sessionSetModel(meta.id, fb.primary);
+        dbg(`restore→主模型 ${fb.primary} (非新增key错误)`);
       }
       return;
     }
@@ -775,6 +783,9 @@ export function ChatView({
         const nextCfg = cfg?.models?.find((m) => m.model === nextName || m.name === nextName);
         // 无进展判定按"名字是否还是自己"(多个模型可能共用同一 model 字段,
         // 按 model 比较会把不同备用误判成同一个)。链走完/没进展:恢复主模型。
+        dbg(
+          `chain meta=${meta.model} backups=${JSON.stringify(backups)} | resolveMeta=${String(resolveModel(meta.model) ?? "∅")} | next=${String(nextName ?? "∅")} | nextCfg=${nextCfg?.model ?? "∅"} | stop=${String(!nextName || !nextCfg || nextName === meta.model)}`,
+        );
         if (!nextName || !nextCfg || nextName === meta.model) {
           // 没有备用/配置缺失/没进展:恢复主模型,留失败态
           if (fallbackRef.current) {
@@ -782,6 +793,7 @@ export function ChatView({
             fallbackRef.current = null;
             setFallbackUse(null);
             void sessionSetModel(meta.id, fb.primary);
+            dbg(`restore→主模型 ${fb.primary} (链走完/没进展)`);
           }
           return;
         }
@@ -789,12 +801,15 @@ export function ChatView({
         const primary = fallbackRef.current?.primary ?? meta.model;
         fallbackRef.current = { primary, current: nextName };
         setFallbackUse({ primary, current: nextName });
+        dbg(`switch → ${nextName} (primary=${primary})`);
         // 切换提示:主模型 + 错误摘要 + 当前改用哪个备用模型(一次性)
         composerRef.current.notifyError(
           t("chat.fallbackSwitched", { model: primary, reason: shortReason(reason), next: nextName }),
         );
         await sessionSetModel(meta.id, nextName);
+        dbg(`sessionSetModel(${nextName}) OK`);
         await resend();
+        dbg(`resend OK`);
       } catch {
         // 轮换失败:交给失败态人工处理
       } finally {
@@ -1215,6 +1230,43 @@ export function ChatView({
           <span className="badge badge-outline badge-sm border-amber-500/60 text-[10px] text-amber-600/90">
             ⚠️ {t("chat.model.fallbackInUse")}: {stripSourceSuffix(stripTierPrefix(fallbackUse.current))}
           </span>
+        </div>
+      )}
+      {/* 备用链调试日志(持久显示,排查用) */}
+      {debugLog.length > 0 && (
+        <div className="mx-3 mb-1 rounded-box border border-dashed border-amber-500/40 bg-base-200/40 p-2">
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-[10px] font-bold text-amber-600/80">备用链调试日志</span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                className="btn btn-ghost btn-xs text-[10px] text-base-content/50"
+                onClick={() => void navigator.clipboard?.writeText(debugLog.join("\n"))}
+              >
+                复制
+              </button>
+              <button type="button" className="btn btn-ghost btn-xs text-[10px] text-base-content/50" onClick={() => setDebugLog([])}>
+                清空
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-square btn-xs text-base-content/50"
+                aria-label="收起调试日志"
+                onClick={() => setDebugCollapsed((c) => !c)}
+              >
+                {debugCollapsed ? "▸" : "▾"}
+              </button>
+            </div>
+          </div>
+          {!debugCollapsed && (
+            <ul className="flex max-h-40 cursor-text select-text flex-col gap-0.5 overflow-y-auto font-mono text-[10px] leading-tight text-base-content/70">
+              {debugLog.map((l, i) => (
+                <li key={i} className="whitespace-pre-wrap break-all">
+                  {l}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
