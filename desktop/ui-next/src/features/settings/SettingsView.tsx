@@ -23,7 +23,7 @@ import {
 import { isWindowsShell } from "@/lib/ipc/host";
 import { inDesktopShell } from "@/lib/ipc/ipc";
 import { readCustomTheme, readTheme, setCustomTheme, setTheme, THEMES, CUSTOM_THEME, type CustomTheme, type Theme } from "@/lib/theme";
-import { readBgImage, readBgOpacity, readMaskOpacity, writeBgImage, writeBgOpacity, writeMaskOpacity } from "@/lib/util/prefs";
+import { readBgBlur, readBgImage, readBgOpacity, readMaskOpacity, writeBgBlur, writeBgImage, writeBgOpacity, writeMaskOpacity } from "@/lib/util/prefs";
 import { customThemeVars, randomTheme, roleHex, COLOR_ROLES, DEFAULT_CUSTOM, BORDER_RANGE, RADIUS_RANGE, SIZE_RANGE, type ColorRole } from "@/lib/customTheme";
 import { useDismiss } from "@/lib/util/useDismiss";
 import { useEscLayer } from "@/lib/util/escLayer";
@@ -434,6 +434,7 @@ function GeneralSection() {
   const [bgImage, setBgImageState] = useState(readBgImage);
   const [bgOpacity, setBgOpacityState] = useState(readBgOpacity);
   const [maskOpacity, setMaskOpacityState] = useState(readMaskOpacity);
+  const [bgBlur, setBgBlurState] = useState(readBgBlur);
   const bgFileRef = useRef<HTMLInputElement | null>(null);
   const pickBg = (file: File | null | undefined) => {
     if (!file || !file.type.startsWith("image/")) return;
@@ -586,6 +587,25 @@ function GeneralSection() {
               }}
             />
             <span className="w-8 text-right text-xs tabular-nums text-base-content/60">{maskOpacity}%</span>
+          </div>
+        </SettingRow>
+        <SettingRow label={t("settings.appearance.bgBlur")} hint={t("settings.appearance.bgBlurHint")}>
+          <div className="flex items-center gap-2">
+            <input
+              type="range"
+              min={0}
+              max={20}
+              className="range range-xs w-40"
+              aria-label={t("settings.appearance.bgBlur")}
+              value={bgBlur}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setBgBlurState(v);
+                writeBgBlur(v);
+                window.dispatchEvent(new Event("mc-bg-changed"));
+              }}
+            />
+            <span className="w-8 text-right text-xs tabular-nums text-base-content/60">{bgBlur}px</span>
           </div>
         </SettingRow>
         <SettingRow label={t("settings.appearance.language")}>

@@ -139,3 +139,22 @@ export function writeMaskOpacity(pct: number): void {
     // 只丢持久化
   }
 }
+
+/** 背景图模糊度(px;0-20,默认 4 = 原 backdrop-blur-xs 的磨砂感)。
+ *  在根图层统一模糊一次,跨区域无缝(各区域各自 blur 会有接缝)。 */
+export function readBgBlur(): number {
+  try {
+    const v = Number(localStorage.getItem("mc.bgBlur"));
+    return Number.isFinite(v) ? Math.min(Math.max(v, 0), 20) : 4;
+  } catch {
+    return 4;
+  }
+}
+
+export function writeBgBlur(px: number): void {
+  try {
+    localStorage.setItem("mc.bgBlur", String(Math.min(Math.max(px, 0), 20)));
+  } catch {
+    // 只丢持久化
+  }
+}

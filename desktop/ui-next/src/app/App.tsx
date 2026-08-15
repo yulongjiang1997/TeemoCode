@@ -47,7 +47,7 @@ import {
 } from "@/lib/ipc/sessions";
 import { noticeForQueuedDelivery, noticeForSessionEvent, type NoticeKind, type SessionNotice } from "@/lib/notices";
 import { deliverQueued, dropStash } from "@/features/chat/composer/stash";
-import { readLastSession, writeLastSession, writeSpace, readBgImage, readBgOpacity, readMaskOpacity, type Space } from "@/lib/util/prefs";
+import { readLastSession, writeLastSession, writeSpace, readBgImage, readBgOpacity, readMaskOpacity, readBgBlur, type Space } from "@/lib/util/prefs";
 import { projectKey, readArchivedProjects } from "@/lib/util/projects";
 
 // 统一图标族:@tabler/icons-react(2026-08-07 由 lucide 换过来;组件名
@@ -321,11 +321,13 @@ export function App() {
   const [bgImage, setBgImage] = useState(readBgImage);
   const [bgOpacity, setBgOpacity] = useState(readBgOpacity);
   const [maskOpacity, setMaskOpacity] = useState(readMaskOpacity);
+  const [bgBlur, setBgBlur] = useState(readBgBlur);
   useEffect(() => {
     const refresh = () => {
       setBgImage(readBgImage());
       setBgOpacity(readBgOpacity());
       setMaskOpacity(readMaskOpacity());
+      setBgBlur(readBgBlur());
     };
     window.addEventListener("mc-bg-changed", refresh);
     return () => window.removeEventListener("mc-bg-changed", refresh);
@@ -695,6 +697,7 @@ export function App() {
             backgroundImage: `url(${bgImage})`,
             backgroundSize: "cover",
             backgroundPosition: "center",
+            filter: bgBlur > 0 ? `blur(${bgBlur}px)` : undefined,
             opacity: bgOpacity / 100,
           }}
         />

@@ -170,6 +170,8 @@ export const en: Record<MessageKey, string> = {
   "settings.appearance.backgroundOpacity": "Background opacity",
   "settings.appearance.maskOpacity": "Overlay opacity",
   "settings.appearance.maskOpacityHint": "Opacity of the overlay on all areas (workspace/sidebar/title bar); lower = background more visible",
+  "settings.appearance.bgBlur": "Background blur",
+  "settings.appearance.bgBlurHint": "Blur applied to the background image once (seamless across areas); 0 = no blur",
   "settings.appearance.hint": "Applies immediately and is remembered on this machine.",
   "settings.appearance.custom": "Custom",
   "settings.appearance.customMode": "Mode",
