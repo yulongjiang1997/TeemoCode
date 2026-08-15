@@ -1,13 +1,41 @@
 // 实时任务面板(plan 帧驱动):钉在 composer 上方,不进对话流。
-// 收起 = 一行摘要(进度 + 当前项),展开 = 限高滚动的只读勾选清单;
-// 整卡随 plan 全量重发更新(daisyUI collapse 强制开合态)。
+// 收起 = 一行摘要(进度 + 当前项),展开 = 限高滚动的只读勾选清单 +
+// 并行子代理执行卡;整卡随 plan 全量重发更新(daisyUI collapse 强制开合态)。
 import { IconChevronRight, IconX } from "@tabler/icons-react";
 import { useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
-import type { PlanEntry } from "@/lib/protocol/types";
+import type { PlanEntry, ToolItem } from "@/lib/protocol/types";
 
-export function TaskPanel({ entries, onDismiss }: { entries: PlanEntry[]; onDismiss: () => void }) {
+function statusTone(status: "run" | "ok" | "fail"): string {
+  return status === "run"
+    ? "status-running"
+    : status === "ok"
+      ? "status-done"
+      : "status-fail";
+}
+
+/** feed 里最后一段子代理文本(流式预览取末条)。 */
+function feedLastText(s: ToolItem): string {
+  const feed = s.feed;
+  if (!feed || feed.length === 0) return "";
+  for (let i = feed.length - 1; i >= 0; i--) {
+    const e = feed[i];
+    if (e && e.kind === "text") return e.text;
+  }
+  return "";
+}
+
+export function TaskPanel({
+  entries,
+  subagents,
+  onDismiss,
+}: {
+  entries: PlanEntry[];
+  /** 正在/已完成执行的子代理工具卡(并行编排:每卡 = 一个子代理) */
+  subagents?: ToolItem[];
+  onDismiss: () => void;
+}) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const done = entries.filter((e) => e.status === "completed").length;
@@ -104,6 +132,38 @@ export function TaskPanel({ entries, onDismiss }: { entries: PlanEntry[]; onDism
             );
           })}
         </ul>
+        {/* 并行子代理执行卡:每卡 = 一个子代理(状态/流式预览/结果) */}
+        {subagents && subagents.length > 0 && (
+          <div className="mt-2 border-t border-base-300/60 pt-1.5">
+            <div className="mb-1 text-[10px] font-bold text-base-content/50">
+              {t("chat.plan.subagents", { n: subagents.length })}
+            </div>
+            <ul className="flex max-h-36 flex-col gap-1 overflow-y-auto">
+              {subagents.map((s) => {
+                const preview = feedLastText(s);
+                return (
+                  <li key={s.tcId} className="rounded-box border border-base-300/70 bg-base-200/40 px-2 py-1">
+                    <div className="flex items-center gap-1.5">
+                      <span aria-hidden className={`status ${statusTone(s.status)}`} />
+                      <span className="min-w-0 flex-1 truncate text-xs">{s.title || t("chat.plan.subagentNameless")}</span>
+                      <span className="shrink-0 text-[10px] text-base-content/50">
+                        {s.status === "run" ? t("chat.plan.subagentRunning") : s.status === "ok" ? t("chat.plan.subagentDone") : t("chat.plan.subagentFailed")}
+                      </span>
+                    </div>
+                    {s.status === "run" && preview && (
+                      <p className="mt-1 truncate text-[10px] text-base-content/60">{preview}</p>
+                    )}
+                    {s.status !== "run" && (s.result || s.out) && (
+                      <p className="mt-1 line-clamp-2 whitespace-pre-wrap break-all text-[10px] text-base-content/60">
+                        {s.result || s.out}
+                      </p>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
       </div>
     </div>
   );

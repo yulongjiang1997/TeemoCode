@@ -40,6 +40,7 @@ import { getConfig } from "@/lib/ipc/config";
 import { repoChanges, repoRecentFiles, repoReveal } from "@/lib/ipc/repo";
 import { sessionFrame, sessionPatch, sessionSend, type SessionMeta } from "@/lib/ipc/sessions";
 import { b64encode } from "@/lib/protocol/codec";
+import type { ToolItem } from "@/lib/protocol/types";
 import { buildSessionUsageMap, usageStats, type TokenUsage } from "@/lib/ipc/usageStats";
 import { onNativeFileDrop, uploadFileURL } from "@/lib/ipc/uploads";
 import { workspaceRelativePath } from "@/lib/util/markdownPaths";
@@ -708,15 +709,17 @@ export function ChatView({
       }
     }
   }, [meta.id]);
-  // 备用链详细调试日志(会话区持久显示,排查用;发布时移除)
-  const [debugLog, setDebugLog] = useState<string[]>([]);
-  const [debugCollapsed, setDebugCollapsed] = useState(false);
-  const dbg = useCallback((m: string) => {
-    const line = `[${new Date().toLocaleTimeString("zh-CN", { hour12: false })}] ${m}`;
-    setDebugLog((l) => [...l.slice(-200), line]);
-  }, []);
   // 任务步骤面板手动关闭:结束未完成时保留供回顾,可收起;任务继续跑自动重现
   const [planDismissed, setPlanDismissed] = useState(false);
+  // 并行子代理执行卡(面板"子代理执行"区):childSessionId/feed/background 的工具卡
+  const subagentItems = useMemo(
+    () =>
+      state.items.filter(
+        (it): it is ToolItem =>
+          it?.kind === "tool" && Boolean(it.childSessionId || (it.feed?.length ?? 0) > 0 || it.background),
+      ),
+    [state.items],
+  );
   useEffect(() => {
     if (state.running && state.plan.length > 0) setPlanDismissed(false);
   }, [state.running, state.plan.length]);
@@ -738,9 +741,6 @@ export function ChatView({
       errItem && errItem.kind === "sys" && errItem.params?.reason ? String(errItem.params.reason) : "";
     const errSeq = (errItem as { seq?: number } | undefined)?.seq;
     const isNewKeyError = isKeyError(reason) && errSeq !== undefined && errSeq !== handledErrSeqRef.current;
-    dbg(
-      `run running=${state.running} turnEnded=${state.turnEnded} items=${state.items.length} | errSeq=${String(errSeq ?? "∅")} handled=${handledErrSeqRef.current} failHandled=${failHandledRef.current} isNewKey=${isNewKeyError} reason=${reason.slice(0, 60) || "∅"}`,
-    );
     if (!isNewKeyError) {
       // 任务成功 / 非 key 错误 / 历史错误重放:正在用备用则恢复主模型(一次性语义)
       if (fallbackRef.current) {
@@ -748,7 +748,6 @@ export function ChatView({
         fallbackRef.current = null;
         setFallbackUse(null);
         void sessionSetModel(meta.id, fb.primary);
-        dbg(`restore→主模型 ${fb.primary} (非新增key错误)`);
       }
       return;
     }
@@ -789,9 +788,6 @@ export function ChatView({
         const primary = fallbackRef.current?.primary ?? meta.model;
         // 无进展判定按"名字是否还是自己"(多个模型可能共用同一 model 字段,
         // 按 model 比较会把不同备用误判成同一个)。链走完/没进展:恢复主模型。
-        dbg(
-          `chain current=${current} (meta=${meta.model}) backups=${JSON.stringify(backups)} | next=${String(nextName ?? "∅")} | nextCfg=${nextCfg?.model ?? "∅"} | stop=${String(!nextName || !nextCfg || nextName === current)}`,
-        );
         if (!nextName || !nextCfg || nextName === current) {
           // 没有备用/配置缺失/没进展:恢复主模型,留失败态
           if (fallbackRef.current) {
@@ -801,7 +797,6 @@ export function ChatView({
             // 明确反馈:备用链全部用完,任务失败(不再重发)
             composerRef.current.notifyError(t("chat.fallbackExhausted", { model: primary }));
             void sessionSetModel(meta.id, fb.primary);
-            dbg(`restore→主模型 ${fb.primary} (链走完/没进展)`);
           } else {
             composerRef.current.notifyError(t("chat.fallbackExhausted", { model: meta.model }));
           }
@@ -809,15 +804,12 @@ export function ChatView({
         }
         fallbackRef.current = { primary, current: nextName };
         setFallbackUse({ primary, current: nextName });
-        dbg(`switch → ${nextName} (primary=${primary})`);
         // 切换提示:主模型 + 错误摘要 + 当前改用哪个备用模型(一次性)
         composerRef.current.notifyError(
           t("chat.fallbackSwitched", { model: primary, reason: shortReason(reason), next: nextName }),
         );
         await sessionSetModel(meta.id, nextName);
-        dbg(`sessionSetModel(${nextName}) OK`);
         await resend();
-        dbg(`resend OK`);
       } catch {
         // 轮换失败:交给失败态人工处理
       } finally {
@@ -1240,43 +1232,6 @@ export function ChatView({
           </span>
         </div>
       )}
-      {/* 备用链调试日志(持久显示,排查用) */}
-      {debugLog.length > 0 && (
-        <div className="mx-3 mb-1 rounded-box border border-dashed border-amber-500/40 bg-base-200/40 p-2">
-          <div className="mb-1 flex items-center justify-between">
-            <span className="text-[10px] font-bold text-amber-600/80">备用链调试日志</span>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                className="btn btn-ghost btn-xs text-[10px] text-base-content/50"
-                onClick={() => void navigator.clipboard?.writeText(debugLog.join("\n"))}
-              >
-                复制
-              </button>
-              <button type="button" className="btn btn-ghost btn-xs text-[10px] text-base-content/50" onClick={() => setDebugLog([])}>
-                清空
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost btn-square btn-xs text-base-content/50"
-                aria-label="收起调试日志"
-                onClick={() => setDebugCollapsed((c) => !c)}
-              >
-                {debugCollapsed ? "▸" : "▾"}
-              </button>
-            </div>
-          </div>
-          {!debugCollapsed && (
-            <ul className="flex max-h-40 cursor-text select-text flex-col gap-0.5 overflow-y-auto font-mono text-[10px] leading-tight text-base-content/70">
-              {debugLog.map((l, i) => (
-                <li key={i} className="whitespace-pre-wrap break-all">
-                  {l}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
 
       <OutlineNav entries={entries} activeSeq={activeSeq ?? undefined} onJump={onJump} />
       </div>
@@ -1286,7 +1241,7 @@ export function ChatView({
       <footer className="shrink-0 p-3">
         <div className="mx-auto flex chat-measure flex-col gap-2">
           {state.plan.length > 0 && !planDismissed && (
-            <TaskPanel entries={state.plan} onDismiss={() => setPlanDismissed(true)} />
+            <TaskPanel entries={state.plan} subagents={subagentItems} onDismiss={() => setPlanDismissed(true)} />
           )}
           <Composer
             sessionId={meta.id}
