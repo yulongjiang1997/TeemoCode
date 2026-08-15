@@ -282,3 +282,12 @@
  * 重算 + ~700ms 合成,一键一付。新 WebKit 精确 diff 无感,开发机复现不出,
  * 线上老系统必炸。现在时间戳画进行盒内部(LogList 的块间距从 margin 改
  * padding,时间落在 padding 带里),剪枝不再需要任何 hover 例外。 */
+
+/* 遮罩层(工作区/侧栏/标题栏/rail/统计等所有区域)的统一半透明底色:
+ * 不透明度由 App 根的 --mask-opacity(0-1)控制,设置里可调。
+ * Tailwind 的 /[var(--x)] 任意透明度不会为 CSS 变量生成类,只能自定义
+ * (用 color-mix 从 daisyUI 的 oklch 变量取色)。
+ */
+.bg-mask-100 { background-color: color-mix(in oklch, var(--color-base-100) calc(var(--mask-opacity, 0.7) * 100%), transparent); }
+.bg-mask-200 { background-color: color-mix(in oklch, var(--color-base-200) calc(var(--mask-opacity, 0.7) * 100%), transparent); }
+.bg-mask-300 { background-color: color-mix(in oklch, var(--color-base-300) calc(var(--mask-opacity, 0.7) * 100%), transparent); }
