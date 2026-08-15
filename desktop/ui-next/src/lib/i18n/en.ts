@@ -974,6 +974,7 @@ export const en: Record<MessageKey, string> = {
   "settings.team.hint": "Team members (planning/development/testing…) configured in advance. When you send a task, the main model acts as coordinator, decomposes it and dispatches to suitable members. All members use the session's primary model.",
   "settings.team.empty": "No members yet, add a role first",
   "settings.team.namePlaceholder": "Role name, e.g. Planner",
+  "settings.team.noSkills": "Skill library is empty: create skills in Skills first",
   "settings.team.skillPlaceholder": "Skill / responsibility, e.g. requirements analysis, planning, design",
   "settings.team.add": "Add member",
   "settings.team.remove": "Remove {name}",

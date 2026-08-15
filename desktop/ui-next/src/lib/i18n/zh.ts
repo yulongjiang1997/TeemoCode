@@ -992,6 +992,7 @@ export const zh = {
   "settings.team.hint": "团队成员(策划/开发/测试…)提前配置,发任务时主模型作为协调者,拆解后分派给合适成员执行。所有成员统一用会话主模型。",
   "settings.team.empty": "还没有成员,先添加一个角色",
   "settings.team.namePlaceholder": "角色名,如:策划",
+  "settings.team.noSkills": "技能库为空:先在「技能库」里创建技能",
   "settings.team.skillPlaceholder": "技能/职责描述,如:需求分析、功能规划、方案设计",
   "settings.team.add": "添加成员",
   "settings.team.remove": "移除 {name}",

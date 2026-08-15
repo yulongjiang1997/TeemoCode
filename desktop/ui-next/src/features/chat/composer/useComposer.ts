@@ -26,19 +26,41 @@ import {
   uploadFileStream,
 } from "@/lib/ipc/uploads";
 import { readTeamMode, readTeamRoles } from "@/lib/util/prefs";
+import { skillsList } from "@/lib/ipc/skills";
 import { b64encode } from "@/lib/protocol/codec";
 
-/** 团队模式编排指令:协调者 + 成员技能。团队模式开且有成员时返回非空。
- *  包在 [mc-team] 标记里发送,消息区渲染时剥掉只显示用户原文。 */
-export function buildTeamPreamble(sid: string): string {
+// 技能库缓存(团队编排指令需要技能名+描述;失败静默,编排放空)
+let teamSkills: { name: string; description: string }[] = [];
+let teamSkillsLoaded = false;
+function loadTeamSkills(): void {
+  if (teamSkillsLoaded) return;
+  teamSkillsLoaded = true;
+  void skillsList()
+    .then((s) => {
+      teamSkills = s.map((x) => ({ name: x.name, description: x.description }));
+    })
+    .catch(() => {});
+}
+
+/** 团队模式编排指令:协调者 + 成员及指定技能(优先使用)。团队模式开且有
+ *  成员时返回非空。包在 [mc-team] 标记里发送,消息区渲染时剥掉只显示原文。 */
+export function buildTeamPreamble(sid: string, skills: readonly { name: string; description: string }[]): string {
   if (!readTeamMode(sid)) return "";
   const roles = readTeamRoles();
   if (roles.length === 0) return "";
-  const members = roles.map((r) => `- ${r.name}: ${r.skill || "（未填写技能）"}`).join("\n");
+  const descOf = (n: string) => skills.find((s) => s.name === n)?.description ?? "";
+  const members = roles
+    .map((r) => {
+      const ss = r.skills.length
+        ? `技能: ${r.skills.map((n) => `${n}${descOf(n) ? `(${descOf(n)})` : ""}`).join("、")}`
+        : "（未指定技能）";
+      return `- ${r.name}: ${ss}`;
+    })
+    .join("\n");
   return (
     "[团队协调] 你是任务协调者。本会话配置了以下团队成员(统一使用会话主模型):\n" +
     members +
-    "\n请拆解用户的任务,分派给合适成员执行(用 Agent 工具,子代理指令注明角色与任务),需要时并行执行,最后汇总结果回复用户。"
+    "\n请拆解用户的任务,分派给合适成员执行(用 Agent 工具,子代理指令注明角色、指定技能与任务),执行时优先使用成员指定的技能,需要时并行执行,最后汇总结果回复用户。"
   );
 }
 import { bindActiveComposer, stashGet, stashSet } from "./stash";
@@ -248,7 +270,7 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
     if (!text) return false;
     // 团队模式:发送前注入编排指令(协调者+成员技能),让主模型拆解后分派
     // 给合适成员。指令包在 [mc-team] 标记里,消息区渲染时剥掉只显示原文。
-    const teamPreamble = buildTeamPreamble(sessionId);
+    const teamPreamble = buildTeamPreamble(sessionId, teamSkills);
     const finalText = teamPreamble ? `[mc-team]\n${teamPreamble}\n[/mc-team]\n\n${text}` : text;
     // /compact 是控制指令不是消息:直达壳的 session_call,不得进排队槽
     // (排队会在轮后把「/compact」当普通文本发给模型)。忙时外显错误并留
@@ -361,7 +383,8 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
     sendingRef.current = true;
     // 附带入队:正文 = 指令文本 + 附件行(与 send() 同一拼法)+ 团队编排指令
     const payload = [next.text, ...next.atts.map(attLine)].filter(Boolean).join("\n");
-    const teamPreamble = buildTeamPreamble(sessionId);
+    loadTeamSkills();
+    const teamPreamble = buildTeamPreamble(sessionId, teamSkills);
     const finalPayload = teamPreamble ? `[mc-team]\n${teamPreamble}\n[/mc-team]\n\n${payload}` : payload;
     void sessionSend(sessionId, "user-input", { content: b64encode(finalPayload) }).catch(() => {
       sendingRef.current = false;
