@@ -179,6 +179,8 @@ export const zh = {
   "settings.appearance.backgroundChange": "更换",
   "settings.appearance.backgroundReset": "恢复默认",
   "settings.appearance.backgroundOpacity": "背景透明度",
+  "settings.appearance.maskOpacity": "遮罩不透明度",
+  "settings.appearance.maskOpacityHint": "工作区/侧栏/标题栏等所有区域遮罩层的浓淡(越低背景图越透)",
   "settings.appearance.hint": "切换立即生效并记在本机。",
   "settings.appearance.custom": "自定义",
   "settings.appearance.customMode": "明暗",

@@ -121,7 +121,7 @@ export function TitleBar() {
       data-tauri-drag-region=""
       data-window-titlebar=""
       onContextMenu={sysMenu}
-      className="flex h-7 shrink-0 items-stretch bg-base-300/70 backdrop-blur-xs select-none"
+      className="flex h-7 shrink-0 items-stretch bg-base-300/[var(--mask-opacity)] backdrop-blur-xs select-none"
     >
       {/* 整条单色、无底边线、**除三键外什么都不放**(LAYOUT §1 三条铁律)。
           品牌标记曾摆在这条左端(为的是别让窗口左上角空着一块深色方格),

@@ -8,7 +8,7 @@
 // - D8 增量自愈:session-event/意图指向未知 id → 重拉全表再选中;
 // - H9 意图消费:open-* 事件送达即 takeUiIntent 消费壳侧副本,防刷新重放。
 import { IconAlertCircle, IconChartBar, IconCircleCheck, IconCloud, IconFolderCode, IconHelpCircle, IconMessages, IconPlayerStop, IconSend, IconSettings, IconWorld, IconX } from "@tabler/icons-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 
 import { ChatView } from "@/features/chat/ChatView";
 import { UsageStatsView } from "@/features/stats/UsageStatsView";
@@ -47,7 +47,7 @@ import {
 } from "@/lib/ipc/sessions";
 import { noticeForQueuedDelivery, noticeForSessionEvent, type NoticeKind, type SessionNotice } from "@/lib/notices";
 import { deliverQueued, dropStash } from "@/features/chat/composer/stash";
-import { readLastSession, writeLastSession, writeSpace, readBgImage, readBgOpacity, type Space } from "@/lib/util/prefs";
+import { readLastSession, writeLastSession, writeSpace, readBgImage, readBgOpacity, readMaskOpacity, type Space } from "@/lib/util/prefs";
 import { projectKey, readArchivedProjects } from "@/lib/util/projects";
 
 // 统一图标族:@tabler/icons-react(2026-08-07 由 lucide 换过来;组件名
@@ -133,7 +133,7 @@ function SpaceRail({
   const { t } = useI18n();
   const labels: Record<Space, string> = { local: t("rail.local"), cloud: t("rail.cloud"), chat: t("rail.chat"), stats: t("rail.stats") };
   return (
-    <nav aria-label={t("rail.label")} className="flex w-rail shrink-0 flex-col items-center bg-base-300/70 backdrop-blur-xs">
+    <nav aria-label={t("rail.label")} className="flex w-rail shrink-0 flex-col items-center bg-base-300/[var(--mask-opacity)] backdrop-blur-xs">
       {/* 头部基线上的 rail 角落格(h-13 = 52px,与各列头部同高,保证三列头部线
           对齐;LAYOUT §2)。**这一格恒存在**——曾对 Windows 开特例不留,让第一个
           空间图标顶上去占位,尺寸恰好凑得上(size-11 + py-1 = 52px)所以没露馅,
@@ -277,7 +277,7 @@ function MainArea({
     );
 
   return (
-    <main className="flex min-w-0 flex-1 flex-col bg-base-100/70 backdrop-blur-xs">
+    <main className="flex min-w-0 flex-1 flex-col bg-base-100/[var(--mask-opacity)] backdrop-blur-xs">
       <div data-tauri-drag-region="" className="h-13 shrink-0 border-b border-base-300" />
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 p-6">
       <img src="/logo.png" alt="" className="h-16 w-16 rounded-2xl shadow-sm" aria-hidden />
@@ -320,10 +320,12 @@ export function App() {
   // 自定义背景图(data URL + 透明度):通用设置里改,这里监听事件重读
   const [bgImage, setBgImage] = useState(readBgImage);
   const [bgOpacity, setBgOpacity] = useState(readBgOpacity);
+  const [maskOpacity, setMaskOpacity] = useState(readMaskOpacity);
   useEffect(() => {
     const refresh = () => {
       setBgImage(readBgImage());
       setBgOpacity(readBgOpacity());
+      setMaskOpacity(readMaskOpacity());
     };
     window.addEventListener("mc-bg-changed", refresh);
     return () => window.removeEventListener("mc-bg-changed", refresh);
@@ -682,7 +684,7 @@ export function App() {
   })();
 
   return (
-    <div className="relative flex h-full flex-col text-base-content">
+    <div className="relative flex h-full flex-col text-base-content" style={{ "--mask-opacity": maskOpacity / 100 } as CSSProperties}>
       {/* 背景层:默认纯色 + 自定义图片(按透明度叠加) */}
       <div className="absolute inset-0 bg-base-100" aria-hidden />
       {bgImage && (

@@ -120,3 +120,22 @@ export function writeBgOpacity(pct: number): void {
     // 只丢持久化
   }
 }
+
+/** 遮罩层不透明度(0-100;工作区/侧栏/标题栏等所有区域的半透明底色)。
+ *  默认 70 = 原硬编码值;调低让背景图更透,调高更实。 */
+export function readMaskOpacity(): number {
+  try {
+    const v = Number(localStorage.getItem("mc.maskOpacity"));
+    return Number.isFinite(v) ? Math.min(Math.max(Math.round(v), 0), 100) : 70;
+  } catch {
+    return 70;
+  }
+}
+
+export function writeMaskOpacity(pct: number): void {
+  try {
+    localStorage.setItem("mc.maskOpacity", String(Math.min(Math.max(Math.round(pct), 0), 100)));
+  } catch {
+    // 只丢持久化
+  }
+}
