@@ -29,7 +29,7 @@ import { useI18n } from "@/lib/i18n";
 import { useEscLayer } from "@/lib/util/escLayer";
 import { sessionCompact, sessionSetMode, sessionSetModel, sessionSetSkills, sessionSetThink } from "@/lib/ipc/controls";
 import { afterEngineReady } from "@/lib/ipc/engine";
-import { modelMenuList, resolveModelName } from "@/lib/models/modelMenu";
+import { modelMenuList, resolveModelName, stripSourceSuffix, stripTierPrefix } from "@/lib/models/modelMenu";
 import { modelsList, type ModelInfo, type SessionMeta } from "@/lib/ipc/sessions";
 import { defaultEnabledSkills, skillsList, type SkillInfo } from "@/lib/ipc/skills";
 import { pickAttachmentPaths } from "@/lib/ipc/uploads";
@@ -591,7 +591,7 @@ export function Composer({
               className="badge badge-outline badge-sm shrink-0 border-amber-500/60 text-[10px] text-amber-600/90"
               title={t("chat.model.fallbackInUse")}
             >
-              {t("chat.model.fallbackInUse")}: {fallbackUse.current}
+              {t("chat.model.fallbackInUse")}: {stripSourceSuffix(stripTierPrefix(fallbackUse.current))}
             </span>
           )}
 

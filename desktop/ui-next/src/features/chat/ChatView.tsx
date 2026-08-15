@@ -115,6 +115,7 @@ import { OutlineNav, outlineEntriesOf } from "./OutlineNav";
 import { TaskPanel } from "./TaskPanel";
 import { FilesDrawer } from "@/features/files/FilesDrawer";
 import { useSessionFeed } from "./useSessionFeed";
+import { stripSourceSuffix, stripTierPrefix } from "@/lib/models/modelMenu";
 
 const PIN_THRESHOLD = 40; // 距底多少像素内算"贴底"(scroll 只做进入贴底的单向判定)
 const SCROLLBAR_EDGE = 18; // 视口右缘按下算滚动条拖拽意图,解除跟随
@@ -1182,6 +1183,14 @@ export function ChatView({
           />
         </div>
       </div>
+      )}
+      {/* 备用模型使用中:会话区域提示(主模型报错自动切换,任务结束恢复) */}
+      {fallbackUse && (
+        <div className="flex justify-center py-1" role="status">
+          <span className="badge badge-outline badge-sm border-amber-500/60 text-[10px] text-amber-600/90">
+            ⚠️ {t("chat.model.fallbackInUse")}: {stripSourceSuffix(stripTierPrefix(fallbackUse.current))}
+          </span>
+        </div>
       )}
 
       <OutlineNav entries={entries} activeSeq={activeSeq ?? undefined} onJump={onJump} />
