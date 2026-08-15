@@ -784,6 +784,8 @@ export function ChatView({
         const current = fallbackRef.current?.current ?? meta.model;
         const nextName = nextFallbackModel(current, backups, resolveModel);
         const nextCfg = cfg?.models?.find((m) => m.model === nextName || m.name === nextName);
+        // 主模型 = 进入备用链前的模型;每次任务优先主模型由"结束时恢复"保证
+        const primary = fallbackRef.current?.primary ?? meta.model;
         // 无进展判定按"名字是否还是自己"(多个模型可能共用同一 model 字段,
         // 按 model 比较会把不同备用误判成同一个)。链走完/没进展:恢复主模型。
         dbg(
@@ -795,13 +797,15 @@ export function ChatView({
             const fb = fallbackRef.current;
             fallbackRef.current = null;
             setFallbackUse(null);
+            // 明确反馈:备用链全部用完,任务失败(不再重发)
+            composerRef.current.notifyError(t("chat.fallbackExhausted", { model: primary }));
             void sessionSetModel(meta.id, fb.primary);
             dbg(`restore→主模型 ${fb.primary} (链走完/没进展)`);
+          } else {
+            composerRef.current.notifyError(t("chat.fallbackExhausted", { model: meta.model }));
           }
           return;
         }
-        // 主模型 = 进入备用链前的模型;每次任务优先主模型由"结束时恢复"保证
-        const primary = fallbackRef.current?.primary ?? meta.model;
         fallbackRef.current = { primary, current: nextName };
         setFallbackUse({ primary, current: nextName });
         dbg(`switch → ${nextName} (primary=${primary})`);
