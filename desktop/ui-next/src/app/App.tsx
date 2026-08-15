@@ -133,7 +133,7 @@ function SpaceRail({
   const { t } = useI18n();
   const labels: Record<Space, string> = { local: t("rail.local"), cloud: t("rail.cloud"), chat: t("rail.chat"), stats: t("rail.stats") };
   return (
-    <nav aria-label={t("rail.label")} className="flex w-rail shrink-0 flex-col items-center bg-base-300">
+    <nav aria-label={t("rail.label")} className="flex w-rail shrink-0 flex-col items-center bg-base-300/70 backdrop-blur-xs">
       {/* 头部基线上的 rail 角落格(h-13 = 52px,与各列头部同高,保证三列头部线
           对齐;LAYOUT §2)。**这一格恒存在**——曾对 Windows 开特例不留,让第一个
           空间图标顶上去占位,尺寸恰好凑得上(size-11 + py-1 = 52px)所以没露馅,
