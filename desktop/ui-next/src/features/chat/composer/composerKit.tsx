@@ -4,7 +4,7 @@
 // 搬迁的定稿形态(-mx-2.5 出血、ps-1/pe-2 光学对齐等口径见 Composer 内注),
 // 改形态只改这里。
 import { IconAlertCircle, IconPlayerStopFilled, IconX } from "@tabler/icons-react";
-import { type CSSProperties, type ReactNode, type RefObject, type TextareaHTMLAttributes, useState } from "react";
+import { type CSSProperties, type ReactNode, type RefObject, type TextareaHTMLAttributes, useEffect, useRef, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
 import type { SlashCommand } from "@/lib/protocol/types";
@@ -86,9 +86,25 @@ export function UsageRing({
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
+  // 弹窗与圆环之间有间距(bottom-full mb-1.5):鼠标移向弹窗会先离开圆环,
+  // 直接 onMouseLeave 关闭会让弹窗永远摸不到。改延迟关闭——150ms 内进入
+  // 弹窗就取消关闭。
+  const hideTimer = useRef(0);
+  const openNow = () => {
+    window.clearTimeout(hideTimer.current);
+    setOpen(true);
+  };
+  const scheduleClose = () => {
+    window.clearTimeout(hideTimer.current);
+    hideTimer.current = window.setTimeout(() => setOpen(false), 150);
+  };
+  useEffect(
+    () => () => window.clearTimeout(hideTimer.current),
+    [],
+  );
   const geom = { "--size": "1rem", "--thickness": "2px" } as CSSProperties;
   return (
-    <div className="relative mx-1 shrink-0" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+    <div className="relative mx-1 shrink-0" onMouseEnter={openNow} onMouseLeave={scheduleClose}>
       {/* 同格叠放(col/row-start-1),不用 absolute:两层几何完全一致才不会错圈 */}
       <div className="grid size-4 place-items-center align-middle">
         <div
@@ -110,7 +126,7 @@ export function UsageRing({
       {/* 悬浮窗:用量说明 + 手动压缩按钮(自动压缩阈值在「模型配置」里设置)。
           composer 底栏在视口底部,弹窗必须向上弹(bottom-full),否则被窗口裁掉 */}
       {open && (
-        <div className="absolute bottom-full right-0 z-50 mb-1.5 w-56 rounded-box border border-base-300 bg-base-100 p-2.5 shadow-lg">
+        <div className="absolute bottom-full right-0 z-50 mb-1.5 w-56 rounded-box border border-base-300 bg-base-100 p-2.5 shadow-lg" onMouseEnter={openNow} onMouseLeave={scheduleClose}>
           <div className="text-[11px] leading-relaxed text-base-content/70">{tip}</div>
           {onCompact && (
             <div className="mt-2">
