@@ -538,6 +538,7 @@ export const zh = {
   "chat.queue.drag": "拖动排序",
   "chat.queue.executing": "执行中",
   "chat.queue.clear": "清空待发送",
+  "chat.queue.dismiss": "关闭队列弹框(任务继续跑时自动重现)",
   "chat.queue.expand": "展开队列",
   "chat.queue.collapse": "折叠队列",
   "chat.queue.failed": "{n} 条失败",

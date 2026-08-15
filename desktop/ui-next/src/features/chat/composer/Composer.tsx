@@ -50,7 +50,7 @@ function errText(e: unknown): string {
 
 /** 指令队列区:待发送/失败的指令(输入区上方)。折叠只显示首条+暂停/展开;
  *  展开可拖拽排序(仅拖动图标可拖)/点击编辑/移除;失败项带重试。 */
-function QueueArea({ ctl }: { ctl: ComposerCtl }) {
+function QueueArea({ ctl, onDismiss }: { ctl: ComposerCtl; onDismiss: () => void }) {
   const { t } = useI18n();
   const { queue, queueOpen, toggleQueueOpen, paused, togglePaused, retryInstr, removeInstr, reorderInstr, editInstr, clearQueue } = ctl;
   const [dragIdx, setDragIdx] = useState<number | null>(null);
@@ -83,6 +83,9 @@ function QueueArea({ ctl }: { ctl: ComposerCtl }) {
         {paused && <span className="shrink-0 rounded bg-warning/15 px-1 text-[10px] font-medium text-warning">{t("chat.queue.paused")}</span>}
         <span className={`min-w-0 flex-1 truncate ${first.state === "failed" ? "text-error" : "text-base-content/80"}`}>{first.text}</span>
         {failed > 0 && <span className="shrink-0 font-medium text-error">{t("chat.queue.failed", { n: failed })}</span>}
+        <button type="button" className="btn btn-ghost btn-square btn-xs text-base-content/50" aria-label={t("chat.queue.dismiss")} title={t("chat.queue.dismiss")} onClick={onDismiss}>
+          <IconX size={13} stroke={1.75} aria-hidden />
+        </button>
         {pauseBtn}
       </div>
     );
@@ -105,6 +108,17 @@ function QueueArea({ ctl }: { ctl: ComposerCtl }) {
             {t("chat.queue.clear")}
           </button>
         )}
+        {/* 手动关闭:任务完成后队列残留时不再自动消失,可先收起来;
+            任务继续跑(有排队/新指令)时会自动重新出现 */}
+        <button
+          type="button"
+          className="btn btn-ghost btn-square btn-xs text-base-content/50"
+          aria-label={t("chat.queue.dismiss")}
+          title={t("chat.queue.dismiss")}
+          onClick={onDismiss}
+        >
+          <IconX size={13} stroke={1.75} aria-hidden />
+        </button>
         {pauseBtn}
       </div>
       <ul className="flex flex-col gap-0.5">
@@ -221,6 +235,11 @@ export function Composer({
   const { t } = useI18n();
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const imeRef = useRef(createImeGuard());
+  // 指令队列弹框手动关闭:任务完成残留时用户可收起;任务继续跑时自动重现
+  const [queueDismissed, setQueueDismissed] = useState(false);
+  useEffect(() => {
+    if (state.running && ctl.queue.length > 0) setQueueDismissed(false);
+  }, [state.running, ctl.queue.length]);
   const [models, setModels] = useState<ModelInfo[]>([]);
   // 备用模型链(按会话存 localStorage):主模型 key 全部失败后按此顺序自动切换
   const [fallbackModels, setFallbackModels] = useState<string[]>(() => {
@@ -487,7 +506,9 @@ export function Composer({
       {ctl.error && <ErrorBar text={ctl.error} onDismiss={ctl.dismissError} />}
 
       {/* 指令队列:待发送/失败的指令,折叠显示首条,展开可拖拽排序/重试/移除/编辑 */}
-      {ctl.queue.length > 0 && <QueueArea ctl={ctl} />}
+      {ctl.queue.length > 0 && !queueDismissed && (
+        <QueueArea ctl={ctl} onDismiss={() => setQueueDismissed(true)} />
+      )}
 
       {/* 输入卡外框(形态收口在 composerKit:出血/聚焦边线/禁挂 dropdown 类
           的缘由见 ComposerCard 头注)。斜杠面板是卡内自绘浮层(绝对定位,

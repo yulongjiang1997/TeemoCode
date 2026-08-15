@@ -119,6 +119,8 @@ import { TaskPanel } from "./TaskPanel";
 import { FilesDrawer } from "@/features/files/FilesDrawer";
 import { useSessionFeed } from "./useSessionFeed";
 import { stripSourceSuffix, stripTierPrefix } from "@/lib/models/modelMenu";
+// 临时诊断:备用切换运行计数(模块级,判断是否同一次运行被重复触发)
+let dbgRun = 0;
 
 const PIN_THRESHOLD = 40; // 距底多少像素内算"贴底"(scroll 只做进入贴底的单向判定)
 const SCROLLBAR_EDGE = 18; // 视口右缘按下算滚动条拖拽意图,解除跟随
@@ -716,6 +718,9 @@ export function ChatView({
     const isNewKeyError = isKeyError(reason) && errSeq !== undefined && errSeq !== handledErrSeqRef.current;
     if (!isNewKeyError) {
       // 任务成功 / 非 key 错误 / 历史错误重放:正在用备用则恢复主模型(一次性语义)
+      composerRef.current.notifyError(
+        `[dbg] NOT-new | reason=${reason.slice(0, 60) || "∅"} | isKey=${isKeyError(reason)} | errSeq=${String(errSeq ?? "∅")} | handled=${handledErrSeqRef.current} | failHandled=${failHandledRef.current}`,
+      );
       if (fallbackRef.current) {
         const fb = fallbackRef.current;
         fallbackRef.current = null;
@@ -724,6 +729,9 @@ export function ChatView({
       }
       return;
     }
+    composerRef.current.notifyError(
+      `[dbg] SWITCH#${++dbgRun} | reason=${reason.slice(0, 50)} | errSeq=${String(errSeq ?? "∅")} | handled=${handledErrSeqRef.current} | items=${state.items.length} | turnEnded=${state.turnEnded} | running=${state.running}`,
+    );
     keyErrThisTurnRef.current = true;
     failHandledRef.current = true; // 本轮失败只处理一次(一回合可能多个 task-error)
     handledErrSeqRef.current = errSeq ?? 0;

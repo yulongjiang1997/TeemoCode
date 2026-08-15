@@ -523,6 +523,7 @@ export const en: Record<MessageKey, string> = {
   "chat.queue.drag": "Drag to reorder",
   "chat.queue.executing": "Executing",
   "chat.queue.clear": "Clear pending",
+  "chat.queue.dismiss": "Dismiss queue panel (auto-reappears when the task resumes)",
   "chat.queue.expand": "Expand queue",
   "chat.queue.collapse": "Collapse queue",
   "chat.queue.failed": "{n} failed",
