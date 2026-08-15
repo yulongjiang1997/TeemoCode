@@ -163,6 +163,8 @@ export function writeBgBlur(px: number): void {
 export interface TeamRole {
   id: string;
   name: string;
+  /** 角色职责描述(手动填写,如:需求分析、方案设计) */
+  skill: string;
   /** 指定技能(技能库里的技能名,可多选;执行时优先使用) */
   skills: string[];
 }
@@ -172,8 +174,13 @@ export function readTeamRoles(): TeamRole[] {
     const v = JSON.parse(localStorage.getItem("mc.teamRoles") ?? "[]");
     return Array.isArray(v)
       ? v
-          .filter((r): r is TeamRole => Boolean(r && typeof r.name === "string" && Array.isArray(r.skills)))
-          .map((r) => ({ id: r.id, name: r.name, skills: r.skills.filter((x): x is string => typeof x === "string") }))
+          .filter((r): r is TeamRole => Boolean(r && typeof r.name === "string"))
+          .map((r) => ({
+            id: r.id,
+            name: r.name,
+            skill: typeof r.skill === "string" ? r.skill : "",
+            skills: Array.isArray(r.skills) ? r.skills.filter((x): x is string => typeof x === "string") : [],
+          }))
       : [];
   } catch {
     return [];

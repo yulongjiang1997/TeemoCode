@@ -51,16 +51,16 @@ export function buildTeamPreamble(sid: string, skills: readonly { name: string; 
   const descOf = (n: string) => skills.find((s) => s.name === n)?.description ?? "";
   const members = roles
     .map((r) => {
-      const ss = r.skills.length
-        ? `技能: ${r.skills.map((n) => `${n}${descOf(n) ? `(${descOf(n)})` : ""}`).join("、")}`
-        : "（未指定技能）";
-      return `- ${r.name}: ${ss}`;
+      const parts: string[] = [];
+      if (r.skill.trim()) parts.push(`职责: ${r.skill.trim()}`);
+      if (r.skills.length) parts.push(`技能: ${r.skills.map((n) => `${n}${descOf(n) ? `(${descOf(n)})` : ""}`).join("、")}`);
+      return `- ${r.name}: ${parts.length ? parts.join("；") : "（未填写职责与技能）"}`;
     })
     .join("\n");
   return (
     "[团队协调] 你是任务协调者。本会话配置了以下团队成员(统一使用会话主模型):\n" +
     members +
-    "\n请拆解用户的任务,分派给合适成员执行(用 Agent 工具,子代理指令注明角色、指定技能与任务),执行时优先使用成员指定的技能,需要时并行执行,最后汇总结果回复用户。"
+    "\n请拆解用户的任务,分派给合适成员执行(用 Agent 工具,子代理指令注明角色、职责、指定技能与任务),执行时成员职责与指定技能都生效、优先使用指定技能,需要时并行执行,最后汇总结果回复用户。"
   );
 }
 import { bindActiveComposer, stashGet, stashSet } from "./stash";
