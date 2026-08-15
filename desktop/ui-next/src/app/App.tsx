@@ -7,8 +7,8 @@
 //   侧栏 attention 高亮;
 // - D8 增量自愈:session-event/意图指向未知 id → 重拉全表再选中;
 // - H9 意图消费:open-* 事件送达即 takeUiIntent 消费壳侧副本,防刷新重放。
-import { IconAlertCircle, IconChartBar, IconCircleCheck, IconCloud, IconFolderCode, IconHelpCircle, IconMessages, IconPlayerStop, IconSend, IconSettings, IconWorld, IconX } from "@tabler/icons-react";
-import { useEffect, useRef, useState } from "react";
+import { IconAlertCircle, IconCircleCheck, IconCloud, IconFolderCode, IconHelpCircle, IconMessages, IconPlayerStop, IconSend, IconSettings, IconWorld, IconX } from "@tabler/icons-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ChatView } from "@/features/chat/ChatView";
 import { CloudTaskView } from "@/features/cloud/CloudTaskView";
@@ -17,7 +17,6 @@ import { EngineBanner } from "@/features/engine/EngineBanner";
 import { NewTaskModal } from "@/features/newtask/NewTaskModal";
 import { SettingsView } from "@/features/settings/SettingsView";
 import { Sidebar } from "@/features/sidebar/Sidebar";
-import { UsageStatsView } from "@/features/stats/UsageStatsView";
 import { useTodos } from "@/features/todo/useTodos";
 import { ResizeEdges } from "@/features/titlebar/ResizeEdges";
 import { MacWindowControls, TitleBar } from "@/features/titlebar/TitleBar";
@@ -56,7 +55,6 @@ const SPACE_ICONS: Record<Space, typeof IconFolderCode> = {
   local: IconFolderCode,
   cloud: IconCloud,
   chat: IconMessages,
-  stats: IconChartBar,
 };
 
 const NOTICE_TONE: Record<NoticeKind, string> = {
@@ -131,7 +129,7 @@ function SpaceRail({
   onToggleSettings: () => void;
 }) {
   const { t } = useI18n();
-  const labels: Record<Space, string> = { local: t("rail.local"), cloud: t("rail.cloud"), chat: t("rail.chat"), stats: t("rail.stats") };
+  const labels: Record<Space, string> = { local: t("rail.local"), cloud: t("rail.cloud"), chat: t("rail.chat") };
   return (
     <nav aria-label={t("rail.label")} className="flex w-rail shrink-0 flex-col items-center bg-base-300">
       {/* 头部基线上的 rail 角落格(h-13 = 52px,与各列头部同高,保证三列头部线
@@ -164,7 +162,7 @@ function SpaceRail({
         )}
       </div>
       <div className="flex flex-1 flex-col items-center gap-1 py-1">
-        {(["local", "cloud", "chat", "stats"] as const).map((s) => {
+        {(["local", "cloud", "chat"] as const).map((s) => {
           // 徽标不再只挂本地任务:本地会话同样会停在等待确认上(用户报障
           // 2026-08-10「本地会话的等待审批没有计数提示」),两个空间一个口径
           const count = waiting[s];
@@ -227,9 +225,13 @@ function MainArea({
   onDelete,
   onPatched,
   onActionError,
+  focusRequest,
+  onFocusRequestHandled,
 }: {
   current: SessionMeta | null;
   epoch: number;
+  focusRequest: number;
+  onFocusRequestHandled: (request: number) => void;
   onDelete: (meta: SessionMeta) => void;
   /** 视图内改名/归档落盘后重拉列表(壳 session_patch 不广播事件) */
   onPatched: () => void;
@@ -264,6 +266,8 @@ function MainArea({
         key={epoch}
         meta={current}
         epoch={epoch}
+        focusRequest={focusRequest}
+        onFocusRequestHandled={onFocusRequestHandled}
         onDeleted={() => onDelete(current)}
         onPatched={onPatched}
         onActionError={onActionError}
@@ -324,6 +328,15 @@ export function App() {
   }, []);
   const [cloudTask, setCloudTask] = useState<CloudTask | null>(null);
   const [cloudReload, setCloudReload] = useState(0);
+  // 用户选任务时递增,跨设置/新建/云端视图重挂 Composer 也能收到聚焦意图;
+  // Composer 消费后清零,引擎 epoch 自愈重挂载不会误把旧意图再执行一遍。
+  const [composerFocusRequest, setComposerFocusRequest] = useState(0);
+  const focusSeqRef = useRef(0);
+  const requestComposerFocus = () => setComposerFocusRequest(++focusSeqRef.current);
+  const handleComposerFocus = useCallback(
+    (request: number) => setComposerFocusRequest((current) => (current === request ? 0 : current)),
+    [],
+  );
   const [notices, setNotices] = useState<SessionNotice[]>([]);
   const [shellNotices, setShellNotices] = useState<ShellNotice[]>([]);
   // 提示内「重启引擎」的在途态(同一时刻只会有一条带动作的提示)
@@ -416,6 +429,9 @@ export function App() {
   const refresh = () => void afterEngineReady(sessionsList).then(setSessions).catch(() => {});
 
   const setSpace = (next: Space) => {
+    if ((space === "cloud" || settingsOpen || creating) && next !== "cloud" && currentIdRef.current) {
+      requestComposerFocus();
+    }
     setSpaceState(next);
     writeSpace(next);
     // 桌面客户端心智:点导航永远切走当前覆盖视图(设置/新建),不会"没反应"
@@ -605,15 +621,16 @@ export function App() {
   // 任务时窗口切换器里仍挂着上一个本地会话的标题)
   useEffect(() => {
     const label = windowContextLabel(
-      { settingsOpen, creating: !!creating, cloudSpace: space === "cloud", statsSpace: space === "stats" },
+      { settingsOpen, creating: !!creating, cloudSpace: space === "cloud" },
       cloudTask,
-      space === "cloud" || space === "stats" ? null : current,
+      space === "cloud" ? null : current,
       t,
     );
     setWindowTitle(`${label} — ${t("app.name")}`);
   }, [current, settingsOpen, creating, space, cloudTask, t]);
 
   const select = (meta: SessionMeta) => {
+    if (meta.id !== currentId || settingsOpen || creating || space === "cloud") requestComposerFocus();
     setCurrentId(meta.id);
     writeLastSession(meta.id);
     dismissSession(meta.id);
@@ -643,7 +660,7 @@ export function App() {
     local: sessions.filter((m) => m.kind !== "chat" && m.waiting_ask).length,
     cloud: 0,
     chat: sessions.filter((m) => m.kind === "chat" && m.waiting_ask).length,
-    stats: 0,
+
   };
 
   // 新建弹窗的最近目录:非 chat、未归档(会话与项目两级),按最近活跃排,项目 key 去重
@@ -763,11 +780,10 @@ export function App() {
             open
             initialDir={creating.dir}
             initialCloudProject={creating.cloudProject}
+            initialKind={space}
             initialText={creating.text}
             initialFiles={creating.files}
             // 侧栏 ＋ 属于当前空间:rail 停在哪个空间,新建就默认开哪个页签。
-            // stats 空间没有对应的新建页签,回退默认(本地)
-            initialKind={space === "stats" ? undefined : space}
             recentDirs={recentDirs}
             // 云端页签未连接时的出口:与侧栏云端空态同一个动作(关掉新建、
             // 开设置页——设置页初始分区就是「账号」,直达连接入口)
@@ -792,8 +808,6 @@ export function App() {
               setCloudReload((n) => n + 1);
             }}
           />
-        ) : space === "stats" ? (
-          <UsageStatsView />
         ) : space === "cloud" && cloudTask ? (
           <CloudTaskView
             key={cloudTask.id}
@@ -808,6 +822,8 @@ export function App() {
           <MainArea
             current={space === "cloud" ? null : current}
             epoch={epoch}
+            focusRequest={composerFocusRequest}
+            onFocusRequestHandled={handleComposerFocus}
             onDelete={removeSession}
             onPatched={refresh}
             onActionError={(key, reason) => pushShell(key, "error", { params: { reason } })}

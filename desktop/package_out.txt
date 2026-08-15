@@ -1,0 +1,86 @@
+===[1/3] beforeBuildCommand: npm ci + vite build(uidist)===
+
+added 255 packages, and audited 256 packages in 60s
+
+62 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+
+> monkeycode-ui-next@0.1.0 build
+> tsc --noEmit && vite build
+
+[36mvite v7.3.6 [32mbuilding client environment for production...[36m[39m
+transforming...
+/*! 🌼 daisyUI 5.7.14 */
+[32m✓[39m 6373 modules transformed.
+rendering chunks...
+computing gzip size...
+[2m../uidist/[22m[32mindex.html                 [39m[1m[2m    6.44 kB[22m[1m[22m[2m │ gzip:   3.35 kB[22m
+[2m../uidist/[22m[35massets/index-DcKS_DG5.css  [39m[1m[2m  216.47 kB[22m[1m[22m[2m │ gzip:  35.51 kB[22m
+[2m../uidist/[22m[36massets/index-C-5acZL1.js   [39m[1m[33m1,194.16 kB[39m[22m[2m │ gzip: 349.72 kB[22m
+[33m
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+[32m✓ built in 14.85s[39m
+===[2/3] cargo tauri build release (bundle.windows.conf.json)===
+        Info Looking up installed tauri packages to check mismatched versions...
+     Running beforeBuildCommand `npm ci && npm run build`
+
+added 255 packages, and audited 256 packages in 56s
+
+62 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+
+> monkeycode-ui-next@0.1.0 build
+> tsc --noEmit && vite build
+
+[36mvite v7.3.6 [32mbuilding client environment for production...[36m[39m
+transforming...
+/*! 🌼 daisyUI 5.7.14 */
+[32m✓[39m 6373 modules transformed.
+rendering chunks...
+computing gzip size...
+[2m../uidist/[22m[32mindex.html                 [39m[1m[2m    6.44 kB[22m[1m[22m[2m │ gzip:   3.35 kB[22m
+[2m../uidist/[22m[35massets/index-DcKS_DG5.css  [39m[1m[2m  216.47 kB[22m[1m[22m[2m │ gzip:  35.51 kB[22m
+[2m../uidist/[22m[36massets/index-C-5acZL1.js   [39m[1m[33m1,194.16 kB[39m[22m[2m │ gzip: 349.72 kB[22m
+[33m
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+[32m✓ built in 14.50s[39m
+   Compiling monkeycode-desktop v0.1.0 (D:\works\ziji\MonkeyCode\desktop)
+warning: function `parse_env_output` is never used
+   --> src\driver\transport.rs:748:4
+    |
+748 | fn parse_env_output(buf: &[u8]) -> HashMap<String, String> {
+    |    ^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `merge_login_env` is never used
+   --> src\driver\transport.rs:760:4
+    |
+760 | fn merge_login_env(
+    |    ^^^^^^^^^^^^^^^
+
+warning: function `parse_distro_list` is never used
+   --> src\wsl.rs:315:4
+    |
+315 | fn parse_distro_list(out: &str) -> Vec<String> {
+    |    ^^^^^^^^^^^^^^^^^
+
+warning: `monkeycode-desktop` (bin "monkeycode-desktop") generated 3 warnings
+    Finished `release` profile [optimized] target(s) in 6m 29s
+       Built application at: D:\works\ziji\MonkeyCode\desktop\target\release\TeemoCode.exe
+        Info Patching D:\works\ziji\MonkeyCode\desktop\target\release\TeemoCode.exe with bundle type information: nsis
+        Info Target: x64
+     Running makensis to produce D:\works\ziji\MonkeyCode\desktop\target\release\bundle\nsis\TeemoCode_0.1.0_x64-setup.exe
+    Finished 1 bundle at:
+        D:\works\ziji\MonkeyCode\desktop\target\release\bundle\nsis\TeemoCode_0.1.0_x64-setup.exe
+

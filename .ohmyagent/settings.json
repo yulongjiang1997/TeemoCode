@@ -1,0 +1,8 @@
+{
+  "permission_rules": [
+    {
+      "tool": "Grep",
+      "decision": "allow"
+    }
+  ]
+}

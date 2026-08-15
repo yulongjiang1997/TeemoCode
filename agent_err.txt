@@ -1,0 +1,4 @@
+Cloning into 'D:/works/ziji/MonkeyCode/agent'...
+remote: Repository not found.
+fatal: repository 'https://github.com/chaitin/OhMyAgent.git/' not found
+fatal: clone of 'https://github.com/chaitin/OhMyAgent.git' into submodule path 'D:/works/ziji/MonkeyCode/agent' failed

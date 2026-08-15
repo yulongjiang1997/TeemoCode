@@ -334,7 +334,7 @@ describe("模型 / 思考深度 / 权限模式", () => {
     expect(calls(ops, "session_set_mode").map((o) => o.args?.payload)).toEqual([{ mode: "yolo" }]);
 
     // 壳回写 permission_mode_update 帧后 pill 翻面;⇧⇥ 从新状态出发切回
-    emit("frames:s1", [
+    act(() => emit("frames:s1", [
       {
         type: "task-running",
         kind: "acp_event",
@@ -342,7 +342,7 @@ describe("模型 / 思考深度 / 权限模式", () => {
         timestamp: 4,
         seq: 4,
       },
-    ]);
+    ]));
     await waitFor(() => expect(screen.getByRole("button", { name: "YOLO" })).toBeTruthy());
     await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
     expect(calls(ops, "session_set_mode").map((o) => o.args?.payload)).toEqual([
@@ -644,5 +644,24 @@ describe("输入框自增高(影子副本,无 JS 量高)", () => {
     // 尾附空格:值以换行收尾时 pre-wrap 的裸尾换行不渲染,空格把末行撑出来
     await waitFor(() => expect(replica.textContent).toBe("第一行\n第二行\n "));
     expect(box.style.height).toBe("");
+  });
+});
+
+describe("切会话焦点", () => {
+  it("切换任务后焦点落到输入框;重点当前任务不抢焦点", async () => {
+    stubShell();
+    const { rerender } = render(<ChatView meta={META} />);
+    const box = (await ready()) as HTMLTextAreaElement;
+    expect(document.activeElement).not.toBe(box); // 首挂载不抢焦点
+
+    // 切到另一任务:焦点落到输入框,可直接开打
+    rerender(<ChatView meta={{ ...META, id: "s2", title: "部署" }} />);
+    await waitFor(() => expect(document.activeElement).toBe(box));
+
+    // 重点当前任务(同 id 再点一次侧栏行):不抢焦点
+    box.blur();
+    expect(document.activeElement).not.toBe(box);
+    rerender(<ChatView meta={{ ...META, id: "s2", title: "部署" }} />);
+    expect(document.activeElement).not.toBe(box);
   });
 });

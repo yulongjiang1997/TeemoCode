@@ -51,7 +51,18 @@ async function openDirMenu() {
 }
 
 describe("新建任务", () => {
-  it("默认本地模式:目录预填 ~/TeemoCode,模型取默认且锁定项禁选", async () => {
+  it("类型页签顺序与空间导轨一致", async () => {
+    stubShell();
+    render(<NewTaskModal open onClose={() => {}} onCreated={() => {}} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "模型" }).textContent).toContain("gpt-5"));
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual([
+      "本地任务",
+      "云端任务",
+      "本地会话",
+    ]);
+  });
+
+  it("默认本地模式:目录预填 ~/MonkeyCode,模型取默认且锁定项禁选", async () => {
     stubShell();
     render(<NewTaskModal open onClose={() => {}} onCreated={() => {}} />);
     // 模型/思考档是 composer 同款菜单触发器(pickers.ModelMenu):文本即当前模型
