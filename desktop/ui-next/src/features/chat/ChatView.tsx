@@ -759,19 +759,22 @@ export function ChatView({
           return;
         }
         // 当前模型 key 全部试过 → 切到下一个备用模型。
-        // 链 = 勾选的备用模型列表;当前模型在链中的位置 +1 才是下一个——
-        // 用"meta.model 打头 + 全链"的方式,切换后 meta.model 仍在链首,
-        // chain[1] 恒等于自己,永远只切一次。
+        // 备用链存显示名,但 meta.model 可能是引擎返回的模型 ID——直接 indexOf
+        // 匹配不上就永远取第一个备用(无限重试)。这里按"配置项身份"匹配:
+        // 当前模型对应的配置项在备用链中的位置 + 1。
         const backups = readFallbackModels(meta.id);
-        const nextModel = nextFallbackModel(meta.model, backups);
-        const nextCfg = cfg?.models?.find((m) => m.model === nextModel || m.name === nextModel);
-        if (!nextModel || !nextCfg) return; // 没有备用模型了:任务失败,留失败态
+        const resolveModel = (v: string) => cfg?.models?.find((m) => m.model === v || m.name === v)?.model;
+        const nextName = nextFallbackModel(meta.model, backups, resolveModel);
+        const nextCfg = cfg?.models?.find((m) => m.model === nextName || m.name === nextName);
+        if (!nextName || !nextCfg || nextCfg.model === model.model) {
+          return; // 没有备用/配置缺失/下一格就是自己(链没进展):停,留失败态
+        }
         keyFailRef.current = 0; // 新模型从头试 key
         // 切换提示:模型名 + 错误摘要 + 切到哪个备用模型
         composerRef.current.notifyError(
-          t("chat.fallbackSwitched", { model: meta.model, reason: shortReason(reason), next: nextModel }),
+          t("chat.fallbackSwitched", { model: meta.model, reason: shortReason(reason), next: nextName }),
         );
-        await sessionSetModel(meta.id, nextModel);
+        await sessionSetModel(meta.id, nextName);
         await resend();
       } catch {
         // 轮换失败:交给失败态人工处理
