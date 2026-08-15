@@ -430,7 +430,7 @@ export function NewTaskModal({
   };
   return (
     <main
-      className="relative flex min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto bg-mask-100 backdrop-blur-xs"
+      className="relative flex min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto bg-mask-100"
       onDragEnter={onDragEnter}
       onDragOver={(e) => dropEnabled && e.preventDefault()}
       onDragLeave={onDragLeave}

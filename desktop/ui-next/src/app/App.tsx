@@ -133,7 +133,7 @@ function SpaceRail({
   const { t } = useI18n();
   const labels: Record<Space, string> = { local: t("rail.local"), cloud: t("rail.cloud"), chat: t("rail.chat"), stats: t("rail.stats") };
   return (
-    <nav aria-label={t("rail.label")} className="flex w-rail shrink-0 flex-col items-center bg-mask-300 backdrop-blur-xs">
+    <nav aria-label={t("rail.label")} className="flex w-rail shrink-0 flex-col items-center bg-mask-300">
       {/* 头部基线上的 rail 角落格(h-13 = 52px,与各列头部同高,保证三列头部线
           对齐;LAYOUT §2)。**这一格恒存在**——曾对 Windows 开特例不留,让第一个
           空间图标顶上去占位,尺寸恰好凑得上(size-11 + py-1 = 52px)所以没露馅,
@@ -277,7 +277,7 @@ function MainArea({
     );
 
   return (
-    <main className="flex min-w-0 flex-1 flex-col bg-mask-100 backdrop-blur-xs">
+    <main className="flex min-w-0 flex-1 flex-col bg-mask-100">
       <div data-tauri-drag-region="" className="h-13 shrink-0 border-b border-base-300" />
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-5 p-6">
       <img src="/logo.png" alt="" className="h-16 w-16 rounded-2xl shadow-sm" aria-hidden />

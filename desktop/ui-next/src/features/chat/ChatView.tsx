@@ -897,7 +897,7 @@ export function ChatView({
 
   return (
     <main
-      className="relative flex min-w-0 flex-1 flex-col bg-mask-100 backdrop-blur-xs"
+      className="relative flex min-w-0 flex-1 flex-col bg-mask-100"
       onDragEnter={onDragEnter}
       onDragOver={(e) => e.preventDefault()}
       onDragLeave={onDragLeave}
