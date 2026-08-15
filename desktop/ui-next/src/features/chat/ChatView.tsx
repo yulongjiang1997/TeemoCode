@@ -693,6 +693,21 @@ export function ChatView({
   // ref 供逻辑用,state 供 Composer 显示标记 + 主模型选择不变。
   const fallbackRef = useRef<{ primary: string; current: string } | null>(null);
   const [fallbackUse, setFallbackUse] = useState<{ primary: string; current: string } | null>(null);
+  // 任务级隔离:ChatView 以 epoch 为 key(不随会话重挂),切会话必须重置备用
+  // 状态(标记条/显示的主模型),并恢复上一个会话的主模型,不能跨任务泄漏。
+  const prevSidRef = useRef(meta.id);
+  useEffect(() => {
+    if (prevSidRef.current !== meta.id) {
+      const prevSid = prevSidRef.current;
+      prevSidRef.current = meta.id;
+      if (fallbackRef.current) {
+        const fb = fallbackRef.current;
+        fallbackRef.current = null;
+        setFallbackUse(null);
+        void sessionSetModel(prevSid, fb.primary);
+      }
+    }
+  }, [meta.id]);
   // 任务步骤面板手动关闭:结束未完成时保留供回顾,可收起;任务继续跑自动重现
   const [planDismissed, setPlanDismissed] = useState(false);
   useEffect(() => {
@@ -758,7 +773,9 @@ export function ChatView({
         const resolveModel = (v: string) => cfg?.models?.find((m) => m.model === v || m.name === v)?.model;
         const nextName = nextFallbackModel(meta.model, backups, resolveModel);
         const nextCfg = cfg?.models?.find((m) => m.model === nextName || m.name === nextName);
-        if (!nextName || !nextCfg || nextCfg.model === model.model) {
+        // 无进展判定按"名字是否还是自己"(多个模型可能共用同一 model 字段,
+        // 按 model 比较会把不同备用误判成同一个)。链走完/没进展:恢复主模型。
+        if (!nextName || !nextCfg || nextName === meta.model) {
           // 没有备用/配置缺失/没进展:恢复主模型,留失败态
           if (fallbackRef.current) {
             const fb = fallbackRef.current;
