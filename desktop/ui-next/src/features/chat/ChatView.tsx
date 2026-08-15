@@ -706,8 +706,13 @@ export function ChatView({
     const errItem = [...state.items].reverse().find((it) => it.kind === "sys" && it.error);
     const reason =
       errItem && errItem.kind === "sys" && errItem.params?.reason ? String(errItem.params.reason) : "";
-    if (!isKeyError(reason)) {
-      // 任务正常结束(成功或非 key 错误):正在用备用则恢复主模型(一次性语义)
+    // 只处理"本回合新增"的 key 错误:历史错误帧还在 items 里,不做这道闸会反复
+    // 触发重发。注意 seq 不是单调的(回放/离线帧 seq 可能巨大),必须精确相等——
+    // 用 <= 会把之后所有真实错误(小 seq)误判成已处理,永不切换。
+    const errSeq = (errItem as { seq?: number } | undefined)?.seq;
+    const isNewKeyError = isKeyError(reason) && errSeq !== undefined && errSeq !== handledErrSeqRef.current;
+    if (!isNewKeyError) {
+      // 任务成功 / 非 key 错误 / 历史错误重放:正在用备用则恢复主模型(一次性语义)
       if (fallbackRef.current) {
         const fb = fallbackRef.current;
         fallbackRef.current = null;
@@ -716,11 +721,6 @@ export function ChatView({
       }
       return;
     }
-    // 只处理"本回合新增"的错误:历史错误帧还在 items 里,不做这道闸会反复触发
-    // 重发。注意 seq 不是单调的(回放/离线帧 seq 可能巨大),必须精确相等——
-    // 用 <= 会把之后所有真实错误(小 seq)误判成已处理,永不切换。
-    const errSeq = (errItem as { seq?: number } | undefined)?.seq;
-    if (errSeq !== undefined && errSeq === handledErrSeqRef.current) return;
     keyErrThisTurnRef.current = true;
     failHandledRef.current = true; // 本轮失败只处理一次(一回合可能多个 task-error)
     handledErrSeqRef.current = errSeq ?? 0;
