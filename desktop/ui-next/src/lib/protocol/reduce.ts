@@ -627,7 +627,10 @@ export function reduceFrame(s: ChatState, f: Frame): ChatState {
         if (id && qs) return upsertAsk(s, id, qs, tc?.status === "completed");
         return s;
       }
-      return s;
+      // 流式帧只在任务运行期间出现:即使回放窗口截掉了 task-started
+      // (打开一个已在跑的会话),running 也要保持 true,否则运行条/停止
+      // 按钮不出现、忙碌守卫(轮换逻辑)也会误判。
+      return { ...s, running: true };
     }
     case "reply-question": {
       // 答案回显/回放:request_id 即 askId,answers_json = {问题: 答案}

@@ -597,7 +597,13 @@ describe("轮次与系统帧", () => {
     const s = run([acp({ sessionUpdate: "agent_message_chunk", content: { text: "a" } })]);
     expect(reduceFrame(s, frame("不认识"))).toBe(s);
     expect(reduceFrame(s, acp({ sessionUpdate: "future_update" }))).toBe(s);
-    expect(reduceFrame(s, { type: "task-running", kind: "别的" })).toBe(s);
+    expect(reduceFrame(s, { type: "task-running", kind: "别的" })).not.toBe(s);
+  });
+
+  it("非 acp 的 task-running 流式帧置 running=true(打开已在跑的会话也能显示运行条)", () => {
+    const s = run([frame("task-ended")]);
+    const next = reduceFrame(s, { type: "task-running", kind: "text_delta" });
+    expect(next.running).toBe(true);
   });
 });
 
