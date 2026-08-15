@@ -779,14 +779,17 @@ export function ChatView({
         // 当前模型对应的配置项在备用链中的位置 + 1。
         const backups = readFallbackModels(meta.id);
         const resolveModel = (v: string) => cfg?.models?.find((m) => m.model === v || m.name === v)?.model;
-        const nextName = nextFallbackModel(meta.model, backups, resolveModel);
+        // 当前实际用的模型:优先取我们自己记的备用(fallbackRef)。会话 meta.model
+        // 切换后可能不刷新(还是主模型名),用它匹配链会永远停在第一个备用。
+        const current = fallbackRef.current?.current ?? meta.model;
+        const nextName = nextFallbackModel(current, backups, resolveModel);
         const nextCfg = cfg?.models?.find((m) => m.model === nextName || m.name === nextName);
         // 无进展判定按"名字是否还是自己"(多个模型可能共用同一 model 字段,
         // 按 model 比较会把不同备用误判成同一个)。链走完/没进展:恢复主模型。
         dbg(
-          `chain meta=${meta.model} backups=${JSON.stringify(backups)} | resolveMeta=${String(resolveModel(meta.model) ?? "∅")} | next=${String(nextName ?? "∅")} | nextCfg=${nextCfg?.model ?? "∅"} | stop=${String(!nextName || !nextCfg || nextName === meta.model)}`,
+          `chain current=${current} (meta=${meta.model}) backups=${JSON.stringify(backups)} | next=${String(nextName ?? "∅")} | nextCfg=${nextCfg?.model ?? "∅"} | stop=${String(!nextName || !nextCfg || nextName === current)}`,
         );
-        if (!nextName || !nextCfg || nextName === meta.model) {
+        if (!nextName || !nextCfg || nextName === current) {
           // 没有备用/配置缺失/没进展:恢复主模型,留失败态
           if (fallbackRef.current) {
             const fb = fallbackRef.current;
