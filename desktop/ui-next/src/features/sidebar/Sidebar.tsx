@@ -10,7 +10,7 @@
 //   btn、右键菜单走 lib/contextMenu(menu 皮相)。
 // 行交互:右键 = 行菜单(重命名/归档/删除二段确认)。
 // 行/组头/小节折叠的呈现件收口在 listKit(三列表统一,不做两套)。
-import { IconArchive, IconChevronLeft, IconChevronRight, IconDownload, IconFolder, IconFolderOpen, IconInbox, IconMessages, IconPin, IconPlus, IconRefresh, IconX } from "@tabler/icons-react";
+import { IconArchive, IconChevronLeft, IconChevronRight, IconDownload, IconFolder, IconFolderOpen, IconGripVertical, IconInbox, IconMessages, IconPin, IconPlus, IconRefresh, IconX } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
@@ -45,6 +45,7 @@ import {
   writeSessionArchivesOpen,
   type CustomGroup,
   type ProjectGroup,
+  sortCustomGroups,
 } from "@/lib/util/projects";
 import type { Space } from "@/lib/util/prefs";
 import { readSidebarCollapsed, writeSidebarCollapsed } from "@/lib/util/prefs";
@@ -399,6 +400,9 @@ function CustomGroupSection({
   projectGroups,
   pinnedProjects,
   toggleProjectPin,
+  onToggleGroupPin,
+  onReorderGroups,
+  groupIndex,
   draggedKey,
   drag,
 }: {
@@ -415,6 +419,11 @@ function CustomGroupSection({
   projectGroups: Readonly<Record<string, string>>;
   pinnedProjects: ReadonlySet<string>;
   toggleProjectPin: (key: string) => void;
+  /** 组自身置顶(与项目同一语义) */
+  onToggleGroupPin: (id: string) => void;
+  /** 组拖动排序(交换索引) */
+  onReorderGroups: (from: number, to: number) => void;
+  groupIndex: number;
   /** 正在被拖拽的项目 key(仅拖拽中非空):组头作为落点,放下即移入该组 */
   draggedKey: string | null;
   /** 拖拽句柄(透传给组内项目行) */
@@ -425,11 +434,17 @@ function CustomGroupSection({
 }) {
   const { t } = useI18n();
   const [dragOverGroup, setDragOverGroup] = useState(false);
+  // 组自身的拖动(重排组序):与项目拖拽(draggedKey)互斥
+  const [groupDragIdx, setGroupDragIdx] = useState<number | null>(null);
   const groupUsage = sumUsage(
     group.projects.flatMap((proj) => [...proj.sessions.map((s) => s.id), ...proj.archivedSessions.map((s) => s.id)]),
     p.usage,
   );
   const menuItems: MenuItem[] = [
+    {
+      label: group.pinned ? t("sidebar.group.unpinGroup") : t("sidebar.group.pinGroup"),
+      run: () => onToggleGroupPin(group.id),
+    },
     {
       label: t("sidebar.group.rename"),
       run: () => {
@@ -458,22 +473,47 @@ function CustomGroupSection({
             openMenu({ x: e.clientX, y: e.clientY }, menuItems);
           }}
           onDragOver={(e: DragEvent) => {
-            if (!draggedKey) return;
-            e.preventDefault();
-            e.stopPropagation();
-            if (!dragOverGroup) setDragOverGroup(true);
+            if (draggedKey) {
+              e.preventDefault();
+              e.stopPropagation();
+              if (!dragOverGroup) setDragOverGroup(true);
+            } else if (groupDragIdx !== null && groupDragIdx !== groupIndex) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
           }}
           onDragLeave={() => setDragOverGroup(false)}
           onDrop={(e: DragEvent) => {
-            if (!draggedKey) return;
+            if (!draggedKey && groupDragIdx === null) return;
             e.preventDefault();
             e.stopPropagation();
             setDragOverGroup(false);
-            assignProject(draggedKey, group.id);
-            drag?.onDragEnd(); // 立即清掉 draggedKey,否则源行卸载后落点残留
+            if (draggedKey) {
+              assignProject(draggedKey, group.id);
+              drag?.onDragEnd(); // 立即清掉 draggedKey,否则源行卸载后落点残留
+            } else if (groupDragIdx !== null && groupDragIdx !== groupIndex) {
+              onReorderGroups(groupDragIdx, groupIndex);
+            }
+            setGroupDragIdx(null);
           }}
         >
+          {/* 组自身拖动手柄:拖动重排组序(与项目拖拽互斥) */}
+          <span
+            draggable={!draggedKey}
+            className="shrink-0 cursor-grab text-base-content/25 hover:text-base-content/60 active:cursor-grabbing"
+            title={t("sidebar.group.drag")}
+            onDragStart={(e) => {
+              e.stopPropagation();
+              e.dataTransfer.effectAllowed = "move";
+              e.dataTransfer.setData("text/plain", String(groupIndex));
+              setGroupDragIdx(groupIndex);
+            }}
+            onDragEnd={() => setGroupDragIdx(null)}
+          >
+            <IconGripVertical size={12} stroke={1.75} aria-hidden />
+          </span>
           <GroupLabel icon={groupCollapsed ? IconFolder : IconFolderOpen} name={group.name} />
+          {group.pinned && <span className="text-[10px] text-base-content/40">📌</span>}
           {groupUsage && groupUsage.input + groupUsage.output > 0 && (
             <button
               type="button"
@@ -1032,14 +1072,25 @@ export function Sidebar({
     const nextMap = { ...projectGroups };
     for (const [key, gid] of Object.entries(nextMap)) if (gid === id) delete nextMap[key];
     setProjectGroups(nextMap);
-    writeProjectGroups(nextMap);
-  };
+    writeProjectGroups(nextMap);  };
   const assignProject = (key: string, gid: string | null) => {
     const nextMap = { ...projectGroups };
     if (gid === null) delete nextMap[key];
     else nextMap[key] = gid;
     setProjectGroups(nextMap);
     writeProjectGroups(nextMap);
+  };
+  // 分组置顶/拖动排序(与项目同一语义:置顶在前,其余按手动序)
+  const toggleGroupPin = (id: string) => {
+    commitCustomGroups(customGroups.map((g) => (g.id === id ? { ...g, pinned: !g.pinned } : g)));
+  };
+  const reorderGroups = (from: number, to: number) => {
+    const next = [...customGroups];
+    const m = next[from];
+    if (m === undefined) return;
+    next.splice(from, 1);
+    next.splice(to, 0, m);
+    commitCustomGroups(next);
   };
   const toggleProjectPin = (key: string) => {
     const next = new Set(pinnedProjects);
@@ -1243,7 +1294,7 @@ export function Sidebar({
           </div>
         )}
         <ul className="menu menu-sm w-full flex-nowrap p-0 [&_li]:flex-nowrap">
-        {grouped.custom.map((g) => (
+        {sortCustomGroups(grouped.custom).map((g, i) => (
           <CustomGroupSection
             key={g.id}
             group={g}
@@ -1253,6 +1304,9 @@ export function Sidebar({
             projectGroups={projectGroups}
             pinnedProjects={pinnedProjects}
             toggleProjectPin={toggleProjectPin}
+            onToggleGroupPin={toggleGroupPin}
+            onReorderGroups={reorderGroups}
+            groupIndex={i}
             collapsedSet={collapsed}
             onToggleCollapsed={toggleCollapsed}
             onProjectArchiveToggle={toggleProjectArchive}

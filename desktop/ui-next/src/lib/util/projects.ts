@@ -119,11 +119,18 @@ export interface ProjectGroup {
   archivedSessions: SessionMeta[];
 }
 
-/** 自定义分组(仅 local 空间):用户手动建的分组文件夹,项目(文件夹)可移入归组。 */
+/** 自定义分组(仅 local 空间):用户手动建的分组文件夹,项目(文件夹)可移入归组。
+ *  pinned:置顶(与项目同一语义,排序时置顶在前)。 */
 export interface CustomGroup {
   id: string;
   name: string;
   createdAt: number;
+  pinned?: boolean;
+}
+
+/** 置顶在前,其余按当前数组顺序(拖动排序后的手动序)。 */
+export function sortCustomGroups<T extends CustomGroup>(groups: readonly T[]): T[] {
+  return [...groups].sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
 }
 
 const CUSTOM_GROUPS_KEY = "mc.customGroups";
