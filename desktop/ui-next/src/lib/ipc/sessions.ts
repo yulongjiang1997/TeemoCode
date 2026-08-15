@@ -58,6 +58,8 @@ export interface SessionEvent {
   status?: string;
   open?: boolean;
   summary?: string;
+  /** session-model:壳在 session_set_model 后发出,会话当前模型(备用链/恢复主模型依赖) */
+  model?: string;
   /** session-usage:该会话最近一次模型调用的 token 用量 */
   input?: number;
   output?: number;

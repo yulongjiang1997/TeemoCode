@@ -1450,6 +1450,13 @@ impl OhmyDriver {
                 // 引擎切模型会把思考态重置为新模型默认档,重放会话已选档位
                 self.apply_session_think(id, &self.engine_id(id)).await;
                 self.push_frame(id, |seq| frame::model_update(name, seq));
+                // 同步会话列表快照里的 model:UI 侧 meta.model 来自会话列表,
+                // 不发这条事件会一直停留在旧模型(备用链/恢复主模型都受影响)
+                let title = self.0.sess.sessions.lock_ok().get(id).map(|s| s.title.clone()).unwrap_or_default();
+                self.0.app.emit_json(
+                    "session-event",
+                    json!({ "type": "session-model", "id": id, "model": name, "title": title }),
+                );
                 // resume 失败后的自救成功:恢复失败横幅还挂在会话上,就地改报已连接
                 if ready.is_err() {
                     self.0.app.emit_json(

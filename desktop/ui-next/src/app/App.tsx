@@ -547,6 +547,9 @@ export function App() {
                   title: e.title || m.title,
                   status: e.status ?? m.status,
                   summary: e.summary ?? m.summary,
+                  // 壳在 session_set_model 后发 session-model 事件,保持会话
+                  // 快照的 model 与引擎实际一致(备用链/恢复主模型依赖它)
+                  model: e.type === "session-model" ? (e.model ?? m.model) : m.model,
                   waiting_ask: e.type === "session-ask" ? e.open : m.waiting_ask,
                   // 侧栏项目组按「组内最近 updated_at」排序(util/projects
                   // groupSessions)。增量补丁此前只改状态不动时间戳,于是后台
