@@ -664,21 +664,62 @@ fn list_wsl_distros() -> Vec<String> {
 }
 
 /// UI 内检查更新:返回结果而非弹对话框(设置视图内联展示)。
+/// 附带清单里的更新内容(notes)与版本历史(history)供客户端展示。
 #[tauri::command]
 async fn update_check(app: AppHandle) -> Result<serde_json::Value, String> {
     let updater = build_updater(&app)?;
-    match updater.check().await {
-        Ok(Some(u)) => Ok(serde_json::json!({
-            "available": true,
-            "current": display_version(&u.current_version),
-            "latest": display_version(&u.version),
-        })),
-        Ok(None) => Ok(serde_json::json!({
-            "available": false,
-            "current": display_version(&app.package_info().version.to_string()),
-        })),
-        Err(e) => Err(format!("检查更新失败: {e}")),
-    }
+    // notes/history 直接从清单读(tauri 插件不暴露 notes,且与插件解析
+    // 无关的自定义字段也要带出来)
+    let manifest = fetch_update_manifest(&app).await;
+    let notes = manifest
+        .as_ref()
+        .and_then(|m| m.get("notes"))
+        .and_then(|n| n.as_str())
+        .map(String::from);
+    let history = manifest
+        .as_ref()
+        .and_then(|m| m.get("history"))
+        .and_then(|h| h.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let (latest, available) = match updater.check().await {
+        Ok(Some(u)) => (Some(display_version(&u.version)), true),
+        Ok(None) => (None, false),
+        Err(e) => return Err(format!("检查更新失败: {e}")),
+    };
+    Ok(serde_json::json!({
+        "available": available,
+        "current": display_version(&app.package_info().version.to_string()),
+        "latest": latest,
+        "notes": notes,
+        "history": history,
+    }))
+}
+
+/// 更新清单端点(与 tauri-plugin-updater 同一 latest.json)。
+fn updater_endpoint(app: &AppHandle) -> Option<String> {
+    app.config()
+        .plugins
+        .0
+        .get("updater")
+        .and_then(|v| v.get("endpoints"))
+        .and_then(|e| e.as_array())
+        .and_then(|a| a.first())
+        .and_then(|s| s.as_str())
+        .map(String::from)
+}
+
+/// 拉取原始清单(notes + history + 版本)。失败静默返回 None——更新内容
+/// 展示是附加能力,不能拖垮主流程。
+async fn fetch_update_manifest(app: &AppHandle) -> Option<serde_json::Value> {
+    let url = updater_endpoint(app)?;
+    let resp = reqwest::Client::new()
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .ok()?;
+    resp.json::<serde_json::Value>().await.ok()
 }
 
 /// UI 内下载安装更新并重启(update_check 确认有新版后调用)。

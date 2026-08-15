@@ -7,6 +7,10 @@ export interface UpdateInfo {
   available: boolean;
   current: string;
   latest?: string;
+  /** 本版更新内容(来自清单 notes,可跨行) */
+  notes?: string;
+  /** 版本历史(来自清单 history):[{version, notes}] */
+  history?: { version: string; notes?: string }[];
 }
 
 export interface UpdateDownloadEvent {

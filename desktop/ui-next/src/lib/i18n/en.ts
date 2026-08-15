@@ -325,6 +325,8 @@ export const en: Record<MessageKey, string> = {
   "settings.error.mcpDup": "Duplicate MCP name: {name}",
   "settings.error.mcpIncomplete": "MCP “{name}” is missing a URL or command",
   "settings.about.version": "App {version} · Engine {engine}",
+  "settings.about.updateNotes": "What's new",
+  "settings.about.history": "Version history",
   "settings.about.engineNotReady": "not ready",
   "settings.about.check": "Check for updates",
   "settings.about.checking": "Checking…",

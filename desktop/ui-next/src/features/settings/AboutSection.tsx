@@ -155,6 +155,30 @@ export function AboutSection() {
           <span>{t("update.failed", { reason: updateErr })}</span>
         </div>
       )}
+      {/* 更新内容 + 版本历史(来自 Gitee 清单):检查到结果后展示 */}
+      {update && (update.notes || (update.history?.length ?? 0) > 0) && (
+        <div className="flex flex-col gap-3 rounded-box border border-base-300 p-3">
+          {update.notes && (
+            <div>
+              <div className="mb-1 text-xs font-bold">{t("settings.about.updateNotes")}</div>
+              <p className="whitespace-pre-wrap text-xs text-base-content/80">{update.notes}</p>
+            </div>
+          )}
+          {update.history && update.history.length > 0 && (
+            <div>
+              <div className="mb-1 text-xs font-bold">{t("settings.about.history")}</div>
+              <ul className="flex max-h-48 flex-col gap-2 overflow-y-auto pr-1">
+                {update.history.map((h) => (
+                  <li key={h.version} className="text-xs">
+                    <span className="font-mono font-semibold text-base-content/90">{h.version}</span>
+                    {h.notes && <p className="mt-0.5 whitespace-pre-wrap text-base-content/60">{h.notes}</p>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
       {msg && (
         <div
           role={msg.error ? "alert" : "status"}

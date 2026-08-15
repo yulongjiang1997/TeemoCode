@@ -338,6 +338,8 @@ export const zh = {
   "settings.error.mcpDup": "MCP 名称重复:{name}",
   "settings.error.mcpIncomplete": "MCP「{name}」缺少 URL 或命令",
   "settings.about.version": "应用 {version} · 引擎 {engine}",
+  "settings.about.updateNotes": "本版更新内容",
+  "settings.about.history": "版本历史",
   "settings.about.engineNotReady": "未就绪",
   "settings.about.check": "检查更新",
   "settings.about.checking": "检查中…",
