@@ -20,6 +20,12 @@ import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } fro
 import { Markdown, MarkdownInline } from "@/components/markdown/Markdown";
 import { downloadUpload, Lightbox, UploadImg } from "@/components/media/UploadImg";
 import { useI18n } from "@/lib/i18n";
+
+/** 剥掉发送时注入的团队编排块([mc-team]…[/mc-team]),消息气泡只显示原文。 */
+function stripTeamPreamble(text: string): string {
+  const m = text.match(/^\[mc-team\][\s\S]*?\[\/mc-team\]\n*\s*/);
+  return m ? text.slice(m[0].length) : text;
+}
 import { t } from "@/lib/i18n";
 import type { FrameSender } from "@/lib/ipc/approvals";
 import { openExternal } from "@/lib/ipc/host";
@@ -55,7 +61,7 @@ function UserBubble({
   const [zoomUrl, setZoomUrl] = useState<string | null>(null); // 云端图:直链
   const { body, images, files } = uploadUrl
     ? splitAttachments(item.text)
-    : { body: item.text, images: [] as string[], files: [] as string[] };
+    : { body: stripTeamPreamble(item.text), images: [] as string[], files: [] as string[] };
   // 归约层对缺名附件留空串(不产成品文案),展示名在这儿兜底
   const attName = (a: { filename: string }) => a.filename || t("common.unnamedFile");
   const atts = item.attachments ?? [];

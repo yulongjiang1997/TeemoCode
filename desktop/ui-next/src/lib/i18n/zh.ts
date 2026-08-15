@@ -222,6 +222,8 @@ export const zh = {
   "settings.nav.models": "模型",
   "settings.nav.mcp": "MCP",
   "settings.nav.skills": "技能",
+  "settings.nav.team": "子代理团队",
+  "settings.desc.team": "统一模型,按技能分派子代理",
   "settings.nav.browser": "浏览器",
   "settings.nav.env": "运行环境",
   "settings.nav.about": "关于",
@@ -569,6 +571,8 @@ export const zh = {
   "chat.model.fallbackEmpty": "从上方下拉选择,追加到备用列表",
   "chat.model.fallbackRemove": "移除备用",
   "chat.model.fallbackInUse": "备用模型使用中",
+  "chat.team.mode": "团队",
+  "chat.team.toggleTip": "团队模式:发送任务时注入编排指令,主模型(协调者)拆解后分派给团队成员执行",
   "chat.model.empty": "尚未配置模型",
   "chat.model.noMatch": "无匹配模型",
   "chat.option.empty": "暂无可选项",
@@ -984,6 +988,13 @@ export const zh = {
   "ctx.copy": "复制",
   "ctx.paste": "粘贴",
   "ctx.selectAll": "全选",
+  "settings.team.title": "子代理团队",
+  "settings.team.hint": "团队成员(策划/开发/测试…)提前配置,发任务时主模型作为协调者,拆解后分派给合适成员执行。所有成员统一用会话主模型。",
+  "settings.team.empty": "还没有成员,先添加一个角色",
+  "settings.team.namePlaceholder": "角色名,如:策划",
+  "settings.team.skillPlaceholder": "技能/职责描述,如:需求分析、功能规划、方案设计",
+  "settings.team.add": "添加成员",
+  "settings.team.remove": "移除 {name}",
 
 } as const;
 

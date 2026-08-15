@@ -158,3 +158,46 @@ export function writeBgBlur(px: number): void {
     // 只丢持久化
   }
 }
+
+/** 团队角色(统一模型,按技能分派):策划/开发/测试等。 */
+export interface TeamRole {
+  id: string;
+  name: string;
+  skill: string;
+}
+
+export function readTeamRoles(): TeamRole[] {
+  try {
+    const v = JSON.parse(localStorage.getItem("mc.teamRoles") ?? "[]");
+    return Array.isArray(v)
+      ? v.filter((r): r is TeamRole => Boolean(r && typeof r.name === "string" && typeof r.skill === "string"))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export function writeTeamRoles(roles: TeamRole[]): void {
+  try {
+    localStorage.setItem("mc.teamRoles", JSON.stringify(roles));
+  } catch {
+    // 只丢持久化
+  }
+}
+
+/** 会话的团队模式开关(发送任务时注入团队编排指令)。 */
+export function readTeamMode(sid: string): boolean {
+  try {
+    return localStorage.getItem(`mc.teamMode.${sid}`) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function writeTeamMode(sid: string, on: boolean): void {
+  try {
+    localStorage.setItem(`mc.teamMode.${sid}`, on ? "1" : "0");
+  } catch {
+    // 只丢持久化
+  }
+}

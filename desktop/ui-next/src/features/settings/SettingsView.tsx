@@ -6,7 +6,7 @@
 //   sound-enabled 事件与托盘/桌宠双向同步);
 // - models/mcp/kernel_env 走保存条:save_config 全量写回(表单外字段从载入
 //   配置透传),壳保存后重启引擎——重启过程由全局引擎横幅外显,这里不管。
-import { IconAdjustmentsHorizontal, IconAlertTriangle, IconDice5, IconRotate, IconWand, IconBrain, IconCheck, IconChevronDown, IconInfoCircle, IconServer, IconSparkles, IconTerminal2, IconUser, IconWorld, type TablerIcon } from "@tabler/icons-react";
+import { IconAdjustmentsHorizontal, IconAlertTriangle, IconDice5, IconRotate, IconWand, IconBrain, IconCheck, IconChevronDown, IconInfoCircle, IconServer, IconSparkles, IconTerminal2, IconUser, IconUsers, IconWorld, type TablerIcon } from "@tabler/icons-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 import { resolveShortcut } from "@/app/shortcuts";
@@ -31,6 +31,7 @@ import { baizhiStatus } from "@/lib/ipc/account";
 import { AccountSection, type SyncApplied } from "@/features/account/AccountSection";
 import { engineCaps } from "@/lib/ipc/approvals";
 import { AboutSection } from "./AboutSection";
+import { TeamSection } from "./TeamSection";
 import { BrowserSection } from "./BrowserSection";
 import { McpSection } from "./McpSection";
 import { SkillsSection } from "./SkillsSection";
@@ -49,7 +50,7 @@ import {
   type SettingsDraft,
 } from "./settingsForm";
 
-type Section = "general" | "account" | "models" | "mcp" | "skills" | "browser" | "env" | "about";
+type Section = "general" | "account" | "models" | "mcp" | "skills" | "browser" | "env" | "team" | "about";
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -910,6 +911,7 @@ export function SettingsView({
     { id: "models", label: t("settings.nav.models"), desc: t("settings.desc.models"), icon: IconBrain },
     { id: "mcp", label: t("settings.nav.mcp"), desc: t("settings.desc.mcp"), icon: IconServer },
     { id: "skills", label: t("settings.nav.skills"), desc: t("settings.desc.skills"), icon: IconSparkles },
+    { id: "team", label: t("settings.nav.team"), desc: t("settings.desc.team"), icon: IconUsers },
     ...(browserExt
       ? [{ id: "browser" as const, label: t("settings.nav.browser"), desc: t("settings.desc.browser"), icon: IconWorld }]
       : []),
@@ -959,6 +961,8 @@ export function SettingsView({
         return <BrowserSection />;
       case "env":
         return draft ? <EnvSection draft={draft} distros={distros} onDraft={updateDraft} /> : configGate;
+      case "team":
+        return <TeamSection />;
       case "about":
         return <AboutSection />;
     }

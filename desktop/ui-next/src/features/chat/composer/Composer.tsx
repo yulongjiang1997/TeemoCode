@@ -30,6 +30,7 @@ import { useEscLayer } from "@/lib/util/escLayer";
 import { sessionCompact, sessionSetMode, sessionSetModel, sessionSetSkills, sessionSetThink } from "@/lib/ipc/controls";
 import { afterEngineReady } from "@/lib/ipc/engine";
 import { modelMenuList, resolveModelName, stripSourceSuffix, stripTierPrefix } from "@/lib/models/modelMenu";
+import { readTeamMode, writeTeamMode } from "@/lib/util/prefs";
 import { modelsList, type ModelInfo, type SessionMeta } from "@/lib/ipc/sessions";
 import { defaultEnabledSkills, skillsList, type SkillInfo } from "@/lib/ipc/skills";
 import { pickAttachmentPaths } from "@/lib/ipc/uploads";
@@ -221,6 +222,9 @@ export function Composer({
   const { t } = useI18n();
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const imeRef = useRef(createImeGuard());
+  // 团队模式(按会话):开启后发送任务注入团队编排指令
+  const [teamOn, setTeamOn] = useState(() => readTeamMode(sessionId));
+  useEffect(() => setTeamOn(readTeamMode(sessionId)), [sessionId]);
   const [models, setModels] = useState<ModelInfo[]>([]);
   // 备用模型链(按会话存 localStorage):主模型 key 全部失败后按此顺序自动切换
   const [fallbackModels, setFallbackModels] = useState<string[]>(() => {
@@ -594,6 +598,22 @@ export function Composer({
               {t("chat.model.fallbackInUse")}: {stripSourceSuffix(stripTierPrefix(fallbackUse.current))}
             </span>
           )}
+
+          {/* 团队模式开关:开启后发送任务注入团队编排指令(协调者分派成员) */}
+          <button
+            type="button"
+            className={`badge badge-sm shrink-0 cursor-pointer transition-colors ${
+              teamOn ? "border-primary/60 bg-primary/10 text-primary" : "badge-outline text-base-content/40 hover:text-base-content/60"
+            }`}
+            title={t("chat.team.toggleTip")}
+            onClick={() => setTeamOn((on) => {
+              const next = !on;
+              writeTeamMode(sessionId, next);
+              return next;
+            })}
+          >
+            {t("chat.team.mode")}
+          </button>
 
           {/* 布局规范:上下文用量是输入侧元信息,归 composer 集群右端
               (形态收口在 composerKit/UsageRing) */}
