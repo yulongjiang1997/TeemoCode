@@ -87,6 +87,19 @@ export async function setSoundEnabled(enabled: boolean): Promise<void> {
   await invoke("set_sound_enabled", { enabled });
 }
 
+/** 导入自定义音效文件:壳复制到应用数据目录 sounds/,返回存储路径(asset 协议播放)。 */
+export async function importSound(event: string, src: string): Promise<string> {
+  if (!inDesktopShell()) throw new Error("not in desktop");
+  return invoke<string>("import_sound", { event, src });
+}
+
+/** 本地路径 → asset 协议 URL(主窗口与桌宠同源,Audio 可直接播)。 */
+export function soundAssetUrl(path: string): string {
+  const g = (window as { __TAURI__?: { core?: { convertFileSrc?: (p: string) => string } } }).__TAURI__;
+  if (!g?.core?.convertFileSrc) return path;
+  return g.core.convertFileSrc(path);
+}
+
 /** 订阅提示音开关变更(设置页与托盘/桌宠双向同步);非壳环境 no-op。 */
 export function onSoundEnabled(cb: (enabled: boolean) => void): () => void {
   return listen<boolean>("sound-enabled", (on) => cb(on !== false));

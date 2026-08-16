@@ -230,12 +230,11 @@ export function writeSyncedExcluded(names: string[]): void {
   }
 }
 
-/** 事件音效配置:每事件 { enabled, hasFile?, name? }。
- *  音效文件本体存 IndexedDB(soundFile.ts),这里只存标志 + 文件名(显示)。 */
+/** 事件音效配置:每事件 { enabled, file? }。
+ *  自定义文件经壳复制到应用数据目录(sounds/),这里存存储路径,播放走 asset 协议。 */
 export interface SoundEntry {
   enabled: boolean;
-  hasFile?: boolean;
-  name?: string;
+  file?: string;
 }
 export type SoundConfig = Partial<Record<"startup" | "task-done" | "task-error" | "ask" | "idle", SoundEntry>>;
 

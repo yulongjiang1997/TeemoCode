@@ -1430,6 +1430,33 @@ fn set_sound_enabled(app: AppHandle, enabled: bool) {
     apply_sound_enabled(&app, enabled);
 }
 
+/// 导入自定义音效文件:把用户选的音频复制到应用数据目录(sounds/),
+/// 返回存储路径(经 asset 协议给主窗口/桌宠播放,避免 base64/IndexedDB)。
+/// 事件 id 按 SOUND_EVENTS:startup/task-done/task-error/ask/idle。
+#[tauri::command]
+async fn import_sound(app: AppHandle, event: String, src: String) -> Result<String, String> {
+    use std::io::Write;
+    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let dir = data.join("sounds");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    // 源路径可能是 file:// 或裸路径
+    let src_path = src.strip_prefix("file://").unwrap_or(&src);
+    let bytes = std::fs::read(src_path).map_err(|e| format!("读取源文件失败: {e}"))?;
+    if bytes.is_empty() {
+        return Err("文件为空".into());
+    }
+    let ext = std::path::Path::new(src_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("mp3");
+    let name = format!("{event}.{ext}");
+    let dest = dir.join(&name);
+    let mut f = std::fs::File::create(&dest).map_err(|e| e.to_string())?;
+    f.write_all(&bytes).map_err(|e| e.to_string())?;
+    // 返回 asset 协议可用的 URL(main 窗口与桌宠同源)
+    Ok(dest.to_string_lossy().to_string())
+}
+
 /// 提示音开关的唯一落点(设置页命令与托盘勾选项共用):更新运行时真值 →
 /// 同步托盘勾选态 → 广播给桌宠页与设置页 → 落盘。
 ///
@@ -1509,6 +1536,7 @@ fn main() {
             pet_native_render,
             sound_enabled,
             set_sound_enabled,
+            import_sound,
             update_check,
             update_download,
             update_install,

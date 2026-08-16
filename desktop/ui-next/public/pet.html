@@ -115,25 +115,10 @@
     a.currentTime = 0;
     a.play().catch(() => {}); // 自动播放被平台策略拦下时静默放弃
   }
-  // 自定义文件存 IndexedDB(mc-sounds/files),读出来用 blob 播
-  function playFromDb(key) {
-    const ev = SOUND_EVENT_MAP[key] || key;
-    const req = indexedDB.open('mc-sounds', 1);
-    req.onsuccess = () => {
-      const db = req.result;
-      try {
-        const g = db.transaction('files', 'readonly').objectStore('files').get(ev);
-        g.onsuccess = () => {
-          db.close();
-          if (g.result) playSrc(URL.createObjectURL(g.result));
-          else playSrc(SOUND_DEFAULTS[key]);
-        };
-        g.onerror = () => { db.close(); playSrc(SOUND_DEFAULTS[key]); };
-      } catch {
-        playSrc(SOUND_DEFAULTS[key]);
-      }
-    };
-    req.onerror = () => playSrc(SOUND_DEFAULTS[key]);
+  // 自定义文件:壳复制到应用数据目录,配置存路径,经 asset 协议播放
+  function playFromPath(key, path) {
+    const t = (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.convertFileSrc) ? window.__TAURI__.core.convertFileSrc(path) : path;
+    playSrc(t);
   }
   function play(key) {
     if (!soundEnabled) return;
@@ -143,7 +128,7 @@
     const now = Date.now();
     if (now - (lastPlay[key] || 0) < 2000) return;
     lastPlay[key] = now;
-    if (entry && entry.hasFile) { playFromDb(key); return; }
+    if (entry && entry.file) { playFromPath(key, entry.file); return; }
     playSrc(SOUND_DEFAULTS[key]);
   }
   let startPlayed = false; // 启动音只在首次连上时响,内核重启重连不再响
