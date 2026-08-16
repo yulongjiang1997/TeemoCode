@@ -3,6 +3,8 @@ use std::path::Path;
 use std::process::Command;
 use tauri::Manager;
 
+use crate::config::config_dir;
+
 /// Git 上传/导入(本地任务工作目录 ↔ 远程仓库)。
 /// 依赖系统 git 命令;身份统一用 TeemoCode 本地配置(不改用户全局 git 配置)。
 
@@ -84,36 +86,30 @@ pub async fn git_push(app: tauri::AppHandle, workdir: String, remote_url: Option
     }))
 }
 
-/// 把绑定该工作目录的任务会话数据(meta.json + journal 等)导出到
-/// `<workdir>/.teemocode/<sid>/`,供 git 一起提交推送(项目自包含任务数据)。
+/// 把绑定该工作目录的任务会话数据导出到项目 `.teemocode/`,供 git 一起提交。
+/// 覆盖三处数据目录(与导入原版 monkeycode 一致):
+///   ohmy-sessions/<sid>/       壳侧会话(meta.json + events.jsonl)
+///   ohmyagent/sessions/<sid>/  引擎对话(messages.jsonl)
+///   ohmyagent/tasks/<sid>/     任务状态(tasks.json + notifications.json)
 fn export_task_data(app: &tauri::AppHandle, workdir: &str) -> Result<usize, String> {
-    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let src = Path::new(workdir).join(".teemocode");
+    let root = config_dir(app)?;
+    let sid_list = bound_sids(app, workdir);
     let mut exported = 0usize;
-    let entries = std::fs::read_dir(&data).map_err(|e| format!("读取任务工作区失败: {e}"))?;
-    for entry in entries.flatten() {
-        let sid = entry.file_name().to_string_lossy().to_string();
-        if sid.starts_with('.') {
-            continue;
-        }
-        let meta_p = entry.path().join("meta.json");
-        if !meta_p.is_file() {
-            continue;
-        }
-        let Ok(meta) = read_json(&meta_p) else { continue };
-        // 只导出绑定当前工作目录的会话
-        let wd = meta.get("workdir").and_then(|v| v.as_str()).unwrap_or("");
-        if wd != workdir {
-            continue;
-        }
-        let dest = src.join(&sid);
-        if !dest.is_dir() {
-            std::fs::create_dir_all(&dest).map_err(|e| format!("创建导出目录失败: {e}"))?;
-        }
-        if let Ok(files) = std::fs::read_dir(entry.path()) {
-            for f in files.flatten() {
-                let name = f.file_name().to_string_lossy().to_string();
-                let _ = std::fs::copy(f.path(), dest.join(&name));
+    for sid in &sid_list {
+        for rel in ["ohmy-sessions", "ohmyagent/sessions", "ohmyagent/tasks"] {
+            let src = root.join(rel).join(sid);
+            if !src.is_dir() {
+                continue;
+            }
+            let dest = Path::new(workdir).join(".teemocode").join(rel).join(sid);
+            if !dest.is_dir() {
+                std::fs::create_dir_all(&dest).map_err(|e| format!("创建导出目录失败: {e}"))?;
+            }
+            if let Ok(files) = std::fs::read_dir(&src) {
+                for f in files.flatten() {
+                    let name = f.file_name().to_string_lossy().to_string();
+                    let _ = std::fs::copy(f.path(), dest.join(&name));
+                }
             }
         }
         exported += 1;
@@ -121,8 +117,31 @@ fn export_task_data(app: &tauri::AppHandle, workdir: &str) -> Result<usize, Stri
     Ok(exported)
 }
 
+/// 绑定某工作目录的会话 sid 集合(壳侧 ohmy-sessions 的 meta.workdir 匹配)。
+fn bound_sids(app: &tauri::AppHandle, workdir: &str) -> Vec<String> {
+    let Ok(root) = config_dir(app) else { return vec![] };
+    let shell = root.join("ohmy-sessions");
+    let mut out = vec![];
+    let Ok(entries) = std::fs::read_dir(&shell) else { return out };
+    for e in entries.flatten() {
+        let sid = e.file_name().to_string_lossy().to_string();
+        let meta_p = e.path().join("meta.json");
+        if !meta_p.is_file() {
+            continue;
+        }
+        if let Ok(meta) = read_json(&meta_p) {
+            let wd = meta.get("workdir").and_then(|v| v.as_str()).unwrap_or("");
+            if wd == workdir {
+                out.push(sid);
+            }
+        }
+    }
+    out
+}
+
+/// 导入项目后检测任务数据:项目内 `.teemocode/` 三目录视为导出的本地任务
+/// 会话数据,迁移到配置目录(本地任务工作区)并把 workdir 改成当前目录。
 /// 导入:按 git 地址加载到工作目录并拉取代码。
-/// 目录空 → clone;已有 .git → pull;有文件无 .git → init + 远程 + pull。
 #[tauri::command]
 pub async fn git_import(workdir: String, url: String) -> Result<serde_json::Value, String> {
     let dir = workdir.trim();
