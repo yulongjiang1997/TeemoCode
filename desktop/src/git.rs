@@ -41,7 +41,7 @@ fn commit_identity(dir: &str) -> Result<(), String> {
 /// 上传:工作目录有 .git → 直接提交推送;没有 → init + 提交 + (给远程地址则)推送。
 /// remote_url 可选:目录已有 origin 就用它,否则用传入地址;都没有则只提交不推送。
 #[tauri::command]
-pub async fn git_push(workdir: String, remote_url: Option<String>) -> Result<serde_json::Value, String> {
+pub async fn git_push(app: tauri::AppHandle, workdir: String, remote_url: Option<String>) -> Result<serde_json::Value, String> {
     let dir = workdir.trim();
     if dir.is_empty() {
         return Err("工作目录为空".into());
@@ -49,6 +49,8 @@ pub async fn git_push(workdir: String, remote_url: Option<String>) -> Result<ser
     if !std::path::Path::new(dir).exists() {
         return Err(format!("工作目录不存在: {dir}"));
     }
+    // 把绑定当前工作目录的任务会话数据导出到项目 .teemocode/,随代码一起提交推送
+    let _ = export_task_data(&app, dir);
     if !has_git(dir) {
         git(dir, &["init"]).map_err(|e| format!("git init 失败: {e}"))?;
     }
@@ -80,6 +82,43 @@ pub async fn git_push(workdir: String, remote_url: Option<String>) -> Result<ser
         "branch": if branch.is_empty() { "master".to_string() } else { branch },
         "commit": hash,
     }))
+}
+
+/// 把绑定该工作目录的任务会话数据(meta.json + journal 等)导出到
+/// `<workdir>/.teemocode/<sid>/`,供 git 一起提交推送(项目自包含任务数据)。
+fn export_task_data(app: &tauri::AppHandle, workdir: &str) -> Result<usize, String> {
+    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let src = Path::new(workdir).join(".teemocode");
+    let mut exported = 0usize;
+    let entries = std::fs::read_dir(&data).map_err(|e| format!("读取任务工作区失败: {e}"))?;
+    for entry in entries.flatten() {
+        let sid = entry.file_name().to_string_lossy().to_string();
+        if sid.starts_with('.') {
+            continue;
+        }
+        let meta_p = entry.path().join("meta.json");
+        if !meta_p.is_file() {
+            continue;
+        }
+        let Ok(meta) = read_json(&meta_p) else { continue };
+        // 只导出绑定当前工作目录的会话
+        let wd = meta.get("workdir").and_then(|v| v.as_str()).unwrap_or("");
+        if wd != workdir {
+            continue;
+        }
+        let dest = src.join(&sid);
+        if !dest.is_dir() {
+            std::fs::create_dir_all(&dest).map_err(|e| format!("创建导出目录失败: {e}"))?;
+        }
+        if let Ok(files) = std::fs::read_dir(entry.path()) {
+            for f in files.flatten() {
+                let name = f.file_name().to_string_lossy().to_string();
+                let _ = std::fs::copy(f.path(), dest.join(&name));
+            }
+        }
+        exported += 1;
+    }
+    Ok(exported)
 }
 
 /// 导入:按 git 地址加载到工作目录并拉取代码。
