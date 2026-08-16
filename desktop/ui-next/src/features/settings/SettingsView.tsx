@@ -6,18 +6,15 @@
 //   sound-enabled 事件与托盘/桌宠双向同步);
 // - models/mcp/kernel_env 走保存条:save_config 全量写回(表单外字段从载入
 //   配置透传),壳保存后重启引擎——重启过程由全局引擎横幅外显,这里不管。
-import { IconAdjustmentsHorizontal, IconAlertTriangle, IconDice5, IconRotate, IconWand, IconBrain, IconCheck, IconChevronDown, IconInfoCircle, IconServer, IconSparkles, IconTerminal2, IconUser, IconUsers, IconWorld, type TablerIcon } from "@tabler/icons-react";
+import { IconAdjustmentsHorizontal, IconAlertTriangle, IconDice5, IconRotate, IconWand, IconBrain, IconCheck, IconChevronDown, IconInfoCircle, IconServer, IconSparkles, IconTerminal2, IconUser, IconUsers, IconVolume, IconWorld, type TablerIcon } from "@tabler/icons-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 import { resolveShortcut } from "@/app/shortcuts";
 import { LOCALES, setLocale, useI18n } from "@/lib/i18n";
 import {
   getConfig,
-  getSoundEnabled,
   listWslDistros,
-  onSoundEnabled,
   saveConfig,
-  setSoundEnabled,
   type DesktopConfig,
 } from "@/lib/ipc/config";
 import { isWindowsShell } from "@/lib/ipc/host";
@@ -32,6 +29,7 @@ import { AccountSection, type SyncApplied } from "@/features/account/AccountSect
 import { engineCaps } from "@/lib/ipc/approvals";
 import { AboutSection } from "./AboutSection";
 import { TeamSection } from "./TeamSection";
+import { SoundSection } from "./SoundSection";
 import { BrowserSection } from "./BrowserSection";
 import { McpSection } from "./McpSection";
 import { SkillsSection } from "./SkillsSection";
@@ -50,7 +48,7 @@ import {
   type SettingsDraft,
 } from "./settingsForm";
 
-type Section = "general" | "account" | "models" | "mcp" | "skills" | "browser" | "env" | "team" | "about";
+type Section = "general" | "account" | "models" | "mcp" | "skills" | "browser" | "env" | "team" | "sound" | "about";
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -466,26 +464,7 @@ function GeneralSection() {
   };
   // 没配过就给一份默认草稿:编辑器要有初值,选中「自定义」当场就该看到效果
   const [custom, setCustom] = useState<CustomTheme>(() => readCustomTheme() ?? DEFAULT_CUSTOM);
-  const [soundOn, setSoundOn] = useState(true);
 
-  useEffect(() => {
-    if (!inDesktopShell()) return;
-    let alive = true;
-    void getSoundEnabled().then((on) => {
-      if (alive) setSoundOn(on);
-    });
-    // 托盘勾选项是同一开关的另一入口,订阅广播让两处显示不打架
-    const off = onSoundEnabled(setSoundOn);
-    return () => {
-      alive = false;
-      off();
-    };
-  }, []);
-
-  const pickSound = (next: boolean) => {
-    setSoundOn(next); // 乐观置位:壳广播会回来盖一次,失败则回滚
-    void setSoundEnabled(next).catch(() => setSoundOn(!next));
-  };
 
   const pickTheme = (next: Theme) => {
     // 切到自定义走 setCustomTheme:它同时落配置 + 渲染好的 CSS(首帧防闪要用),
@@ -616,13 +595,7 @@ function GeneralSection() {
         </SettingRow>
         {inDesktopShell() && (
           <SettingRow label={t("settings.general.sound")} hint={t("settings.general.soundHint")}>
-            <input
-              type="checkbox"
-              className="toggle toggle-sm shrink-0"
-              aria-label={t("settings.general.sound")}
-              checked={soundOn}
-              onChange={(e) => pickSound(e.target.checked)}
-            />
+            <span className="text-xs text-base-content/50">{t("settings.sound.moved")}</span>
           </SettingRow>
         )}
       </div>
@@ -911,6 +884,7 @@ export function SettingsView({
     { id: "models", label: t("settings.nav.models"), desc: t("settings.desc.models"), icon: IconBrain },
     { id: "mcp", label: t("settings.nav.mcp"), desc: t("settings.desc.mcp"), icon: IconServer },
     { id: "skills", label: t("settings.nav.skills"), desc: t("settings.desc.skills"), icon: IconSparkles },
+    { id: "sound", label: t("settings.nav.sound"), desc: t("settings.desc.sound"), icon: IconVolume },
     { id: "team", label: t("settings.nav.team"), desc: t("settings.desc.team"), icon: IconUsers },
     ...(browserExt
       ? [{ id: "browser" as const, label: t("settings.nav.browser"), desc: t("settings.desc.browser"), icon: IconWorld }]
@@ -963,6 +937,8 @@ export function SettingsView({
         return draft ? <EnvSection draft={draft} distros={distros} onDraft={updateDraft} /> : configGate;
       case "team":
         return <TeamSection />;
+      case "sound":
+        return <SoundSection />;
       case "about":
         return <AboutSection />;
     }

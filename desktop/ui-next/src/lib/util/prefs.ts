@@ -229,3 +229,27 @@ export function writeSyncedExcluded(names: string[]): void {
     // 只丢持久化
   }
 }
+
+/** 事件音效配置:每事件 { enabled, file?(data URL) }。 */
+export interface SoundEntry {
+  enabled: boolean;
+  file?: string;
+}
+export type SoundConfig = Partial<Record<"task-done" | "task-error" | "ask", SoundEntry>>;
+
+export function readSoundConfig(): SoundConfig {
+  try {
+    const v = JSON.parse(localStorage.getItem("mc.sounds") ?? "{}");
+    return v && typeof v === "object" ? v : {};
+  } catch {
+    return {};
+  }
+}
+
+export function writeSoundConfig(cfg: SoundConfig): void {
+  try {
+    localStorage.setItem("mc.sounds", JSON.stringify(cfg));
+  } catch {
+    // 只丢持久化
+  }
+}

@@ -100,6 +100,7 @@ function readFallbackModels(sid: string): string[] {
 
 /** 备用模型链的下一格(纯逻辑见 lib/util/fallbackModel.ts)。 */
 import { nextFallbackModel } from "@/lib/util/fallbackModel";
+import { playEventSound } from "@/lib/util/sound";
 
 import {
   anchorScrollTop,
@@ -724,6 +725,30 @@ export function ChatView({
     if (state.running && state.plan.length > 0) setPlanDismissed(false);
   }, [state.running, state.plan.length]);
   const keyErrThisTurnRef = useRef(false);
+  // 事件音效:任务完成/出错(按最后错误 seq + 最后条 seq 去重,每事件一次)
+  const lastErrSeqRef = useRef(0);
+  const lastDoneSeqRef = useRef(0);
+  const prevAskRef = useRef(false);
+  useEffect(() => {
+    const asking = Boolean(meta.waiting_ask);
+    if (asking && !prevAskRef.current) playEventSound("ask");
+    prevAskRef.current = asking;
+  }, [meta.waiting_ask]);
+  useEffect(() => {
+    if (!state.turnEnded) return;
+    const lastItem = state.items[state.items.length - 1];
+    const lastSeq = (lastItem as { seq?: number } | undefined)?.seq ?? 0;
+    const lastErr = [...state.items].reverse().find((it) => it.kind === "sys" && it.error);
+    const errSeq = (lastErr as { seq?: number } | undefined)?.seq ?? 0;
+    if (errSeq !== lastErrSeqRef.current) {
+      playEventSound("task-error");
+      lastErrSeqRef.current = errSeq;
+      lastDoneSeqRef.current = lastSeq;
+    } else if (lastSeq !== lastDoneSeqRef.current) {
+      playEventSound("task-done");
+      lastDoneSeqRef.current = lastSeq;
+    }
+  }, [state.turnEnded, state.items]);
   // 已处理过的错误 seq:切换成功后历史错误帧还在 items 里,没有这道闸会反复
   // 触发轮换 + 重发(用户报障:切换成功还一直重发消息)
   const handledErrSeqRef = useRef(0);
