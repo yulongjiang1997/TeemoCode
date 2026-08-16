@@ -16,6 +16,7 @@ mod baizhi;
 mod browser;
 mod config;
 mod driver;
+mod git;
 #[cfg(target_os = "windows")]
 mod native_pet;
 mod import_mc;
@@ -1537,6 +1538,8 @@ fn main() {
             sound_enabled,
             set_sound_enabled,
             import_sound,
+            git::git_push,
+            git::git_import,
             update_check,
             update_download,
             update_install,

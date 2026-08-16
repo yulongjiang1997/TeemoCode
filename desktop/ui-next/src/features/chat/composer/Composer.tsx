@@ -31,6 +31,7 @@ import { sessionCompact, sessionSetMode, sessionSetModel, sessionSetSkills, sess
 import { afterEngineReady } from "@/lib/ipc/engine";
 import { modelMenuList, resolveModelName, stripSourceSuffix, stripTierPrefix } from "@/lib/models/modelMenu";
 import { readTeamMode, writeTeamMode } from "@/lib/util/prefs";
+import { gitImport, gitPush } from "@/lib/ipc/git";
 import { modelsList, type ModelInfo, type SessionMeta } from "@/lib/ipc/sessions";
 import { defaultEnabledSkills, skillsList, type SkillInfo } from "@/lib/ipc/skills";
 import { pickAttachmentPaths } from "@/lib/ipc/uploads";
@@ -379,6 +380,42 @@ export function Composer({
   const mode = state.permMode || meta.mode || "default";
   const yolo = mode === "yolo";
 
+  // Git 上传/导入:工作目录文件 ↔ 远程仓库
+  const doGitPush = async () => {
+    const dir = meta.workdir;
+    if (!dir) {
+      ctl.notifyError(t("chat.git.noWorkdir"));
+      return;
+    }
+    try {
+      const url = window.prompt(t("chat.git.pushPrompt"))?.trim() || undefined;
+      const r = await gitPush(dir, url);
+      ctl.notifyError(
+        r.pushed
+          ? t("chat.git.pushOk", { remote: r.remote ?? "", branch: r.branch ?? "", commit: r.commit ?? "" })
+          : t("chat.git.pushCommitted"),
+      );
+    } catch (e) {
+      ctl.notifyError(t("chat.git.pushFailed", { reason: errText(e) }));
+    }
+  };
+
+  const doGitImport = async () => {
+    const dir = meta.workdir;
+    if (!dir) {
+      ctl.notifyError(t("chat.git.noWorkdir"));
+      return;
+    }
+    const url = window.prompt(t("chat.git.importPrompt"))?.trim();
+    if (!url) return;
+    try {
+      const r = await gitImport(dir, url);
+      ctl.notifyError(t("chat.git.importOk", { remote: r.remote ?? "", branch: r.branch ?? "" }));
+    } catch (e) {
+      ctl.notifyError(t("chat.git.importFailed", { reason: errText(e) }));
+    }
+  };
+
   const pickModel = (name: string) => {
     if (!name || name === currentModel) return;
     void sessionSetModel(sessionId, name).catch((e) => {
@@ -614,6 +651,30 @@ export function Composer({
           >
             {t("chat.team.mode")}
           </button>
+
+          {/* Git 上传/导入:把工作目录文件推到远程 / 从远程拉取到工作目录 */}
+          <div className="dropdown dropdown-end shrink-0">
+            <button
+              type="button"
+              tabIndex={0}
+              className="badge badge-sm cursor-pointer badge-outline text-base-content/40 hover:text-base-content/60"
+              title={t("chat.git.menu")}
+            >
+              {t("chat.git.menu")}
+            </button>
+            <ul tabIndex={0} className="dropdown-content menu z-50 mt-1 w-52 rounded-box border border-base-300 bg-base-100 p-1 shadow-lg">
+              <li>
+                <button type="button" className="text-xs" onClick={() => void doGitPush()}>
+                  {t("chat.git.push")}
+                </button>
+              </li>
+              <li>
+                <button type="button" className="text-xs" onClick={() => void doGitImport()}>
+                  {t("chat.git.import")}
+                </button>
+              </li>
+            </ul>
+          </div>
 
           {/* 布局规范:上下文用量是输入侧元信息,归 composer 集群右端
               (形态收口在 composerKit/UsageRing) */}
