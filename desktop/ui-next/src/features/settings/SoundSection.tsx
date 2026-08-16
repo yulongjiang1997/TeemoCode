@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { getSoundEnabled, onSoundEnabled, setSoundEnabled } from "@/lib/ipc/config";
 import { inDesktopShell } from "@/lib/ipc/ipc";
-import { setGlobalSoundEnabled, SOUND_EVENTS, type SoundEvent } from "@/lib/util/sound";
+import { setGlobalSoundEnabled, playEventSound, SOUND_EVENTS, type SoundEvent } from "@/lib/util/sound";
 import { readSoundConfig, writeSoundConfig, type SoundConfig } from "@/lib/util/prefs";
 
 /** 音效:全局开关(壳 sound_enabled) + 每事件单独开关 + 可替换音效文件。 */
@@ -85,6 +85,14 @@ export function SoundSection() {
                   onChange={(e) => commit({ ...cfg, [id]: { ...entry, enabled: e.target.checked } })}
                 />
                 <span className="min-w-0 flex-1 text-xs">{t(labelKey)}</span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs shrink-0 text-base-content/60"
+                  title={t("settings.sound.previewTip")}
+                  onClick={() => playEventSound(id)}
+                >
+                  {t("settings.sound.preview")}
+                </button>
                 <button
                   type="button"
                   className="btn btn-ghost btn-xs shrink-0 text-base-content/50"

@@ -237,6 +237,8 @@ export const en: Record<MessageKey, string> = {
   "settings.sound.taskDone": "Task completed",
   "settings.sound.taskError": "Task error",
   "settings.sound.ask": "Awaiting approval",
+  "settings.sound.preview": "Preview",
+  "settings.sound.previewTip": "Play the current sound (custom file or default)",
   "settings.sound.pick": "Choose sound",
   "settings.sound.replace": "Replace sound",
   "settings.sound.reset": "Reset to default",

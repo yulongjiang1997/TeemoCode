@@ -43,6 +43,17 @@ function playBeep(high: boolean): void {
   }
 }
 
+// 自动播放限制:启动音效在无用户手势时可能被浏览器策略拦截,
+// play() 被拒后延迟到首个用户手势(pointerdown/keydown)再补播。
+let startupPending = false;
+function retryStartup(): void {
+  if (!startupPending) return;
+  startupPending = false;
+  window.removeEventListener("pointerdown", retryStartup);
+  window.removeEventListener("keydown", retryStartup);
+  playEventSound("startup");
+}
+
 /** 播放事件音效:全局开 && 事件没被显式关闭 → 播放(自定义文件优先,否则默认音)。 */
 export function playEventSound(ev: SoundEvent): void {
   if (!globalEnabled) return;
@@ -52,7 +63,18 @@ export function playEventSound(ev: SoundEvent): void {
   if (entry?.file) {
     try {
       const a = new Audio(entry.file);
-      void a.play().catch(() => playBeep(ev === "task-error"));
+      const p = a.play();
+      if (p) {
+        p.catch(() => {
+          if (ev === "startup") {
+            startupPending = true;
+            window.addEventListener("pointerdown", retryStartup);
+            window.addEventListener("keydown", retryStartup);
+          } else {
+            playBeep(ev === "task-error");
+          }
+        });
+      }
       return;
     } catch {
       // 文件播放失败,退回默认

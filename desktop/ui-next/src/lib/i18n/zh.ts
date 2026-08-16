@@ -248,6 +248,8 @@ export const zh = {
   "settings.sound.taskDone": "任务完成",
   "settings.sound.taskError": "任务出错",
   "settings.sound.ask": "等待审批",
+  "settings.sound.preview": "试听",
+  "settings.sound.previewTip": "播放当前音效(自定义文件或默认音)",
   "settings.sound.pick": "选择音效",
   "settings.sound.replace": "更换音效",
   "settings.sound.reset": "恢复默认",
