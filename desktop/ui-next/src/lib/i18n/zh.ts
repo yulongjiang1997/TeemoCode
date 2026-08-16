@@ -244,6 +244,7 @@ export const zh = {
   "settings.sound.title": "音效",
   "settings.sound.hint": "事件提示音:每事件单独开关,可替换音效文件(音频文件存本地)。全局总开关与托盘同步。",
   "settings.sound.master": "全局提示音",
+  "settings.sound.startup": "启动",
   "settings.sound.taskDone": "任务完成",
   "settings.sound.taskError": "任务出错",
   "settings.sound.ask": "等待审批",

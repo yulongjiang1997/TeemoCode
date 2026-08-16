@@ -233,6 +233,7 @@ export const en: Record<MessageKey, string> = {
   "settings.sound.title": "Sound effects",
   "settings.sound.hint": "Event sounds: toggle each event, replaceable sound files (stored locally). The master switch syncs with the tray.",
   "settings.sound.master": "Master sound",
+  "settings.sound.startup": "Startup",
   "settings.sound.taskDone": "Task completed",
   "settings.sound.taskError": "Task error",
   "settings.sound.ask": "Awaiting approval",
