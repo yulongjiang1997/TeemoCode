@@ -13,6 +13,7 @@
 // 只在有条目时出现(引导在账号页卡片,不在这里堆空态)。
 import { IconChevronDown, IconEye, IconEyeOff, IconPlus } from "@tabler/icons-react";
 import { useState } from "react";
+import { readSyncedExcluded, writeSyncedExcluded } from "@/lib/util/prefs";
 
 import { useI18n } from "@/lib/i18n";
 import type { HostModel } from "@/lib/ipc/config";
@@ -65,6 +66,7 @@ export function ModelsSection({
 }) {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState<number | null>(null);
+  const excludedCount = readSyncedExcluded().length;
   // 密钥明文显示开关(按 模型行:key 行 定位)
   const [revealedKeys, setRevealedKeys] = useState<ReadonlySet<string>>(new Set());
   // 组折叠(旧工程 Section 折叠开关的等价物):默认全展开,点组头收起
@@ -87,6 +89,15 @@ export function ModelsSection({
       defaultIdx: i < d.defaultIdx ? d.defaultIdx - 1 : i === d.defaultIdx ? 0 : d.defaultIdx,
     }));
     setExpanded(null);
+  };
+
+  // 删除同步(会员/百智云)模型:本地移除 + 记入排除列表,下次同步不拉回
+  const removeSynced = (i: number) => {
+    const m = draft.models[i];
+    if (!m) return;
+    remove(i);
+    const excluded = readSyncedExcluded();
+    if (!excluded.includes(m.name)) writeSyncedExcluded([...excluded, m.name]);
   };
 
   const add = () => {
@@ -223,6 +234,19 @@ export function ModelsSection({
                   onClick={(e) => {
                     e.stopPropagation();
                     remove(i);
+                  }}
+                >
+                  {t("settings.models.delete")}
+                </button>
+              )}
+              {m.source && !m.locked && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs shrink-0 text-base-content/40 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:text-error"
+                  title={t("settings.models.deleteSyncedTip")}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removeSynced(i);
                   }}
                 >
                   {t("settings.models.delete")}
@@ -391,6 +415,21 @@ export function ModelsSection({
 
   return (
     <section aria-label={t("settings.nav.models")} className="flex flex-col gap-2">
+      {/* 已删除的同步模型:可一键恢复(清空排除列表,下次同步重新拉回) */}
+      {excludedCount > 0 && (
+        <div className="flex items-center gap-2 rounded-box border border-base-300/80 bg-base-200/40 px-3 py-1.5 text-xs">
+          <span className="min-w-0 flex-1 text-base-content/60">
+            {t("settings.models.excludedBar", { n: excludedCount })}
+          </span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs shrink-0 text-base-content/60"
+            onClick={() => writeSyncedExcluded([])}
+          >
+            {t("settings.models.excludedRestore")}
+          </button>
+        </div>
+      )}
       {groups.map((g) => {
         // 会员组按档位/来源分节(基础/专业/旗舰/付费/我的/团队,与模型菜单
         // 同一 groupMemberSections 口径):节头表达档位,行内免重复贴徽标。

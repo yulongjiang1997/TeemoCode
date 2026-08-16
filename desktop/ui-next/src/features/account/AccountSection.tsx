@@ -319,7 +319,7 @@ function McCard({
   autoSyncToken?: number;
 }) {
   const { t } = useI18n();
-  const [busy, setBusy] = useState<"connect" | "disconnect" | "sync" | null>(null);
+  const [busy, setBusy] = useState<"connect" | "disconnect" | "sync" | "apply" | null>(null);
   const [msg, setMsg] = useState<Msg>(null);
   const [pwOpen, setPwOpen] = useState(false);
 
@@ -370,16 +370,13 @@ function McCard({
     try {
       const r: McModelsSyncResult = await mcModelsSync();
       const notes = r.notes?.length ? ` ${r.notes.join(t("common.semiSep"))}` : "";
-      // 空结果按失败说(旧 UI 同款,理由同 BaizhiCard.sync):没有会员权益时
-      // 「已获取 0 个会员模型…保存后生效」看着像成功;且不往下并入,免得
-      // 一次 no-op 合并白白触发自动保存重启引擎
       if (!r.models.length) {
         setMsg({ text: t("account.mc.syncEmpty") + notes, error: true });
         return;
       }
-      const applied = onResult?.(r);
-      const skipped = applied && applied.skipped.length ? ` ${t("account.sync.skipped", { names: applied.skipped.join(t("common.listSep")) })}` : "";
-      setMsg({ text: t("account.mc.syncDone", { models: r.models.length }) + syncOutcome(t, applied) + notes + skipped });
+      // 不默认全部同步:拉取下来让用户勾选要同步到本地的模型
+      setPending(r);
+      setSelected([]);
     } catch (e) {
       setMsg({ text: errMsg(e), error: true });
     } finally {
@@ -387,9 +384,36 @@ function McCard({
     }
   };
 
+  /** 同步用户勾选的模型(默认空集;勾选后点"同步选中"才并入本地配置)。 */
+  const applySelected = async () => {
+    if (!pending) return;
+    setBusy("apply");
+    setMsg(null);
+    try {
+      const picked = pending.models.filter((_, i) => selected.includes(i));
+      if (!picked.length) {
+        setMsg({ text: t("account.mc.syncSelectNone"), error: true });
+        return;
+      }
+      const applied = onResult?.({ ...pending, models: picked });
+      const skipped = applied && applied.skipped.length ? ` ${t("account.sync.skipped", { names: applied.skipped.join(t("common.listSep")) })}` : "";
+      const notes = pending.notes?.length ? ` ${pending.notes.join(t("common.semiSep"))}` : "";
+      setMsg({ text: t("account.mc.syncDone", { models: picked.length }) + syncOutcome(t, applied) + notes + skipped });
+      setSelected([]);
+    } catch (e) {
+      setMsg({ text: errMsg(e), error: true });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+
   const connected = !!status?.logged_in;
   const user = status?.user;
   const userName = user?.name || user?.username || user?.email || t("account.loggedIn");
+  // 拉取待选的会员模型 + 已勾选下标(不默认全选)
+  const [pending, setPending] = useState<McModelsSyncResult | null>(null);
+  const [selected, setSelected] = useState<number[]>([]);
 
   // 登录/桥接即自动同步(语义同 BaizhiCard)。依赖必须与守卫一致:守卫读
   // connected 却只依赖 token,靠的是 onBaizhiLoggedIn 里 refresh 与 bump 被
@@ -488,7 +512,7 @@ function McCard({
       }
       actions={
         <>
-          <button type="button" className="btn btn-sm" disabled={busy === "sync"} onClick={() => void sync()}>
+          <button type="button" className="btn btn-sm" disabled={busy === "sync" || busy === "apply"} onClick={() => void sync()}>
             {busy === "sync" && <span className="loading loading-spinner loading-xs" aria-hidden />}
             {busy === "sync" ? t("account.syncing") : t("account.mc.sync")}
           </button>
@@ -506,6 +530,44 @@ function McCard({
       {/* 权益面板归卡内次级区块,分隔线切开身份行与权益块 */}
       <div className="border-t border-base-300 pt-3">
         <UsagePanel userId={user?.id} />
+      {pending && (
+        <div className="flex flex-col gap-1.5 border-t border-base-300/70 pt-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold">{t("account.mc.syncPickTitle")}</span>
+            <button type="button" className="btn btn-ghost btn-xs text-base-content/50" onClick={() => setPending(null)}>
+              {t("settings.team.cancel")}
+            </button>
+          </div>
+          <ul className="flex max-h-44 flex-col gap-1 overflow-y-auto">
+            {pending.models.map((m, i) => (
+              <li key={m.name + m.model}>
+                <label className="flex items-center gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    className="checkbox checkbox-xs shrink-0"
+                    checked={selected.includes(i)}
+                    onChange={(e) => setSelected((s) => (e.target.checked ? [...s, i] : s.filter((x) => x !== i)))}
+                  />
+                  <span className="min-w-0 flex-1 truncate">{m.name}</span>
+                  <span className="shrink-0 text-[10px] text-base-content/40">{m.model}</span>
+                </label>
+              </li>
+            ))}
+          </ul>
+          <div className="flex items-center gap-2">
+            <button type="button" className="btn btn-primary btn-xs" disabled={busy === "apply"} onClick={() => void applySelected()}>
+              {busy === "apply" ? t("account.syncing") : t("account.mc.syncSelected", { n: selected.length })}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs text-base-content/60"
+              onClick={() => setSelected(pending.models.map((_, i) => i))}
+            >
+              {t("account.mc.selectAll")}
+            </button>
+          </div>
+        </div>
+      )}
       </div>
       <MsgLine msg={msg} />
     </AccountCard>

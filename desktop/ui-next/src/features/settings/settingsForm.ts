@@ -10,6 +10,7 @@
 //   移植旧工程 settingsConfig 同名函数,语义注释随迁。
 import type { BaizhiSyncedModel } from "@/lib/ipc/account";
 import type { DesktopConfig, HostModel } from "@/lib/ipc/config";
+import { readSyncedExcluded } from "@/lib/util/prefs";
 import { memberTierRank, modelSourceRank, sameModelName, stripSourceSuffix, SOURCE_BAIZHI, SOURCE_MONKEYCODE } from "@/lib/models/modelMenu";
 
 // ---- MCP 编辑模型与序列化 ----
@@ -280,8 +281,12 @@ export function mergeSyncedModels(
   source: string,
 ): SyncMergeResult | null {
   if (!syncedModels.length) return null;
+  // 用户手动删除的同步模型(排除列表)下次同步跳过,不重新拉回
+  const excluded = new Set(readSyncedExcluded());
   const defaultName = draft.models[draft.defaultIdx]?.name?.trim() ?? "";
-  const synced: HostModel[] = syncedModels.map((sm) => ({
+  const synced: HostModel[] = syncedModels
+    .filter((sm) => !excluded.has(syncedName(sm.name, source, sm.id)))
+    .map((sm) => ({
     name: syncedName(sm.name, source, sm.id),
     provider: sm.provider,
     base_url: sm.base_url,

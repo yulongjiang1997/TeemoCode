@@ -211,3 +211,21 @@ export function writeTeamMode(sid: string, on: boolean): void {
     // 只丢持久化
   }
 }
+
+/** 已从本地删除的同步模型名(下次同步跳过,不重新拉回)。 */
+export function readSyncedExcluded(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem("mc.syncedExcluded") ?? "[]");
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function writeSyncedExcluded(names: string[]): void {
+  try {
+    localStorage.setItem("mc.syncedExcluded", JSON.stringify([...new Set(names)]));
+  } catch {
+    // 只丢持久化
+  }
+}
