@@ -524,6 +524,11 @@ describe("同步自动保存(旧 UI autoSaveDecision 随迁)", () => {
   const syncMemberModels = async () => {
     await userEvent.click(screen.getByRole("button", { name: "账号" }));
     await userEvent.click(await screen.findByRole("button", { name: "同步会员模型" }));
+    // 拉取后不默认全选:面板出现,勾选全部再"同步选中"
+    await screen.findByText(/选择要同步到本地的模型/);
+    const boxes = screen.getAllByRole("checkbox");
+    for (const b of boxes) await userEvent.click(b);
+    await userEvent.click(screen.getByRole("button", { name: /同步选中 \d+ 个/ }));
   };
 
   it("干净表单+无任务在跑:同步后直接 save_config,提示「已自动保存」", async () => {
@@ -559,9 +564,15 @@ describe("同步自动保存(旧 UI autoSaveDecision 随迁)", () => {
     await userEvent.click(screen.getByRole("button", { name: "账号" }));
     const syncBtn = await screen.findByRole("button", { name: "同步会员模型" });
     await userEvent.click(syncBtn);
+    await screen.findByText(/选择要同步到本地的模型/);
+    for (const b of screen.getAllByRole("checkbox")) await userEvent.click(b);
+    await userEvent.click(screen.getByRole("button", { name: /同步选中 \d+ 个/ }));
     await waitFor(() => expect(pending).toHaveLength(1)); // 第一路保存在途
 
     await userEvent.click(await screen.findByRole("button", { name: "同步会员模型" }));
+    await screen.findByText(/选择要同步到本地的模型/);
+    for (const b of screen.getAllByRole("checkbox")) await userEvent.click(b);
+    await userEvent.click(screen.getByRole("button", { name: /同步选中 \d+ 个/ }));
     expect((await screen.findByText(/已获取 2 个会员模型/)).textContent).toContain("已自动保存");
     expect(pending).toHaveLength(1); // 在途期不另起保存
 

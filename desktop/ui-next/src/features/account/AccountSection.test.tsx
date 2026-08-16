@@ -381,8 +381,8 @@ describe("已登录:用量面板/签到/同步/断开", () => {
     // 拉取后不默认全选:面板出现,勾选两个再"同步选中"
     await screen.findByText(/选择要同步到本地的模型/);
     const boxes = screen.getAllByRole("checkbox");
-    await userEvent.click(boxes[0]);
-    await userEvent.click(boxes[1]);
+    await userEvent.click(boxes[0]!);
+    await userEvent.click(boxes[1]!);
     await userEvent.click(screen.getByRole("button", { name: "同步选中 2 个" }));
     expect((await screen.findByText(/已获取 2 个会员模型/)).textContent).toContain("不支持的协议");
   });
