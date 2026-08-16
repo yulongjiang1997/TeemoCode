@@ -1,10 +1,11 @@
 import { IconRotate } from "@tabler/icons-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
 import { getSoundEnabled, onSoundEnabled, setSoundEnabled } from "@/lib/ipc/config";
 import { inDesktopShell } from "@/lib/ipc/ipc";
 import { setGlobalSoundEnabled, playEventSound, SOUND_EVENTS, type SoundEvent } from "@/lib/util/sound";
+import { invoke } from "@/lib/ipc/ipc";
 import { importSound } from "@/lib/ipc/config";
 import { readSoundConfig, writeSoundConfig, type SoundConfig } from "@/lib/util/prefs";
 
@@ -13,7 +14,6 @@ export function SoundSection() {
   const { t } = useI18n();
   const [masterOn, setMasterOn] = useState(true);
   const [cfg, setCfg] = useState<SoundConfig>(readSoundConfig);
-  const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   useEffect(() => {
     if (!inDesktopShell()) return;
@@ -45,13 +45,23 @@ export function SoundSection() {
     if (inDesktopShell()) void setSoundEnabled(on);
   };
 
-  const pickFile = async (ev: SoundEvent, file: File | null) => {
-    if (!file) return;
-    const path = (file as File & { path?: string }).path;
-    if (!path) return;
+  const pickFile = async (ev: SoundEvent) => {
+    // Tauri v2 的文件输入没有 path,用 dialog 插件直接拿路径(能力已在主窗口 ACL)
+    let picked: string | null = null;
+    try {
+      const r = await invoke<string | string[] | null>("plugin:dialog|open", {
+        multiple: false,
+        directory: false,
+        filters: [{ name: "Audio", extensions: ["mp3", "wav", "ogg", "m4a", "flac", "aac"] }],
+      });
+      picked = typeof r === "string" ? r : null;
+    } catch {
+      return;
+    }
+    if (!picked) return;
     // 壳把文件复制到应用数据目录,返回存储路径(asset 协议播放,不受存储配额限制)
     try {
-      const stored = await importSound(ev, path);
+      const stored = await importSound(ev, picked);
       commit({ ...cfg, [ev]: { ...(cfg[ev] ?? { enabled: true }), file: stored } });
     } catch {
       // 保存失败:不改配置
@@ -106,20 +116,10 @@ export function SoundSection() {
                 <button
                   type="button"
                   className="btn btn-ghost btn-xs shrink-0 text-base-content/50"
-                  onClick={() => fileRefs.current[id]?.click()}
+                  onClick={() => void pickFile(id)}
                 >
                   {entry.file ? t("settings.sound.replace") : t("settings.sound.pick")}
                 </button>
-                <input
-                  ref={(el) => {
-                    fileRefs.current[id] = el;
-                  }}
-                  type="file"
-                  accept="audio/*,.wav,.mp3,.ogg"
-                  className="hidden"
-                  aria-label={`${t(labelKey)} ${t("settings.sound.pick")}`}
-                  onChange={(e) => pickFile(id, e.target.files?.[0] ?? null)}
-                />
                 {entry.file && (
                   <button
                     type="button"
