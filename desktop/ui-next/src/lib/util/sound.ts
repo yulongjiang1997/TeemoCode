@@ -2,15 +2,26 @@ import type { MessageKey } from "@/lib/i18n";
 import { readSoundConfig } from "@/lib/util/prefs";
 
 /** 事件音效:每事件单独开关 + 可换自定义文件(data URL)。
- *  全局总开关沿用壳的 sound_enabled(设置-音效页 + 托盘同步)。 */
+ *  实际播放发生在桌宠窗口(pet.html),主窗口只负责设置与试听。
+ *  默认音 = 内置 mp3(public 资源,与桌宠同一套)。 */
 
-export type SoundEvent = "startup" | "task-done" | "task-error" | "ask";
+export type SoundEvent = "startup" | "task-done" | "task-error" | "ask" | "idle";
+
+/** 事件 → 内置默认音效资源(public 根路径)。 */
+export const SOUND_DEFAULTS: Record<SoundEvent, string> = {
+  startup: "sound-app-start.mp3",
+  "task-done": "sound-task-end.mp3",
+  "task-error": "sound-task-error.mp3",
+  ask: "sound-permission.mp3",
+  idle: "sound-idle.mp3",
+};
 
 export const SOUND_EVENTS: { id: SoundEvent; labelKey: MessageKey }[] = [
   { id: "startup", labelKey: "settings.sound.startup" },
   { id: "task-done", labelKey: "settings.sound.taskDone" },
   { id: "task-error", labelKey: "settings.sound.taskError" },
   { id: "ask", labelKey: "settings.sound.ask" },
+  { id: "idle", labelKey: "settings.sound.idle" },
 ];
 
 let globalEnabled = true;
@@ -21,64 +32,17 @@ export function isGlobalSoundEnabled(): boolean {
   return globalEnabled;
 }
 
-/** 默认提示音:WebAudio 生成的双音(无内置文件,无需额外资源)。 */
-function playBeep(high: boolean): void {
-  try {
-    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    const ctx = new Ctx();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = "sine";
-    osc.frequency.value = high ? 880 : 440;
-    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + (high ? 0.18 : 0.28));
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + (high ? 0.2 : 0.3));
-    void osc.onended;
-  } catch {
-    // 静默:无音频环境不报错
-  }
-}
-
-// 自动播放限制:启动音效在无用户手势时可能被浏览器策略拦截,
-// play() 被拒后延迟到首个用户手势(pointerdown/keydown)再补播。
-let startupPending = false;
-function retryStartup(): void {
-  if (!startupPending) return;
-  startupPending = false;
-  window.removeEventListener("pointerdown", retryStartup);
-  window.removeEventListener("keydown", retryStartup);
-  playEventSound("startup");
-}
-
-/** 播放事件音效:全局开 && 事件没被显式关闭 → 播放(自定义文件优先,否则默认音)。 */
+/** 试听/主窗口播放:事件没被显式关闭 → 播放(自定义文件优先,否则内置默认 mp3)。 */
 export function playEventSound(ev: SoundEvent): void {
   if (!globalEnabled) return;
   const cfg = readSoundConfig();
   const entry = cfg[ev];
   if (entry && !entry.enabled) return; // 未配置 = 默认开;显式关才静音
-  if (entry?.file) {
-    try {
-      const a = new Audio(entry.file);
-      const p = a.play();
-      if (p) {
-        p.catch(() => {
-          if (ev === "startup") {
-            startupPending = true;
-            window.addEventListener("pointerdown", retryStartup);
-            window.addEventListener("keydown", retryStartup);
-          } else {
-            playBeep(ev === "task-error");
-          }
-        });
-      }
-      return;
-    } catch {
-      // 文件播放失败,退回默认
-    }
+  const src = entry?.file ?? SOUND_DEFAULTS[ev];
+  try {
+    const a = new Audio(src);
+    void a.play().catch(() => {});
+  } catch {
+    // 静默:音频不可用不报错
   }
-  playBeep(ev === "task-error");
 }

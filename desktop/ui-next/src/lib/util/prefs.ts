@@ -235,7 +235,7 @@ export interface SoundEntry {
   enabled: boolean;
   file?: string;
 }
-export type SoundConfig = Partial<Record<"startup" | "task-done" | "task-error" | "ask", SoundEntry>>;
+export type SoundConfig = Partial<Record<"startup" | "task-done" | "task-error" | "ask" | "idle", SoundEntry>>;
 
 export function readSoundConfig(): SoundConfig {
   try {

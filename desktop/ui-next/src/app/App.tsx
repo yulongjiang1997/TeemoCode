@@ -49,7 +49,6 @@ import { noticeForQueuedDelivery, noticeForSessionEvent, type NoticeKind, type S
 import { deliverQueued, dropStash } from "@/features/chat/composer/stash";
 import { readLastSession, writeLastSession, writeSpace, readBgImage, readBgOpacity, readMaskOpacity, readBgBlur, type Space } from "@/lib/util/prefs";
 import { projectKey, readArchivedProjects } from "@/lib/util/projects";
-import { playEventSound } from "@/lib/util/sound";
 
 // 统一图标族:@tabler/icons-react(2026-08-07 由 lucide 换过来;组件名
 // 一律 Icon 前缀,线宽属性是 stroke 不是 strokeWidth)
@@ -331,8 +330,6 @@ export function App() {
       setBgBlur(readBgBlur());
     };
     window.addEventListener("mc-bg-changed", refresh);
-    // 启动音效(可自定义/关闭):挂载即播一次
-    playEventSound("startup");
     return () => window.removeEventListener("mc-bg-changed", refresh);
   }, []);
   const [cloudTask, setCloudTask] = useState<CloudTask | null>(null);

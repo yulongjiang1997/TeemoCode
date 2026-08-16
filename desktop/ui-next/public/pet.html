@@ -96,21 +96,30 @@
   window.__TAURI__.event.listen('sound-enabled', (evt) => {
     soundEnabled = evt.payload !== false;
   });
-  const sounds = {
-    start: new Audio('sound-app-start.mp3'),      // 应用启动(首次连上内核)
-    end: new Audio('sound-task-end.mp3'),         // 轮次完成
-    error: new Audio('sound-task-error.mp3'),     // 任务出错
-    ask: new Audio('sound-permission.mp3'),       // 请求审批
-    idle: new Audio('sound-idle.mp3'),            // 持续空闲满 10 分钟
-  };
-  for (const a of Object.values(sounds)) a.volume = 0.7;
   const lastPlay = {};
+  // 主窗口「音效」页配置(mc.sounds):每事件 { enabled, file?(data URL) }。
+  // 未配置 = 默认开;显式关才静音;有自定义文件则用它,否则用内置默认 mp3。
+  function readSoundConfig() {
+    try {
+      const v = JSON.parse(localStorage.getItem('mc.sounds') || '{}');
+      return v && typeof v === 'object' ? v : {};
+    } catch {
+      return {};
+    }
+  }
+  const SOUND_EVENT_MAP = { start: 'startup', end: 'task-done', error: 'task-error', ask: 'ask', idle: 'idle' };
+  const SOUND_DEFAULTS = { start: 'sound-app-start.mp3', end: 'sound-task-end.mp3', error: 'sound-task-error.mp3', ask: 'sound-permission.mp3', idle: 'sound-idle.mp3' };
   function play(key) {
     if (!soundEnabled) return;
+    const cfg = readSoundConfig();
+    const entry = cfg[SOUND_EVENT_MAP[key] || key];
+    if (entry && entry.enabled === false) return;
     const now = Date.now();
     if (now - (lastPlay[key] || 0) < 2000) return;
     lastPlay[key] = now;
-    const a = sounds[key];
+    const src = (entry && entry.file) ? entry.file : SOUND_DEFAULTS[key];
+    const a = new Audio(src);
+    a.volume = 0.7;
     a.currentTime = 0;
     a.play().catch(() => {}); // 自动播放被平台策略拦下时静默放弃
   }
