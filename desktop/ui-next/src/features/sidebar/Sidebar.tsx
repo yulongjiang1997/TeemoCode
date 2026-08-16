@@ -22,6 +22,12 @@ import { Brand } from "@/features/titlebar/TitleBar";
 import { useUpdate } from "@/features/update/useUpdate";
 import { openMenu, type MenuItem } from "@/lib/contextMenu";
 import { useI18n } from "@/lib/i18n";
+
+/** 剥掉发送时注入的团队编排块([mc-team]…[/mc-team]),侧栏预览只显示原文。 */
+function stripTeamPreamble(text: string): string {
+  const m = text.match(/^\[mc-team\][\s\S]*?\[\/mc-team\]\n*\s*/);
+  return m ? text.slice(m[0].length) : text;
+}
 import type { SessionMeta } from "@/lib/ipc/sessions";
 import { buildSessionUsageMap, sumUsage, usageStats, type TokenUsage } from "@/lib/ipc/usageStats";
 import {
@@ -120,7 +126,7 @@ function SessionRow({ meta, p, level }: { meta: SessionMeta; p: RowPlumbing; lev
   // 单行,优先级 用户改名 > 轮末摘要 > 首句自动标题(与 ChatView 头部
   // 同一口径,2026-08-06 用户定案:改过名的会话在哪儿都得显改的那个;
   // title_custom 由壳 sidecar 标记,区分改名与首句自动标题)
-  const primary = meta.title_custom ? meta.title : meta.summary || meta.title;
+  const primary = meta.title_custom ? meta.title : stripTeamPreamble(meta.summary ?? "") || meta.title;
   const trailing = rowTrailing(meta, t, attention);
   const turns = meta.turns > 0 ? t("status.turns", { n: String(Math.trunc(meta.turns)) }) : "";
   // 行 tooltip = 这一行的全部安静信息(§6.1):标题 / 摘要 / 目录 / 状态词 /

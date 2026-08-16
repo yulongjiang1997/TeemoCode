@@ -14,6 +14,7 @@ export function SoundSection() {
   const { t } = useI18n();
   const [masterOn, setMasterOn] = useState(true);
   const [cfg, setCfg] = useState<SoundConfig>(readSoundConfig);
+  const [err, setErr] = useState("");
 
   useEffect(() => {
     if (!inDesktopShell()) return;
@@ -50,12 +51,15 @@ export function SoundSection() {
     let picked: string | null = null;
     try {
       const r = await invoke<string | string[] | null>("plugin:dialog|open", {
-        multiple: false,
-        directory: false,
-        filters: [{ name: "Audio", extensions: ["mp3", "wav", "ogg", "m4a", "flac", "aac"] }],
+        options: {
+          multiple: false,
+          directory: false,
+          filters: [{ name: "Audio", extensions: ["mp3", "wav", "ogg", "m4a", "flac", "aac"] }],
+        },
       });
       picked = typeof r === "string" ? r : null;
-    } catch {
+    } catch (e) {
+      setErr(String(e));
       return;
     }
     if (!picked) return;
@@ -63,7 +67,8 @@ export function SoundSection() {
     try {
       const stored = await importSound(ev, picked);
       commit({ ...cfg, [ev]: { ...(cfg[ev] ?? { enabled: true }), file: stored } });
-    } catch {
+    } catch (e) {
+      setErr(String(e));
       // 保存失败:不改配置
     }
   };
@@ -81,6 +86,9 @@ export function SoundSection() {
           <div className="text-sm font-semibold">{t("settings.sound.title")}</div>
           <p className="text-xs text-base-content/60">{t("settings.sound.hint")}</p>
         </div>
+        {err && (
+          <div role="alert" className="px-3 py-1 text-xs text-error">{err}</div>
+        )}
         {/* 全局总开关(与托盘同步) */}
         <div className="flex items-center gap-2 border-b border-base-300/70 px-3 py-2">
           <span className="min-w-0 flex-1 text-xs">{t("settings.sound.master")}</span>
