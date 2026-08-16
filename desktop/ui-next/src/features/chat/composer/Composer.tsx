@@ -653,7 +653,7 @@ export function Composer({
           </button>
 
           {/* Git 上传/导入:把工作目录文件推到远程 / 从远程拉取到工作目录 */}
-          <div className="dropdown dropdown-end shrink-0">
+          <div className="dropdown dropdown-end dropdown-top shrink-0">
             <button
               type="button"
               tabIndex={0}
