@@ -351,7 +351,7 @@ export function ModelsSection({
                   <input
                     className="input input-sm w-full font-mono text-xs"
                     type="number"
-                    min={0}
+                    min={1}
                     max={100}
                     aria-label={t("settings.models.autoCompact")}
                     placeholder={t("settings.models.autoCompact.placeholder")}
@@ -360,7 +360,7 @@ export function ModelsSection({
                     onChange={(e) => {
                       const v = e.target.value.trim();
                       const n = v === "" ? undefined : Number(v);
-                      patch(i, { auto_compact_ratio: n && Number.isFinite(n) && n > 0 ? Math.min(Math.max(Math.round(n), 50), 100) : undefined });
+                      patch(i, { auto_compact_ratio: n && Number.isFinite(n) && n > 0 ? Math.min(Math.max(Math.round(n), 1), 100) : undefined });
                     }}
                   />
                 </fieldset>

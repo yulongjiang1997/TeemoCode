@@ -256,8 +256,8 @@ export const zh = {
   "settings.models.contextWindow": "上下文窗口(token)",
   "settings.models.contextWindow.placeholder": "200000(默认)",
   "settings.models.autoCompact": "自动压缩阈值(%)",
-  "settings.models.autoCompact.placeholder": "0 = 关闭",
-  "settings.models.autoCompact.hint": "上下文使用达到该百分比时,回合结束自动触发压缩(50-100;0/留空 = 关闭)",
+  "settings.models.autoCompact.placeholder": "0 = 关闭(1-100)",
+  "settings.models.autoCompact.hint": "上下文使用达到该百分比时,回合结束自动触发压缩(1-100 整数;0/留空 = 关闭)",
   "settings.models.maxOutput": "最大输出(token)",
   "settings.models.maxOutput.placeholder": "32768(默认)",
   "settings.models.maxOutput.hint":
