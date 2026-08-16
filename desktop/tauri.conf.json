@@ -48,6 +48,8 @@
           "allow-import-sound",
           "allow-git-push",
           "allow-git-import",
+          "allow-import-task-data",
+          "allow-relaunch-app",
             "allow-update-check",
             "allow-update-download",
             "allow-update-install",

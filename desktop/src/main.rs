@@ -1540,6 +1540,8 @@ fn main() {
             import_sound,
             git::git_push,
             git::git_import,
+            git::import_task_data,
+            git::relaunch_app,
             update_check,
             update_download,
             update_install,

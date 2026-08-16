@@ -1,5 +1,7 @@
 use serde_json::json;
+use std::path::Path;
 use std::process::Command;
+use tauri::Manager;
 
 /// Git 上传/导入(本地任务工作目录 ↔ 远程仓库)。
 /// 依赖系统 git 命令;身份统一用 TeemoCode 本地配置(不改用户全局 git 配置)。
@@ -116,4 +118,65 @@ pub async fn git_import(workdir: String, url: String) -> Result<serde_json::Valu
         "branch": if branch.is_empty() { "main".to_string() } else { branch },
         "remote": url,
     }))
+}
+
+/// 导入项目后检测任务数据:项目内 `.teemocode/<sid>/meta.json` 视为导出的
+/// 本地任务会话数据,迁移到应用数据目录(本地任务工作区)并把 workdir 改成
+/// 当前选择的目录。返回迁移数量,前端提示重启重新加载任务数据。
+#[tauri::command]
+pub async fn import_task_data(app: tauri::AppHandle, workdir: String) -> Result<serde_json::Value, String> {
+    let src = Path::new(&workdir).join(".teemocode");
+    if !src.is_dir() {
+        return Ok(json!({ "migrated": 0, "sessions": [] }));
+    }
+    let data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("取应用数据目录失败: {e}"))?;
+    let mut migrated = 0usize;
+    let mut sessions: Vec<String> = vec![];
+    let entries = std::fs::read_dir(&src).map_err(|e| format!("读取 .teemocode 失败: {e}"))?;
+    for entry in entries.flatten() {
+        let sid = entry.file_name().to_string_lossy().to_string();
+        let meta_src = entry.path().join("meta.json");
+        if !meta_src.is_file() {
+            continue;
+        }
+        let dest = data.join(&sid);
+        if !dest.is_dir() {
+            std::fs::create_dir_all(&dest).map_err(|e| format!("创建会话目录失败: {e}"))?;
+        }
+        if let Ok(mut meta) = read_json(&meta_src) {
+            meta["workdir"] = json!(workdir);
+            write_json(&dest.join("meta.json"), &meta)?;
+            if let Ok(files) = std::fs::read_dir(entry.path()) {
+                for f in files.flatten() {
+                    let name = f.file_name().to_string_lossy().to_string();
+                    if name == "meta.json" {
+                        continue;
+                    }
+                    let _ = std::fs::copy(f.path(), dest.join(&name));
+                }
+            }
+            migrated += 1;
+            sessions.push(sid);
+        }
+    }
+    Ok(json!({ "migrated": migrated, "sessions": sessions }))
+}
+
+fn read_json(p: &Path) -> Result<serde_json::Value, String> {
+    let s = std::fs::read_to_string(p).map_err(|e| format!("读取 {} 失败: {e}", p.display()))?;
+    serde_json::from_str(&s).map_err(|e| format!("解析 {} 失败: {e}", p.display()))
+}
+
+fn write_json(p: &Path, v: &serde_json::Value) -> Result<(), String> {
+    let s = serde_json::to_string_pretty(v).map_err(|e| e.to_string())?;
+    std::fs::write(p, s).map_err(|e| format!("写入 {} 失败: {e}", p.display()))
+}
+
+/// 重启应用(任务数据迁移后让用户重启重新加载)。
+#[tauri::command]
+pub fn relaunch_app(app: tauri::AppHandle) {
+    app.restart();
 }

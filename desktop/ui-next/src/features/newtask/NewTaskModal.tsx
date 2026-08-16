@@ -18,7 +18,7 @@
 //   运行环境过滤(lib/util/workdir);目录预填 = 过滤后首项,无则默认目录
 // - 模型记忆 mc.lastTaskModel(本地/对话共用);旧工程无 lastDir 持久化键,
 //   不发明新键
-import { IconCheck, IconChevronDown, IconCloud, IconFile as FileIcon, IconFolder, IconFolderCode, IconFolderOpen, IconMessages, IconPaperclip, IconSend, IconX } from "@tabler/icons-react";
+import { IconBrandGit, IconCheck, IconChevronDown, IconCloud, IconFile as FileIcon, IconFolder, IconFolderCode, IconFolderOpen, IconMessages, IconPaperclip, IconSend, IconX } from "@tabler/icons-react";
 import {
   useCallback,
   useEffect,
@@ -53,6 +53,7 @@ import { THINK_KEY } from "@/lib/protocol/reduce";
 import { createImeGuard } from "@/lib/util/slash";
 import { readLastTaskModel, rememberLastTaskModel } from "@/lib/util/prefs";
 import { DEFAULT_DIR, workdirMatchesEnv } from "@/lib/util/workdir";
+import { gitImport, importTaskData, relaunchApp } from "@/lib/ipc/git";
 import { ModelMenu, ThinkMenu } from "@/features/chat/composer/pickers";
 import { NewCloudTask } from "@/features/cloud/NewCloudTask";
 import type { CloudProject, CloudTaskDetail } from "@/lib/ipc/cloudtasks";
@@ -149,6 +150,8 @@ export function NewTaskModal({
   const dragDepth = useRef(0);
   // 用户改过目录后,异步到达的预填不再覆盖
   const dirTouched = useRef(false);
+  // 从 Git 导入结果:迁移的会话数 > 0 时提示重启
+  const [gitImportResult, setGitImportResult] = useState<{ migrated: number; ok: boolean; err?: string } | null>(null);
   // Enter 直接创建(Shift+Enter 换行);IME 组合中的 Enter 是选字,不触发
   const ime = useRef(createImeGuard());
   // 预填只取"打开那一刻"的最近目录;App 侧列表刷新不重置用户输入
@@ -351,6 +354,24 @@ export function NewTaskModal({
     return lines;
   };
 
+  const doGitImportFromDir = async () => {
+    const dirPath = dir.trim();
+    if (!dirPath) {
+      setError(t("create.error.workdirRequired"));
+      return;
+    }
+    const url = window.prompt(t("create.gitImportPrompt"))?.trim();
+    if (!url) return;
+    try {
+      await gitImport(dirPath, url);
+      const m = await importTaskData(dirPath);
+      setGitImportResult({ migrated: m.migrated, ok: true });
+      setDirMenu(false);
+    } catch (e) {
+      setGitImportResult({ migrated: 0, ok: false, err: String(e) });
+    }
+  };
+
   const submit = async (forceCreateDir = false) => {
     if (kind === "cloud" || busy) return;
     const chat = kind === "chat";
@@ -456,6 +477,28 @@ export function NewTaskModal({
           大圆角输入卡承载全部配置——目录/描述/模型是"一件事",不拆散成表单 */}
       <div className="mx-auto w-full max-w-xl px-6 pt-[max(1.5rem,calc(11vh-3.25rem))] pb-10">
         <div className="flex flex-col gap-4">
+          {/* Git 导入迁移结果提示:迁移了会话 → 重启重新加载任务数据 */}
+          {gitImportResult && (
+            <div role="status" className="rounded-box border border-base-300 bg-base-200/50 p-3">
+              {gitImportResult.ok && gitImportResult.migrated > 0 ? (
+                <div className="flex flex-col gap-2">
+                  <p className="text-xs">
+                    {t("create.gitMigrated", { n: gitImportResult.migrated })}
+                  </p>
+                  <div className="flex gap-2">
+                    <button type="button" className="btn btn-primary btn-xs" onClick={() => void relaunchApp()}>
+                      {t("create.gitRestart")}
+                    </button>
+                    <button type="button" className="btn btn-ghost btn-xs" onClick={() => setGitImportResult(null)}>
+                      {t("create.gitLater")}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs text-error">{gitImportResult.err ?? t("create.gitImported")}</p>
+              )}
+            </div>
+          )}
           <div className="mb-1 flex flex-col items-center gap-1.5">
             <img src="/logo.png" alt="" aria-hidden draggable={false} className="h-13 w-13" />
             <h2 className="mt-1 text-lg font-bold">
@@ -577,6 +620,17 @@ export function NewTaskModal({
                           >
                             <IconFolderOpen size={13} stroke={1.75} aria-hidden className="shrink-0 text-base-content/50" />
                             {t("create.pickOther")}
+                          </button>
+                        </li>
+                        {/* 从 Git 导入项目:选空目录后克隆 + 迁移任务数据 */}
+                        <li>
+                          <button
+                            type="button"
+                            className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs hover:bg-base-200"
+                            onClick={() => void doGitImportFromDir()}
+                          >
+                            <IconBrandGit size={13} stroke={1.75} aria-hidden className="shrink-0 text-base-content/50" />
+                            {t("create.gitImport")}
                           </button>
                         </li>
                         {/* 手输路径:浏览器模式没有原生目录选择;壳内也可直接粘贴 */}
