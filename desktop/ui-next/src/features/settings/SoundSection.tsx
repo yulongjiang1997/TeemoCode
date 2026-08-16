@@ -5,6 +5,7 @@ import { useI18n } from "@/lib/i18n";
 import { getSoundEnabled, onSoundEnabled, setSoundEnabled } from "@/lib/ipc/config";
 import { inDesktopShell } from "@/lib/ipc/ipc";
 import { setGlobalSoundEnabled, playEventSound, SOUND_EVENTS, type SoundEvent } from "@/lib/util/sound";
+import { saveSoundFile, deleteSoundFile } from "@/lib/util/soundFile";
 import { readSoundConfig, writeSoundConfig, type SoundConfig } from "@/lib/util/prefs";
 
 /** 音效:全局开关(壳 sound_enabled) + 每事件单独开关 + 可替换音效文件。 */
@@ -44,14 +45,23 @@ export function SoundSection() {
     if (inDesktopShell()) void setSoundEnabled(on);
   };
 
-  const pickFile = (ev: SoundEvent, file: File | null) => {
+  const pickFile = async (ev: SoundEvent, file: File | null) => {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = String(reader.result ?? "");
-      commit({ ...cfg, [ev]: { ...(cfg[ev] ?? { enabled: true }), file: dataUrl } });
-    };
-    reader.readAsDataURL(file);
+    // 音频文件存 IndexedDB(localStorage 放 base64 有配额限制),配置只记标志
+    try {
+      const name = await saveSoundFile(ev, file);
+      commit({ ...cfg, [ev]: { ...(cfg[ev] ?? { enabled: true }), hasFile: true, name } });
+    } catch {
+      // 保存失败:不改配置
+    }
+  };
+
+  const clearFile = (ev: SoundEvent) => {
+    void deleteSoundFile(ev);
+    const { hasFile: _hasFile, name: _name, ...rest } = cfg[ev] ?? { enabled: true };
+    void _hasFile;
+    void _name;
+    commit({ ...cfg, [ev]: rest });
   };
 
   return (
@@ -89,7 +99,7 @@ export function SoundSection() {
                   type="button"
                   className="btn btn-ghost btn-xs shrink-0 text-base-content/60"
                   title={t("settings.sound.previewTip")}
-                  onClick={() => playEventSound(id)}
+                  onClick={() => void playEventSound(id)}
                 >
                   {t("settings.sound.preview")}
                 </button>
@@ -98,7 +108,7 @@ export function SoundSection() {
                   className="btn btn-ghost btn-xs shrink-0 text-base-content/50"
                   onClick={() => fileRefs.current[id]?.click()}
                 >
-                  {entry.file ? t("settings.sound.replace") : t("settings.sound.pick")}
+                  {entry.hasFile ? t("settings.sound.replace") : t("settings.sound.pick")}
                 </button>
                 <input
                   ref={(el) => {
@@ -110,16 +120,12 @@ export function SoundSection() {
                   aria-label={`${t(labelKey)} ${t("settings.sound.pick")}`}
                   onChange={(e) => pickFile(id, e.target.files?.[0] ?? null)}
                 />
-                {entry.file && (
+                {entry.hasFile && (
                   <button
                     type="button"
                     className="btn btn-ghost btn-square btn-xs shrink-0 text-base-content/40"
                     title={t("settings.sound.reset")}
-                    onClick={() => {
-                      const { file: _file, ...rest } = entry;
-                      void _file;
-                      commit({ ...cfg, [id]: rest });
-                    }}
+                    onClick={() => clearFile(id)}
                   >
                     <IconRotate size={12} stroke={1.75} aria-hidden />
                   </button>

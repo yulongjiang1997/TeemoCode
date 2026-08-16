@@ -109,6 +109,32 @@
   }
   const SOUND_EVENT_MAP = { start: 'startup', end: 'task-done', error: 'task-error', ask: 'ask', idle: 'idle' };
   const SOUND_DEFAULTS = { start: 'sound-app-start.mp3', end: 'sound-task-end.mp3', error: 'sound-task-error.mp3', ask: 'sound-permission.mp3', idle: 'sound-idle.mp3' };
+  function playSrc(src) {
+    const a = new Audio(src);
+    a.volume = 0.7;
+    a.currentTime = 0;
+    a.play().catch(() => {}); // 自动播放被平台策略拦下时静默放弃
+  }
+  // 自定义文件存 IndexedDB(mc-sounds/files),读出来用 blob 播
+  function playFromDb(key) {
+    const ev = SOUND_EVENT_MAP[key] || key;
+    const req = indexedDB.open('mc-sounds', 1);
+    req.onsuccess = () => {
+      const db = req.result;
+      try {
+        const g = db.transaction('files', 'readonly').objectStore('files').get(ev);
+        g.onsuccess = () => {
+          db.close();
+          if (g.result) playSrc(URL.createObjectURL(g.result));
+          else playSrc(SOUND_DEFAULTS[key]);
+        };
+        g.onerror = () => { db.close(); playSrc(SOUND_DEFAULTS[key]); };
+      } catch {
+        playSrc(SOUND_DEFAULTS[key]);
+      }
+    };
+    req.onerror = () => playSrc(SOUND_DEFAULTS[key]);
+  }
   function play(key) {
     if (!soundEnabled) return;
     const cfg = readSoundConfig();
@@ -117,11 +143,8 @@
     const now = Date.now();
     if (now - (lastPlay[key] || 0) < 2000) return;
     lastPlay[key] = now;
-    const src = (entry && entry.file) ? entry.file : SOUND_DEFAULTS[key];
-    const a = new Audio(src);
-    a.volume = 0.7;
-    a.currentTime = 0;
-    a.play().catch(() => {}); // 自动播放被平台策略拦下时静默放弃
+    if (entry && entry.hasFile) { playFromDb(key); return; }
+    playSrc(SOUND_DEFAULTS[key]);
   }
   let startPlayed = false; // 启动音只在首次连上时响,内核重启重连不再响
 

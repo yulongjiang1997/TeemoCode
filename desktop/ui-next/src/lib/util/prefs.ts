@@ -230,10 +230,12 @@ export function writeSyncedExcluded(names: string[]): void {
   }
 }
 
-/** 事件音效配置:每事件 { enabled, file?(data URL) }。 */
+/** 事件音效配置:每事件 { enabled, hasFile?, name? }。
+ *  音效文件本体存 IndexedDB(soundFile.ts),这里只存标志 + 文件名(显示)。 */
 export interface SoundEntry {
   enabled: boolean;
-  file?: string;
+  hasFile?: boolean;
+  name?: string;
 }
 export type SoundConfig = Partial<Record<"startup" | "task-done" | "task-error" | "ask" | "idle", SoundEntry>>;
 
