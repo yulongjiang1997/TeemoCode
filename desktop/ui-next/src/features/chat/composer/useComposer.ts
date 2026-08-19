@@ -25,7 +25,7 @@ import {
   uploadFilePath,
   uploadFileStream,
 } from "@/lib/ipc/uploads";
-import { readTeamMode, readTeamRoles } from "@/lib/util/prefs";
+import { readComposerQueue, readTeamMode, readTeamRoles, writeComposerQueue } from "@/lib/util/prefs";
 import { skillsList } from "@/lib/ipc/skills";
 import { b64encode } from "@/lib/protocol/codec";
 
@@ -120,6 +120,8 @@ export interface ComposerCtl {
   error: string | null;
   dismissError(): void;
   notifyError(message: string): void;
+  /** 从 localStorage 恢复持久化队列:按文本去重后追加到队尾(补投 effect 会自动投)。 */
+  restorePersisted(items: QueuedInstr[]): void;
   /** 发送草稿+附件;运行中自动追加进指令队列。返回是否已接受(发送或入队)。 */
   send(): boolean;
   stop(): void;
@@ -201,12 +203,13 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
   }, []);
 
   // 编辑面快照(留档用):cleanup 时拿到的是最后一次已提交状态
-  const snapRef = useRef<{ draft: string; queue: QueuedInstr[]; atts: ComposerAtt[] }>({
+  const snapRef = useRef<{ draft: string; queue: QueuedInstr[]; atts: ComposerAtt[]; paused: boolean }>({
     draft: "",
     queue: [],
     atts: [],
+    paused: false,
   });
-  snapRef.current = { draft, queue, atts };
+  snapRef.current = { draft, queue, atts, paused };
   // 当前活跃会话(迟到的发送回执按它守卫,不污染切换后的会话)
   const activeRef = useRef(sessionId);
   activeRef.current = sessionId;
@@ -215,7 +218,9 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
   // 是瞬态不入档,在途收尾回调按 id 过滤,清空后的 filter/map 无害)。
   // 留档挂在 cleanup:切走与卸载(关视图/进设置)统一走同一条路径。
   useEffect(() => {
-    const entry = stashGet(sessionId);
+    // 优先从 localStorage 恢复(跨重启),其次从内存 stash 恢复
+    const persisted = readComposerQueue(sessionId);
+    const entry = persisted ?? stashGet(sessionId);
     setDraft(entry?.draft ?? "");
     setQueue(entry?.queue ? [...entry.queue] : []);
     setPaused(entry?.paused ?? false);
@@ -235,6 +240,13 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
     return () => {
       unbind();
       stashSet(sessionId, snapRef.current);
+      // 队列持久化到 localStorage(跨重启):有内容才写,清空即移除
+      writeComposerQueue(sessionId, {
+        queue: snapRef.current.queue,
+        paused: snapRef.current.paused,
+        draft: snapRef.current.draft,
+        atts: snapRef.current.atts,
+      });
       clearRetry();
     };
   }, [sessionId, clearRetry]);
@@ -431,6 +443,15 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
     flushBlockedRef.current = false;
     setQueue((cur) => cur.filter((x) => x.state === "failed")); // 只清待发送,失败项留给用户处置
   }, []);
+  /** 从 localStorage 恢复持久化队列:按文本去重后追加到队尾(补投 effect 会自动投)。 */
+  const restorePersisted = useCallback((items: QueuedInstr[]) => {
+    if (!items.length) return;
+    setQueue((cur) => {
+      const have = new Set(cur.map((x) => x.text));
+      const add = items.filter((x) => !have.has(x.text) && x.text.trim());
+      return [...cur, ...add];
+    });
+  }, []);
   // 暂停态 ref:启动(解除暂停)时据此判断是否要「失败项回队」
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
@@ -552,6 +573,7 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
     reorderInstr,
     editInstr,
     clearQueue,
+    restorePersisted,
     atts,
     removeAtt,
     uploads,

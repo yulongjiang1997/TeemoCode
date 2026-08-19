@@ -112,8 +112,10 @@ import { renameIsNoop } from "@/lib/util/rename";
 import { createImeGuard } from "@/lib/util/slash";
 import { useEscLayer } from "@/lib/util/escLayer";
 import { useDismiss } from "@/lib/util/useDismiss";
+import { createPortal } from "react-dom";
 import { Composer } from "./composer/Composer";
 import { useComposer } from "./composer/useComposer";
+import { readComposerQueue, writeComposerQueue, type ComposerPersisted } from "@/lib/util/prefs";
 import { LogList } from "./LogList";
 import { OutlineNav, outlineEntriesOf } from "./OutlineNav";
 import { TaskPanel } from "./TaskPanel";
@@ -549,6 +551,25 @@ export function ChatView({
     setConfirmDelete(false);
   };
   useDismiss(menuOpen, menuBoxRef, closeMenu);
+  // 队列持久化查看面板:打开时读 localStorage,展示该会话持久化的队列
+  const [queueViewOpen, setQueueViewOpen] = useState(false);
+  const [persistedQueue, setPersistedQueue] = useState<ComposerPersisted | null>(null);
+  const openQueueView = () => {
+    setPersistedQueue(readComposerQueue(meta.id));
+    setQueueViewOpen(true);
+    closeMenu();
+  };
+  const restorePersisted = () => {
+    if (persistedQueue?.queue.length) {
+      composer.restorePersisted(persistedQueue.queue);
+      writeComposerQueue(meta.id, null);
+    }
+    setQueueViewOpen(false);
+  };
+  const clearPersisted = () => {
+    writeComposerQueue(meta.id, null);
+    setPersistedQueue(null);
+  };
   useEffect(() => {
     // 切会话收起菜单(确认态属于上一个会话)
     closeMenu();
@@ -1085,6 +1106,15 @@ export function ChatView({
                 <button
                   type="button"
                   role="menuitem"
+                  onClick={openQueueView}
+                >
+                  {t("chat.menu.queue")}
+                </button>
+              </li>
+              <li role="none">
+                <button
+                  type="button"
+                  role="menuitem"
                   onClick={() => {
                     closeMenu();
                     startRename();
@@ -1141,6 +1171,52 @@ export function ChatView({
           )}
         </div>
       </header>
+
+      {/* 队列持久化查看面板:展示该会话 localStorage 里持久化的队列数据。
+          弹窗必须脱离 chat 容器(其 transform/overflow 会限制 fixed 定位,
+          见 LAYOUT.md 弹窗契约),经 portal 挂到 body。 */}
+      {queueViewOpen &&
+        createPortal(
+          <div className="modal modal-open" role="dialog" aria-label={t("chat.queueView.title")}>
+            <div className="modal-box max-h-[70vh] w-full max-w-md overflow-y-auto p-5">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-sm font-semibold">{t("chat.queueView.title")}</h3>
+                <button type="button" aria-label="close" className="btn btn-ghost btn-square btn-xs" onClick={() => setQueueViewOpen(false)}>
+                  <IconX size={14} stroke={1.75} aria-hidden />
+                </button>
+              </div>
+              {!persistedQueue || persistedQueue.queue.length === 0 ? (
+                <div className="py-8 text-center text-xs text-base-content/50">{t("chat.queueView.empty")}</div>
+              ) : (
+                <>
+                  <ul className="space-y-1.5">
+                    {persistedQueue.queue.map((q, i) => (
+                      <li key={`${q.id}-${i}`} className="flex items-center gap-2 rounded-lg border border-base-300 px-2 py-1.5 text-xs">
+                        <span className={`badge badge-xs shrink-0 ${q.state === "failed" ? "badge-error" : "badge-ghost"}`}>
+                          {q.state === "failed" ? t("chat.queueView.failed") : t("chat.queueView.pending")}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate">{q.text}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  {persistedQueue.paused && (
+                    <div className="mt-2 text-[11px] text-base-content/50">{t("chat.queueView.paused")}</div>
+                  )}
+                  <div className="mt-4 flex justify-end gap-2">
+                    <button type="button" className="btn btn-ghost btn-xs" onClick={clearPersisted}>
+                      {t("chat.queueView.clear")}
+                    </button>
+                    <button type="button" className="btn btn-primary btn-xs" onClick={restorePersisted}>
+                      {t("chat.queueView.restore")}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="modal-backdrop cursor-pointer" onClick={() => setQueueViewOpen(false)} aria-hidden />
+          </div>,
+          document.body,
+        )}
 
       {/* 布局规范:header 只放身份与动作;会话连接状态是内容级信息,
           以内嵌条挂在 header 之下,恢复即消。形态 = 「header 的延长线」:

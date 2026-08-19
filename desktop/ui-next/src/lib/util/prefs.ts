@@ -254,3 +254,47 @@ export function writeSoundConfig(cfg: SoundConfig): void {
     // 只丢持久化
   }
 }
+
+/** 指令队列持久化(按会话)。重启后恢复 pending/failed 项与暂停态。 */
+export interface ComposerPersisted {
+  queue: QueuedInstr[];
+  paused: boolean;
+  draft?: string;
+  atts?: ComposerAtt[];
+}
+export type QueuedInstr = {
+  id: string;
+  text: string;
+  atts: ComposerAtt[];
+  state: "pending" | "failed";
+};
+export type ComposerAtt = {
+  path: string;
+  name: string;
+  isImage: boolean;
+};
+export const COMPOSER_QUEUE_KEY_PREFIX = "mc.queue.";
+
+export function readComposerQueue(sid: string): ComposerPersisted | null {
+  try {
+    const raw = localStorage.getItem(COMPOSER_QUEUE_KEY_PREFIX + sid);
+    if (!raw) return null;
+    const v = JSON.parse(raw);
+    if (v && typeof v === "object" && Array.isArray(v.queue)) return v as ComposerPersisted;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeComposerQueue(sid: string, val: ComposerPersisted | null): void {
+  try {
+    if (val && (val.queue.length > 0 || val.paused)) {
+      localStorage.setItem(COMPOSER_QUEUE_KEY_PREFIX + sid, JSON.stringify(val));
+    } else {
+      localStorage.removeItem(COMPOSER_QUEUE_KEY_PREFIX + sid);
+    }
+  } catch {
+    // 只丢持久化
+  }
+}
