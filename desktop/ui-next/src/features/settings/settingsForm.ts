@@ -94,6 +94,24 @@ export function serversToMcps(servers: Record<string, unknown>): McpEntry[] {
   });
 }
 
+// ---- MonkeyCode 服务版本 ----
+
+/** 官方云(国内)地址;mcBaseUrl 留空即它,写显式值也认(壳侧同口径)。 */
+export const MC_CN_URL = "https://monkeycode-ai.com";
+/** 官方云(国际)地址;与壳侧 baizhi::INTL_MONKEYCODE_URL 保持一致。 */
+export const MC_INTL_URL = "https://monkeycode-ai.net";
+
+/** 服务版本是 mcBaseUrl 三类取值的 UI 表达,不另设配置字段:
+ *  "" 或官方国内地址 = 国内版;官方国际地址 = 国际版;其余 = 私有化。 */
+export type McEdition = "cn" | "intl" | "private";
+
+export function mcEditionOf(mcBaseUrl: string): McEdition {
+  const base = mcBaseUrl.trim().replace(/\/+$/, "");
+  if (!base || base === MC_CN_URL) return "cn";
+  if (base === MC_INTL_URL) return "intl";
+  return "private";
+}
+
 // ---- 草稿 ----
 
 export interface SettingsDraft {
@@ -111,6 +129,8 @@ export interface SettingsDraft {
   /** 模型请求地址(llmproxy);"" = 官方云走 proxy 子域、自建走 {服务地址}/v1
    *  (口径在壳侧 baizhi::resolve_mc_llm) */
   mcLlmBaseUrl: string;
+  /** 跳过 MonkeyCode 云端 TLS 证书校验(自建/私有化用自签证书时开启;官方云绝不跳过) */
+  mcSkipTlsVerify: boolean;
 }
 
 export const emptyModel = (): HostModel => ({
@@ -164,6 +184,7 @@ export function draftFromConfig(cfg: DesktopConfig): SettingsDraft {
     mcBaseUrl: cfg.mc_base_url ?? "",
     mcBasicAuth: cfg.mc_basic_auth ?? "",
     mcLlmBaseUrl: cfg.mc_llm_base_url ?? "",
+    mcSkipTlsVerify: !!cfg.mc_skip_tls_verify,
   };
 }
 
@@ -204,6 +225,7 @@ export function buildPayload(base: DesktopConfig, draft: SettingsDraft): Desktop
     mc_base_url: draft.mcBaseUrl.trim(),
     mc_basic_auth: draft.mcBasicAuth.trim(),
     mc_llm_base_url: draft.mcLlmBaseUrl.trim(),
+    mc_skip_tls_verify: draft.mcSkipTlsVerify,
   };
 }
 

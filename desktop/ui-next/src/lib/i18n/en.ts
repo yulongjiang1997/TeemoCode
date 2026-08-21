@@ -385,6 +385,8 @@ export const en: Record<MessageKey, string> = {
   "account.server.llmBaseUrlPlaceholder": "Empty: official cloud uses proxy.monkeycode-ai.com/v1, self-hosted uses <service URL>/v1",
   "account.server.llmBaseUrlHint":
     "Address of the model proxy (llmproxy); set it separately for split deployments or to bypass proxy auth for model traffic",
+  "account.server.skipTlsVerify": "Skip TLS cert verification (self-signed)",
+  "account.server.skipTlsVerifyHint": "Enable for self-hosted/private deployments with self-signed certs; never for official cloud, only applies to TeemoCode domain.",
   "account.server.hint":
     "Points at a self-hosted TeemoCode service; restart the app after saving for it to take effect. MC_DESKTOP_MONKEYCODE_URL overrides this setting. After changing the service URL, reconnect the account and re-sync member models; changing only the model endpoint needs no re-sync.",
 
@@ -985,6 +987,28 @@ export const en: Record<MessageKey, string> = {
   "account.usage.inviteReward": "+{reward} credits per invite",
   "account.usage.copyInvite": "Copy invite link",
   "account.usage.copied": "Copied",
+
+"account.edition.cn": "China",
+  "account.edition.cnMethods": "WeChat / SMS / Password",
+  "account.edition.intl": "International",
+  "account.edition.intlMethods": "Email sign-in",
+  "account.edition.private": "Self-hosted",
+  "account.edition.privateMethods": "Requires a service URL",
+  "account.edition.privateSubtitle": "Connect your own deployment",
+  "account.edition.switching": "Switching…",
+  "account.edition.notApplied": "The edition switch hasn't taken effect.",
+  "account.edition.retry": "Retry",
+  "account.edition.apply": "Apply",
+  "account.edition.needServerUrl": "Please enter a service URL",
+  "account.service.title": "Service",
+  "account.service.switchNote": "Switching requires signing in again and re-syncing member models",
+  "account.service.switchTo": "Switch to this service",
+  "account.others.title": "Other accounts",
+  "account.baizhi.optIn": "Sign in to Baizhi Cloud",
+  "account.mc.bridgeHint": "Signed in to Baizhi Cloud — connect with the current account in one click, or use email & password below to switch accounts.",
+  "account.usage.inviteTitle": "Invited",
+  "account.baizhi.optInHint": "Sign in to Baizhi Cloud to sync gateway models and MCP configs.",
+  "account.usage.inviteCount": "{count}",
 
   "stats.title": "Usage",
   "stats.subtitle": "Tracks only local desktop sessions (from engine usage events); cloud tasks are not included.",

@@ -33,6 +33,7 @@ import {
   type HostInfo,
 } from "@/lib/ipc/host";
 import { inDesktopShell, listen } from "@/lib/ipc/ipc";
+import { McTransportProvider } from "@/lib/mcTransport";
 import { afterEngineReady, engineRestart, engineStatus, onEngineStatus, type EngineStatus } from "@/lib/ipc/engine";
 import type { CloudProject, CloudTask } from "@/lib/ipc/cloudtasks";
 import { todoUploadsDir, type TodoItem } from "@/lib/ipc/todos";
@@ -332,6 +333,14 @@ export function App() {
     window.addEventListener("mc-bg-changed", refresh);
     return () => window.removeEventListener("mc-bg-changed", refresh);
   }, []);
+  const [mcTransportGeneration, setMcTransportGeneration] = useState(0);
+  // 事件回调先同步推进 ref,再触发 React render;旧 Promise 在同一 tick
+  // 落地时也会立即判成 stale,不会钻进 state 更新窗口。
+  const mcTransportGenerationRef = useRef(0);
+  const isMcTransportCurrent = useCallback(
+    (generation: number) => mcTransportGenerationRef.current === generation,
+    [],
+  );
   const [cloudTask, setCloudTask] = useState<CloudTask | null>(null);
   const [cloudReload, setCloudReload] = useState(0);
   // 用户选任务时递增,跨设置/新建/云端视图重挂 Composer 也能收到聚焦意图;
@@ -521,6 +530,14 @@ export function App() {
     const offMcpTimeout = listen<void>("browser-mcp-refresh-timeout", () =>
       pushShell("browser.mcpTimeout", "warn", { action: "restart" }),
     );
+    const offMcTransport = listen<number>("monkeycode-transport-changed", (generation) => {
+      const next = Number.isFinite(generation) ? generation : mcTransportGenerationRef.current + 1;
+      if (next <= mcTransportGenerationRef.current) return;
+      mcTransportGenerationRef.current = next;
+      setMcTransportGeneration(next);
+      setCloudTask(null);
+      setCloudReload((n) => n + 1);
+    });
     refresh();
     // D5 首启向导:桌面壳里模型清单为空 → 自动打开设置页。只在挂载时判一次:
     // 用户关掉设置页不再纠缠,配好模型后自然不会再触发。
@@ -689,6 +706,7 @@ export function App() {
   })();
 
   return (
+    <McTransportProvider generation={mcTransportGeneration} isCurrent={isMcTransportCurrent}>
     <div className="relative flex h-full flex-col text-base-content" style={{ "--mask-opacity": maskOpacity / 100 } as CSSProperties}>
       {/* 背景层:默认纯色 + 自定义图片(按透明度叠加) */}
       <div className="absolute inset-0 bg-base-100" aria-hidden />
@@ -942,5 +960,6 @@ export function App() {
       <DownloadsDock />
       </div>
     </div>
+    </McTransportProvider>
   );
 }

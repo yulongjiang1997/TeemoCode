@@ -87,6 +87,8 @@ export interface McStatus {
   logged_in: boolean;
   /** 云端主机名(如 monkeycode-ai.com) */
   host: string;
+  /** 云端服务完整基址(含协议/端口),可点击打开网页 */
+  base_url?: string;
   user?: McUser;
 }
 
@@ -165,19 +167,43 @@ export async function mcUsage(): Promise<McUsage | null> {
 /** 每日签到(壳内自动 PoW)。成功后调用方重拉 mcUsage 刷新余额。 */
 export const mcCheckin = () => invoke<{ ok: boolean }>("mc_checkin");
 
-/** 同步会员内置模型(不落盘,纯返回)。 */
-export const mcModelsSync = () => invoke<McModelsSyncResult>("mc_models_sync");
+/** 同步会员内置模型(不落盘,纯返回)。
+ *  expectedGeneration:壳 transport 代次;若保存期间切了服务地址则取消,
+ *  避免把旧服务结果落到新会话(向后兼容:不传 = 不校验)。 */
+export const mcModelsSync = (expectedGeneration?: number) =>
+  invoke<McModelsSyncResult>("mc_models_sync", { expectedGeneration });
 
 /** 吊销会员模型密钥。须在 mcLogout **之前**调用——请求走 mc 会话认证,
- *  会话一清就没法删了(壳会保留本地记录待重连后收敛)。 */
-export const mcModelsRevoke = () => invoke<{ ok: boolean }>("mc_models_revoke");
+ *  会话一清就没法删了(壳会保留本地记录待重连后收敛)。
+ *  expectedGeneration:同上,切服则取消(向后兼容:不传 = 不校验)。 */
+export const mcModelsRevoke = (expectedGeneration?: number) =>
+  invoke<{ ok: boolean }>("mc_models_revoke", { expectedGeneration });
+
+/** 原子断开:吊销会员 Key + 清会话一体(壳侧 mc_disconnect 收口代次校验)。
+ *  expectedGeneration:壳 transport 代次;切服期间调用会返回 { cancelled:true },
+ *  调用方据此提示用户重试。 */
+export const mcDisconnect = (expectedGeneration: number) =>
+  invoke<{ ok: boolean; cancelled?: boolean; warning?: string }>("mc_disconnect", { expectedGeneration });
 
 /** 断开 MonkeyCode:先吊销会员模型密钥、再清会话,顺序不可倒置(见
  *  mcModelsRevoke)。吊销失败(如断网)不阻断登出——本地必须能断开,
  *  壳保留记录待下次重连后再次断开即收敛;失败信息以 warning 返回给
- *  调用方外显。登出本身失败(浏览器模式)照常上抛。 */
-export async function disconnectMc(): Promise<{ warning?: string }> {
+ *  调用方外显。登出本身失败(浏览器模式)照常上抛。
+ *  expectedGeneration 可选:传了则走原子断开(壳校验切服竞态);不传则
+ *  退化为分步吊销 + 登出(向后兼容既有调用)。 */
+export async function disconnectMc(
+  expectedGeneration?: number,
+): Promise<{ warning?: string; cancelled?: boolean }> {
   let warning: string | undefined;
+  if (expectedGeneration !== undefined) {
+    const r = await mcDisconnect(expectedGeneration);
+    if (r.warning) warning = typeof r.warning === "string" ? r.warning : String(r.warning);
+    if (r.cancelled) {
+      warning = (warning ? warning + "; " : "") + "服务配置已切换,断开已取消,请重试";
+      return { warning, cancelled: true };
+    }
+    return warning === undefined ? { cancelled: false } : { warning, cancelled: false };
+  }
   try {
     await mcModelsRevoke();
   } catch (e) {

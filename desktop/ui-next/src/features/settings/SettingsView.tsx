@@ -26,6 +26,7 @@ import { useDismiss } from "@/lib/util/useDismiss";
 import { useEscLayer } from "@/lib/util/escLayer";
 import { baizhiStatus } from "@/lib/ipc/account";
 import { AccountSection, type SyncApplied } from "@/features/account/AccountSection";
+import { useMcTransport } from "@/lib/mcTransport";
 import { engineCaps } from "@/lib/ipc/approvals";
 import { AboutSection } from "./AboutSection";
 import { TeamSection } from "./TeamSection";
@@ -679,6 +680,7 @@ export function SettingsView({
   // 模型页百智云空组的引导文案分两种(去同步 / 先登录),口径同旧 UI
   const [bzLoggedIn, setBzLoggedIn] = useState(false);
   const [saving, setSaving] = useState(false);
+  const { generation: mcTransportGeneration, isCurrent: isMcTransportCurrent } = useMcTransport();
   const [saveError, setSaveError] = useState("");
 
   useEffect(() => {
@@ -921,6 +923,17 @@ export function SettingsView({
             onMcDisconnected={applyMcDisconnect}
             draft={draft}
             onDraft={updateDraft}
+            refreshKey={mcTransportGeneration}
+            isRefreshKeyCurrent={isMcTransportCurrent}
+            savedMcBaseUrl={cfg?.mc_base_url ?? ""}
+            savedMcBasicAuth={cfg?.mc_basic_auth ?? ""}
+            onApplyDraft={(d) => {
+              if (savingRef.current) return;
+              if (cfg && baseline && payloadEquals(buildPayload(cfg, d), baseline)) return;
+              setSaving(true);
+              void save(d).finally(() => setSaving(false));
+            }}
+            saveBusy={saving}
           />
         );
       case "models":

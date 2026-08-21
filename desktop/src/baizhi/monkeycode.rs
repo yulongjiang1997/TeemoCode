@@ -1062,7 +1062,7 @@ pub async fn cloud_ws_open(
     if pipe.is_empty() || pipe.len() > 64 {
         return Err("pipe id 非法".into());
     }
-    let svc = &bz.0;
+    let svc = &bz.service;
     if svc.mc.is_empty() {
         return Err("MonkeyCode 会话缺失,请先在设置中连接 MonkeyCode 账号".into());
     }
