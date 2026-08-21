@@ -121,8 +121,8 @@ export interface SettingsDraft {
   mcps: McpEntry[];
   /** "" = 本机;"wsl:<发行版>" */
   kernelEnv: string;
-  /** 自建/私有化部署(账号分区的高级块;"" = 官方云)。壳在启动时构造云端
-   *  服务,故这三项保存后要**重启应用**才生效——文案在设置页说明 */
+  /** MonkeyCode 服务地址(账号分区的版本选择块;"" = 官方云国内版,
+   *  MC_INTL_URL = 国际版,其余 = 私有化),保存后立即生效 */
   mcBaseUrl: string;
   /** 测试环境反代的 HTTP Basic Auth("user:pass") */
   mcBasicAuth: string;

@@ -16,6 +16,7 @@ import {
   prependHistory,
   reduceBatch,
   reduceFrame,
+  timelineDeltaOf,
 } from "./reduce";
 import type { AcpUpdate, AskItem, ChatItem, ChatState, Frame, PermItem, SysItem, ToolItem, ToolProgress } from "./types";
 
@@ -66,6 +67,45 @@ describe("流式文本聚合", () => {
     ]);
     expect(s.items.map((it) => it.kind)).toEqual(["agent", "tool", "agent"]);
     expect((s.items[2] as Extract<ChatItem, { kind: "agent" }>).text).toBe("后");
+  });
+});
+
+describe("时间线增量 sidecar", () => {
+  it("纯流式批次精确标记尾行，不为万级历史重新做全量投影", () => {
+    const items: ChatItem[] = [
+      ...Array.from({ length: 10_000 }, (_, index) => ({ kind: "sys" as const, text: String(index) })),
+      { kind: "agent", text: "前" },
+    ];
+    const previous: ChatState = { ...createChatState(), items, streamKind: "agent" };
+    const next = reduceBatch(previous, [
+      acp({ sessionUpdate: "agent_message_chunk", content: { text: "后" } }),
+    ]);
+    expect(next.items.at(-1)).toEqual({ kind: "agent", text: "前后" });
+    expect(timelineDeltaOf(next)).toEqual({
+      from: previous,
+      kind: "update",
+      changed: [10_000],
+    });
+  });
+
+  it("只改会话元数据时标记 meta 且 changed 为空", () => {
+    const previous: ChatState = {
+      ...createChatState(),
+      items: Array.from({ length: 2_000 }, (_, index) => ({ kind: "sys" as const, text: String(index) })),
+    };
+    const next = reduceBatch(previous, [acp({ sessionUpdate: "usage_update", used: 1, size: 10 })]);
+    expect(timelineDeltaOf(next)).toEqual({ from: previous, kind: "meta", changed: [] });
+  });
+
+  it("连续快照只保留直接前驱，不把流式状态串成强引用长链", () => {
+    const first = reduceBatch(createChatState(), [
+      acp({ sessionUpdate: "agent_message_chunk", content: { text: "一" } }),
+    ]);
+    const second = reduceBatch(first, [
+      acp({ sessionUpdate: "agent_message_chunk", content: { text: "二" } }),
+    ]);
+    expect(timelineDeltaOf(first)).toBeUndefined();
+    expect(timelineDeltaOf(second)?.from).toBe(first);
   });
 });
 
@@ -491,6 +531,13 @@ describe("轮次与系统帧", () => {
     expect(run([frame("task-error")]).items.at(-1)).toEqual({ kind: "sys", tag: "error", text: "", key: "chat.sys.errorUnknown", error: true, seq: 0 });
   });
 
+  it("terminal=false 的错误只展示,保持运行态直到 task-ended", () => {
+    const pending = run([frame("task-started"), frame("task-error", { error: "落盘失败", terminal: false })]);
+    expect(pending.running).toBe(true);
+    expect(pending.items.at(-1)).toMatchObject({ kind: "sys", tag: "error", params: { reason: "落盘失败" } });
+    expect(reduceFrame(pending, frame("task-ended")).running).toBe(false);
+  });
+
   it("user-input 解 base64(含多字节);坏编码回退原文", () => {
     const s = run([frame("user-input", { content: b64encode("修复 Bug🐛") })]);
     expect(s.items[0]).toEqual({ kind: "user", text: "修复 Bug🐛" });
@@ -587,10 +634,18 @@ describe("轮次与系统帧", () => {
   it("compact_status 与 llm_call_retry 渲染系统行", () => {
     const s = run([
       acp({ sessionUpdate: "compact_status", status: "started" }),
+      acp({ sessionUpdate: "compact_status", status: "failed" }),
+      acp({ sessionUpdate: "compact_status", status: "cancelled" }),
       acp({ sessionUpdate: "llm_call_retry", attempt: 2, message: "429" }),
     ]);
-    expect(s.items.map((it) => (it as SysItem).key)).toEqual(["chat.sys.compacting", "chat.sys.retry"]);
-    expect((s.items[1] as SysItem).params).toEqual({ attempt: "2", message: "429" });
+    expect(s.items.map((it) => (it as SysItem).key)).toEqual([
+      "chat.sys.compacting",
+      "chat.sys.compactFailed",
+      "chat.sys.compactCancelled",
+      "chat.sys.retry",
+    ]);
+    expect((s.items[1] as SysItem).error).toBe(true);
+    expect((s.items[3] as SysItem).params).toEqual({ attempt: "2", message: "429" });
   });
 
   it("未知帧/未知 sessionUpdate/非 acp kind 一律原样返回", () => {

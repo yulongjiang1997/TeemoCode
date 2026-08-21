@@ -1,21 +1,17 @@
 // 聊天视图:header(标题+摘要+连接态)+ 消息流(贴底跟随/滚动记忆/加载
 // 更早保位)+ 提问大纲(左缘点列,跳转补页)+ 任务面板 + 全功能 composer。
-// 滚动策略(旧 UI chat.tsx 的滚动纪律移植):
-// - 贴底判定单向:scroll 事件只做「进入贴底 → 跟随」;解除跟随只认真实
-//   用户输入(wheel 上滚 / 右缘 mousedown 拖滚动条),程序滚动不误判;
-// - 会话滚动记忆:卸载/切会话写档「视口顶条目 + 条目内偏移 + pinned」,
-//   回来按锚点恢复(纯函数在 lib/util/scrollAnchor,几何可测);
-// - 「加载更早」前插保位记**元素**,提交后 layoutEffect 对齐回原视口位。
+// 滚动策略:
+// - 程序 scrollTop 全部留落点标记，未标记的向上滚动才解除贴底；
+// - 会话滚动记忆保存「稳定 row key + 条目内偏移 + pinned」；
+// - 「加载更早」前插同样按稳定 key，在提交后 layoutEffect 对齐原视口位。
 // 大纲跳转:锚(data-user-seq)不在 DOM 时按条目 offset 走 ensureLoaded
 // 精确补页(session_history 以 offset 为终点,不盲翻),补页提交前的空窗
-// 用短时重试兜(旧 chat.tsx jumpWithRetry 语义);大纲当前项 activeSeq 由
-// rAF 节流的滚动跟踪算出(lib/util/scrollAnchor.outlineActiveSeq)。
+// 用短时重试兜；当前项由虚拟高度索引 O(1) 反查最近的用户行。
 import { IconDots, IconFolderOpen, IconPencil, IconX } from "@tabler/icons-react";
 import {
   useCallback,
   useEffect,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
   type DragEvent,
@@ -24,116 +20,48 @@ import {
 } from "react";
 
 import { useApprovalHotkeys } from "@/app/shortcuts";
-
-/** 从文本里提取「产物文件路径」:取最后一段带分隔符+扩展名的路径,
- *  剥盘符/前导分隔归一为工作区相对路径。agent 常在回合末尾明说产物位置。 */
-function extractOutputPath(text: string): string | null {
-  const matches = text.match(/[\w.@+-]+(?:[\\/][\w.@+-]+)+\.\w{1,6}/g);
-  if (!matches?.length) return null;
-  const raw = matches[matches.length - 1] ?? "";
-  return raw.replace(/^[A-Za-z]:[\\/]/, "").replace(/^[\\/]+/, "") || null;
-}
-import { fmtCompact, showTokenPopover } from "@/features/sidebar/listKit";
 import { useI18n } from "@/lib/i18n";
-import { sessionCompact, sessionOutline, sessionSetModel, type OutlineItem } from "@/lib/ipc/controls";
-import { getConfig } from "@/lib/ipc/config";
-import { repoChanges, repoRecentFiles, repoReveal } from "@/lib/ipc/repo";
-import { sessionFrame, sessionPatch, sessionSend, type SessionMeta } from "@/lib/ipc/sessions";
-import { b64encode } from "@/lib/protocol/codec";
-import type { ToolItem } from "@/lib/protocol/types";
-import { buildSessionUsageMap, usageStats, type TokenUsage } from "@/lib/ipc/usageStats";
+import { sessionOutline, type OutlineItem } from "@/lib/ipc/controls";
+import { repoChanges, repoReveal } from "@/lib/ipc/repo";
+import { sessionFrame, sessionPatch, type SessionMeta } from "@/lib/ipc/sessions";
 import { onNativeFileDrop, uploadFileURL } from "@/lib/ipc/uploads";
 import { workspaceRelativePath } from "@/lib/util/markdownPaths";
-
-/** 判断引擎错误消息是否为 key 相关(key 无效/额度/限流):这类错误才触发
- *  多密钥自动切换。别的错误(网络/业务)不轮换,留给人工处理。 */
-function isKeyError(reason: string): boolean {
-  const r = reason.toLowerCase();
-  // 只认"错误形态":壳会拿错误文本触发切换,裸 401/forbidden 等词
-  // 在错误正文里出现会误判(如 JSON 错误体里的字段)。网关错误形如
-  // "api error 4xx" 或明确的 key/quota 短语。
-  // 注意:429/rate limit 是瞬时错误,引擎会内部重试,不能触发切换。
-  if (r.includes("api error ")) {
-    return r.includes("401") || r.includes("403");
-  }
-  return (
-    r.includes("invalid api key") ||
-    r.includes("api key is invalid") ||
-    r.includes("insufficient_quota") ||
-    r.includes("insufficient quota") ||
-    r.includes("quota exceeded") ||
-    r.includes("permission denied") ||
-    r.includes("authentication failed") ||
-    (r.includes("unauthorized") && (r.includes("invalid") || r.includes("api key") || r.includes('{"code"')))
-  );
-}
-
-/** 错误摘要:切换提示只显示关键信息,不刷整段报错。 */
-function shortReason(reason: string): string {
-  const r = reason.toLowerCase();
-  if (r.includes("401") || r.includes("unauthorized") || r.includes("invalid api key") || r.includes("authentication")) {
-    return "401 认证失败";
-  }
-  if (r.includes("403") || r.includes("forbidden") || r.includes("permission denied")) {
-    return "403 无权限";
-  }
-  if (r.includes("insufficient_quota") || r.includes("insufficient quota")) {
-    return "额度不足";
-  }
-  if (r.includes("rate limit") || r.includes("rate_limit") || r.includes("429")) {
-    return "触发限流";
-  }
-  const first = (reason.split("\n")[0] ?? "").trim();
-  if (first) return first.length > 40 ? `${first.slice(0, 40)}…` : first;
-  return "key 错误";
-}
-
-/** 读取会话的备用模型链(与 composer 同一 localStorage 键)。 */
-function readFallbackModels(sid: string): string[] {
-  try {
-    const v = JSON.parse(localStorage.getItem(`mc.fallbackModels.${sid}`) ?? "[]");
-    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
-/** 备用模型链的下一格(纯逻辑见 lib/util/fallbackModel.ts)。 */
-import { nextFallbackModel } from "@/lib/util/fallbackModel";
-
 import {
-  anchorScrollTop,
   consumeProgrammaticScroll,
-  findAnchor,
   markProgrammaticScroll,
-  outlineActiveSeq,
 } from "@/lib/util/scrollAnchor";
 import { renameIsNoop } from "@/lib/util/rename";
 import { createImeGuard } from "@/lib/util/slash";
 import { useEscLayer } from "@/lib/util/escLayer";
 import { useDismiss } from "@/lib/util/useDismiss";
-import { createPortal } from "react-dom";
-import { Composer } from "./composer/Composer";
-import { useComposer } from "./composer/useComposer";
-import { readComposerQueue, writeComposerQueue, type ComposerPersisted } from "@/lib/util/prefs";
-import { LogList } from "./LogList";
-import { OutlineNav, outlineEntriesOf } from "./OutlineNav";
+import { LocalComposerHost, type LocalComposerHandle } from "./composer/LocalComposerHost";
+import { LogList, type LogListHandle } from "./LogList";
+import { OutlineNav, useOutlineEntries } from "./OutlineNav";
 import { TaskPanel } from "./TaskPanel";
 import { FilesDrawer } from "@/features/files/FilesDrawer";
 import { useSessionFeed } from "./useSessionFeed";
-import { stripSourceSuffix, stripTierPrefix } from "@/lib/models/modelMenu";
 
 const PIN_THRESHOLD = 40; // 距底多少像素内算"贴底"(scroll 只做进入贴底的单向判定)
 const SCROLLBAR_EDGE = 18; // 视口右缘按下算滚动条拖拽意图,解除跟随
 const RESTORE_POLLS = 15; // 锚点恢复的轮询校准次数(200ms 一次,3s 内收敛)
+const RESTORE_WAIT_POLLS = 150; // 历史补页/大窗口 transition 最多等 30s,随后回退尾部
 const FLASH_MS = 1100; // 与 chrome.css mc-flash 动画时长对齐(略长于 1s)
 
 // 各会话的滚动位置记忆:切走再切回仍在原位;贴底离开的会话回来仍贴底。
-// 记「视口顶部的条目序号 + 条目内偏移」而非 scrollTop 像素:历史分批回放、
-// 工具结果合并进先前条目、折叠态重置都会改变上方内容高度,像素值会漂,
-// 锚点跟着条目走才对得上"看到哪了"。ChatView 本身会因设置页等视图切换
-// 整体卸载重挂,记忆只能存在模块级(旧 UI chat.tsx 同款设计,理由随迁)。
-const scrollMemo = new Map<string, { anchor: number; offset: number; pinned: boolean }>();
+// rowKey 只在**同一次打开**里稳定:加载更早会同步左移 keyBase,既有节点不换；
+// 但切回任务会从尾窗重新归约,keyBase 又从 0 开始,旧 rowKey 已经不是同一条。
+// 因此跨打开另存最近一条 user-input 的稳定 seq + 它到视口顶的偏移,并带上
+// 大纲给出的 replay offset；切回时先按 offset 补齐历史,再按 seq 恢复。旧记录
+// 没 seq/大纲尚未到时才退回 rowKey。ChatView 会因设置页等视图切换整体卸载,
+// 记忆只能存在模块级(旧 UI chat.tsx 同款设计,理由随迁)。
+interface ScrollAnchor {
+  rowKey: string;
+  offset: number;
+  userSeq?: number;
+  userOffset?: number;
+  historyOffset?: number;
+}
+const scrollMemo = new Map<string, ScrollAnchor & { pinned: boolean }>();
 
 export function ChatView({
   meta,
@@ -164,117 +92,117 @@ export function ChatView({
   const { state, conn, historyLoaded, openError, hasMore, loadingEarlier, earlierError, loadEarlier, ensureLoaded } =
     useSessionFeed(meta.id, epoch);
   useApprovalHotkeys(state, meta.id);
-  // 头部 token 用量:会话切换时抓一次(usage 事件由壳记账;子代理已归并进父任务)
-  const [usage, setUsage] = useState<TokenUsage | null>(null);
-  useEffect(() => {
-    let alive = true;
-    void usageStats()
-      .then((data) => {
-        if (!alive) return;
-        setUsage(buildSessionUsageMap(data.sessions).get(meta.id) ?? null);
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, [meta.id]);
-  // lastSeq 也喂给 composer:帧到达才是"上行已被壳接收"的可信信号
-  // (useComposer 的 ComposerFeed 头注写了三个信号各自兜住的故障)
-  const composer = useComposer(meta.id, {
-    running: state.running,
-    historyLoaded,
-    lastSeq: state.lastSeq,
-    turnEnded: state.turnEnded,
-  });
-  // 稳定引用:传给 memo 化 LogList 的回调、拖拽/原生落盘回调都经它取最新
-  // ctl,不随 composer 对象每渲染换新
-  const composerRef = useRef(composer);
-  composerRef.current = composer;
+  // composer 自己持有草稿/附件/上传状态；父层只留一个稳定命令端口给拖拽与
+  // Markdown 错误。打字从此不会再重渲 ChatView 和时间线。
+  const composerRef = useRef<LocalComposerHandle>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<LogListHandle>(null);
+  const outlineOffsetsRef = useRef(new Map<number, number>());
   const pinnedRef = useRef(true); // 用户是否停留在底部(自动跟随滚动)
   const lastScrollTop = useRef(0); // 上一次 scroll 事件的位置(判滚动方向)
   // 待恢复的锚点;回放期间每批都重新对齐(上方内容变高也不漂),用户主动滚动后交还控制权
-  const restoreRef = useRef<{ anchor: number; offset: number } | null>(null);
+  const restoreRef = useRef<ScrollAnchor | null>(null);
   const restoreTimer = useRef(0);
   const restoreTicks = useRef(0);
+  const restoreWaitTicks = useRef(0);
+  const restoreLoadRef = useRef<string | null>(null);
   const restoreRO = useRef<ResizeObserver | null>(null);
   const saveTimer = useRef(0);
 
-  // 滚动容器 → 条目列:LogList 根节点恒为内容轨(firstElementChild)的
-  // 最后一个子元素,其 children 与 state.items 一一对应(LogList 结构契约)
-  const itemColOf = () => scrollRef.current?.firstElementChild?.lastElementChild ?? null;
-  // 各条目相对滚动内容的 top 序列(content 坐标,与当前 scrollTop 无关)。
-  //
-  // 隐藏占位必须**继承前一条的 top**,不能按自己的矩形算:LogList 为守住
-  // 「DOM 子节点与 state.items 一一对应」的结构契约(锚点是 items 下标),
-  // 给若干条目留了 `display:none` 的占位。它们的 rect 全零,直接减 base 得到
-  // 的是 `scrollTop - elRect.top` —— 一个恒小于视口顶、看起来却完全合法的数。
-  // 锚点一旦落到这种条目上,恢复时反算出 `scrollTop = scrollTop`,15 轮 200ms
-  // 轮询与 ResizeObserver 兜底全成空转,表现为「长会话往上翻过历史,切走再
-  // 切回来有时不回原位,而是停在已加载历史的最顶端」。
-  // 继承前一条的 top 在几何上也正是对的:零高度元素就落在相邻内容的那个位置,
-  // 序列保持单调,findAnchor 的「下一条 top 即本条底边」推导照常成立。
-  const itemTops = (el: HTMLElement): number[] => {
-    const col = itemColOf();
-    if (!col) return [];
-    const base = el.getBoundingClientRect().top - el.scrollTop;
-    const tops: number[] = [];
-    for (const kid of Array.from(col.children)) {
-      const r = kid.getBoundingClientRect();
-      const noBox = r.width === 0 && r.height === 0; // display:none 占位
-      tops.push(noBox ? (tops[tops.length - 1] ?? 0) : r.top - base);
+  const rowNode = (rowKey: string): HTMLElement | null => {
+    const root = scrollRef.current;
+    if (!root) return null;
+    for (const node of root.querySelectorAll<HTMLElement>("[data-virtual-row]")) {
+      if (node.dataset.rowKey === rowKey) return node;
     }
-    return tops;
+    return null;
   };
 
   // 程序写 scrollTop 的唯一出口:值真的变了才打标记(没变不发 scroll 事件,
   // 白记一笔会把之后的用户滚动误判成程序滚)。onScroll 靠标记区分来源
-  const setScrollTop = (el: HTMLElement, v: number) => {
+  const setScrollTop = useCallback((el: HTMLElement, v: number) => {
     const before = el.scrollTop;
     el.scrollTop = v;
     if (el.scrollTop !== before) markProgrammaticScroll(el);
-  };
+  }, []);
 
   // 自动滚动:优先对齐待恢复锚点,否则贴底跟随。锚点条目还没回放出来时
   // 先不动(停在已回放内容的开头),出来后逐批对齐
-  const align = () => {
+  const align = (): boolean => {
     const el = scrollRef.current;
-    if (!el) return;
+    if (!el) return false;
     const a = restoreRef.current;
     if (a) {
-      const tops = itemTops(el);
-      if (a.anchor < tops.length) setScrollTop(el, anchorScrollTop(tops, a.anchor, a.offset));
+      // 跨任务重开优先认稳定 user seq。目标历史尚未补回时绝不能把旧
+      // rowKey 映射到本次尾窗的“最近数字键”:那会把错误位置当恢复成功,
+      // 正是长任务切回后只剩顶部 spacer/「加载更早」的来源。
+      if (a.userSeq !== undefined && a.userOffset !== undefined) {
+        if (!listRef.current?.ensureUserSeq(a.userSeq)) return false;
+        const bubble = el.querySelector<HTMLElement>(`[data-user-seq="${a.userSeq}"]`);
+        const row = bubble?.closest<HTMLElement>("[data-virtual-row]");
+        if (!row) return false; // ensureUserSeq 已切窗口,下一次 layout/轮询再对齐
+        const delta = row.getBoundingClientRect().top - el.getBoundingClientRect().top + a.userOffset;
+        setScrollTop(el, el.scrollTop + delta);
+        return true;
+      }
+      listRef.current?.ensureKey(a.rowKey);
+      const visibleKey = listRef.current?.resolveKey(a.rowKey) ?? a.rowKey;
+      const node = rowNode(visibleKey);
+      if (node) {
+        const delta = node.getBoundingClientRect().top - el.getBoundingClientRect().top + a.offset;
+        setScrollTop(el, el.scrollTop + delta);
+        return true;
+      }
     } else if (pinnedRef.current) {
       setScrollTop(el, el.scrollHeight);
+      return true;
     }
+    return false;
   };
 
   // 恢复完成/用户接管:轮询与 RO 兜底一并解除,交还滚动控制权
-  const finishRestore = () => {
+  const finishRestore = useCallback(() => {
     restoreRef.current = null;
     window.clearInterval(restoreTimer.current);
     restoreTimer.current = 0;
     restoreRO.current?.disconnect();
     restoreRO.current = null;
-  };
+  }, []);
 
   // 锚点恢复:立即对齐 + 200ms 轮询校准若干次——内容分批物化、渲染后布局
   // 还会无事件地微调(实测 ~6px,RO 也抓不到这种再分配),对齐到位后只是
   // 零修正的空转;另挂 ResizeObserver 监听内容列兜底(图片解码/字体加载
   // 会把位置顶漂几 px,不经过 items 变化)。恢复结束二者一并解除。
-  const startRestore = (anchor: number, offset: number) => {
+  const startRestore = (anchor: ScrollAnchor) => {
     finishRestore();
-    restoreRef.current = { anchor, offset };
-    align();
+    restoreRef.current = anchor;
+    if (anchor.userSeq !== undefined) listRef.current?.ensureUserSeq(anchor.userSeq);
+    else listRef.current?.ensureKey(anchor.rowKey);
+    const ready = align();
     restoreTicks.current = 0;
+    restoreWaitTicks.current = 0;
     restoreTimer.current = window.setInterval(() => {
-      if (!restoreRef.current || ++restoreTicks.current > RESTORE_POLLS) {
+      if (!restoreRef.current) {
         finishRestore();
         return;
       }
-      align();
+      if (align()) {
+        restoreWaitTicks.current = 0;
+        if (++restoreTicks.current > RESTORE_POLLS) finishRestore();
+        return;
+      }
+      // session_open 的长窗口与大纲补页都走 transition,Promise 返回不等于
+      // DOM 已提交。只在真正命中锚点后才开始 3s 校准预算；等待阶段另给
+      // 30s 上限。到上限后宁可回到最新消息,也不能永久停在虚拟顶 spacer。
+      restoreTicks.current = 0;
+      if (++restoreWaitTicks.current > RESTORE_WAIT_POLLS) {
+        finishRestore();
+        pinnedRef.current = true;
+        align();
+      }
     }, 200);
-    const col = itemColOf();
+    if (ready) restoreTicks.current = 1;
+    const col = scrollRef.current?.querySelector<HTMLElement>("[data-chat-items]");
     if (col && typeof ResizeObserver !== "undefined") {
       restoreRO.current = new ResizeObserver(align);
       restoreRO.current.observe(col);
@@ -286,22 +214,63 @@ export function ChatView({
   const saveAnchor = () => {
     const el = scrollRef.current;
     if (!el || !el.isConnected || restoreRef.current) return;
-    const { anchor, offset } = findAnchor(itemTops(el), el.scrollTop);
+    const viewportTop = el.getBoundingClientRect().top;
+    let anchor: HTMLElement | null = null;
+    for (const row of el.querySelectorAll<HTMLElement>("[data-virtual-row]")) {
+      const rect = row.getBoundingClientRect();
+      if (rect.bottom > viewportTop) {
+        anchor = row;
+        break;
+      }
+    }
+    const rowKey = anchor?.dataset.rowKey;
+    if (!anchor || !rowKey) return;
+    const offset = viewportTop - anchor.getBoundingClientRect().top;
+    // rowKey 跨 session_open 会漂；若当前阅读位置能归属到一条带 seq 的用户
+    // 消息,同时记住那条稳定锚及其到视口顶的距离。大纲 offset 让切回时无需
+    // 人再点一次「加载更早」就能补到对应轮次。
+    const activeUser = listRef.current?.activeUser();
+    const userSeq = activeUser?.seq;
+    const userBubble = userSeq === undefined
+      ? null
+      : el.querySelector<HTMLElement>(`[data-user-seq="${userSeq}"]`);
+    const userRow = userBubble?.closest<HTMLElement>("[data-virtual-row]");
+    const prior = scrollMemo.get(meta.id);
+    const stable = userSeq !== undefined && userRow
+      ? {
+          userSeq,
+          userOffset: viewportTop - userRow.getBoundingClientRect().top,
+          ...(outlineOffsetsRef.current.get(userSeq) !== undefined
+            ? { historyOffset: outlineOffsetsRef.current.get(userSeq)! }
+            : prior?.userSeq === userSeq && prior.historyOffset !== undefined
+              ? { historyOffset: prior.historyOffset }
+              : {}),
+        }
+      : {};
     // pinned 按几何兜底:人在底部就是贴底,写档不依赖旗标推断——旗标的
     // 置位要看事件方向与程序滚动判定,快滚到底的最后一发事件被判成程序
     // 滚动时旗标会漏置,切回来就不去底部了(2026-08-11 报障「滚到底再
     // 切回来落在中间」)
     const pinned = pinnedRef.current || el.scrollHeight - el.scrollTop - el.clientHeight < PIN_THRESHOLD;
-    scrollMemo.set(meta.id, { anchor, offset, pinned });
+    scrollMemo.set(meta.id, { rowKey, offset, pinned, ...stable });
   };
+
+  // 大纲跳转/闪光的句柄先于会话边沿 effect 声明(下方 cleanup 要清它们,
+  // 声明在后会构成「使用先于声明」);逻辑本体在下方「大纲跳转」段
+  const [flashSeq, setFlashSeq] = useState<number | null>(null);
+  const flashTimer = useRef(0);
+  const jumpTimer = useRef(0);
+  const metaIdRef = useRef(meta.id);
 
   // 会话切换/挂载:复位跟随状态并取出记忆位置(不显式复位的话 pinnedRef
   // 会带着上一会话的值进入新会话);cleanup 时 DOM 仍在,写档旧会话位置,
   // 并把旧会话的轮询定时器/RO 清干净
   useLayoutEffect(() => {
+    metaIdRef.current = meta.id; // 跳转链的会话身份基准(见 jumpWithRetry)
+    restoreLoadRef.current = null;
     const saved = scrollMemo.get(meta.id);
     pinnedRef.current = saved ? saved.pinned : true; // 首次打开默认贴底
-    if (saved && !saved.pinned) startRestore(saved.anchor, saved.offset);
+    if (saved && !saved.pinned) startRestore(saved);
     else {
       restoreRef.current = null;
       align();
@@ -316,7 +285,15 @@ export function ChatView({
       // DOM,闭包里的 meta.id 却还是旧会话——不取消就把上面刚写好的档冲掉
       window.cancelAnimationFrame(saveRaf.current);
       saveRaf.current = 0;
+      // 大纲跳转的重试链/闪光同属旧会话:seq 是各会话独立的帧序号,跨会话
+      // 必然撞号,残留的轮询会在新会话 DOM 里查到同号 [data-user-seq],把
+      // 新会话的视口拽到无关消息上并打断它的锚点恢复(卸载专用 effect 只
+      // 管卸载,切会话是同一实例复用,必须在这里清)
+      window.clearTimeout(jumpTimer.current);
+      window.clearTimeout(flashTimer.current);
+      setFlashSeq(null);
     };
+    // 本 effect 是 session 边沿；这些函数只读 refs，随普通帧重跑会误写档。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meta.id]);
 
@@ -329,8 +306,10 @@ export function ChatView({
   // scrollTop 不动,于是正好停在离底「一个面板高」的地方(用户报障
   // 2026-08-06:进本地会话不贴底)。这一档必须在绘制前修,交给下面的 RO
   // 会晚一帧,肉眼是一次跳动
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useLayoutEffect(align, [state.items, state.running, state.plan]);
+  useLayoutEffect(() => {
+    align();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.items, state.running, state.plan]);
 
   // 尺寸兜底:贴底跟随原先**只**在 items/running 变化时对齐,可高度变化的
   // 来源远不止 items——两头都得盯住,漏一头就停在离底几十像素的地方:
@@ -355,10 +334,8 @@ export function ChatView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [empty]);
 
-  // 写档走 rAF 节流(scheduleActive 同款):saveAnchor 里的 itemTops 要对
-  // **每个**条目 getBoundingClientRect,而 scroll 事件一帧能来好几发——长会话
-  // 里逐事件同步跑就是滚动卡顿的直接来源之一(2026-08-10 用户报障「很卡」)。
-  // 每帧至多一次,语义不变:帧间的多发本来就写同一个档
+  // 写档走 rAF 节流(scheduleActive 同款):现在只扫至多 160 个已挂载虚拟行，
+  // 但 scroll 事件一帧仍会来多发；每帧至多保存一次即可。
   const saveRaf = useRef(0);
   const scheduleSave = () => {
     if (saveRaf.current) return;
@@ -371,10 +348,10 @@ export function ChatView({
   // scroll 事件按来源判定贴底跟随(2026-08-11 报障「上滚到 user-input 突然
   // 回滚」的根因修复):此前只做「进入贴底 → 跟随」的单向判定,离底只认
   // wheel/右缘 mousedown——拖滚动条/PageUp 这类输入完全不解除跟随,而
-  // WebKit 拖动初期的插值滚动还会擦着底部区把 pinned 又置回 true;此时分带
-  // 兑现行高触发内容轨 RO → align 一把吸回底部,吸底事件再次自我钉住,
+  // WebKit 拖动初期的插值滚动还会擦着底部区把 pinned 又置回 true;此时行高
+  // 测量触发内容轨 RO → align 一把吸回底部,吸底事件再次自我钉住,
   // 用户被困在底部(WebKit 复现:snaps=2,scrollTop 全程出不去)。
-  // 现在凡代码写 scrollTop 都打标记(setScrollTop/分带补偿),这里逐事件
+  // 现在凡代码写 scrollTop 都打标记(setScrollTop/虚拟行锚点补偿),这里逐事件
   // 消费:未标记的向上滚动 = 用户意图,解除跟随并终止锚点恢复,任何输入
   // 方式都覆盖;向上事件即使擦着底部区也不重新钉住。原先担心的「回放中
   // 内容长高误判离底」不复存在——纯内容增高不发 scroll 事件,程序贴底又
@@ -388,13 +365,13 @@ export function ChatView({
     if (!prog && dy < -1 && el.scrollHeight - el.scrollTop - el.clientHeight > 2) {
       // 真离底才解除跟随。距底 >2px 这一条不可省:内容收缩引发的浏览器
       // clamp 也是「未标记的向上事件」,但它的落点永远**正好在新的最底部**
-      // ——切回会话的回放期,分带把远行收成 60px 占位,scrollHeight 一缩
+      // ——切回会话的回放/测量期,估高被真实行高替换、scrollHeight 一缩
       // 就是一发 clamp;当用户离底处理会把贴底跟随掐死在回放半路,最终
       // 停在中间(2026-08-11 报障)。人还在底部就不算离开。
       // 这里也不取消锚点恢复:恢复期同样有 clamp,真实用户接管由 wheel /
       // 右缘 mousedown 显式终止(finishRestore)
       pinnedRef.current = false;
-    } else if (dy > 1 && el.scrollHeight - el.scrollTop - el.clientHeight < PIN_THRESHOLD) {
+    } else if (!restoreRef.current && dy > 1 && el.scrollHeight - el.scrollTop - el.clientHeight < PIN_THRESHOLD) {
       // 向下滚进底部区恢复跟随。方向门槛(dy>1)不可省:拖动初期 WebKit 的
       // 插值事件会擦着底部区,无方向判定会把刚解除的跟随又钉回去(吸底
       // 陷阱)。不要求「非程序滚动」:程序性下滚落到底部区(align 贴底、
@@ -408,8 +385,18 @@ export function ChatView({
     // 手动按钮,按钮保留兜底)。loadEarlier 自带 busyRef 防重入;前插按元素
     // 锚定保位后 scrollTop 被推离阈值,天然不连环,一页不足一屏才串行续页。
     // 恢复期禁止:切会话恢复的锚点是**条目下标**,此刻前插会让下标整体
-    // 错位,恢复就对到错的条目上
-    if (hasMore && !loadingEarlier && !restoreRef.current && el.scrollTop < el.clientHeight) {
+    // 错位,恢复就对到错的条目上。
+    // 贴底跟随中也禁止:内容不足两屏时贴底位置本身就距顶不足一屏,进会话
+    // 的首次 align 贴底就满足触发条件——而 onLoadEarlier 第一行会清掉
+    // pinnedRef(那是手动按钮"去看历史"的语义),流式新内容从此不再跟随。
+    // 贴底的人没有在看历史,自动补页对它无意义
+    if (
+      hasMore &&
+      !loadingEarlier &&
+      !restoreRef.current &&
+      !pinnedRef.current &&
+      el.scrollTop < el.clientHeight
+    ) {
       void onLoadEarlier();
     }
     // 滚动停止后布局仍会微调一次(不发 scroll 事件),停稳后补一次写档
@@ -432,7 +419,7 @@ export function ChatView({
   // 「加载更早」的位置保持:前插会把所有条目往下推,记像素没用,记**元素**
   // ——keyBase 稳定 key 保证 React 不会把既有条目换成新节点,前插提交后按
   // 同一元素重新对齐,视口纹丝不动
-  const prependAnchor = useRef<{ node: Element; offset: number } | null>(null);
+  const prependAnchor = useRef<{ rowKey: string; offset: number } | null>(null);
   const onLoadEarlier = async () => {
     pinnedRef.current = false;
     // 锚点必须由 loadEarlier 在前插**写入前**同步回调,不能"先记再 await":
@@ -442,13 +429,13 @@ export function ChatView({
     // 的 beforeApply 正是为此存在
     await loadEarlier(() => {
       const el = scrollRef.current;
-      const col = itemColOf();
-      if (!el || !col) return;
+      if (!el) return;
       const elTop = el.getBoundingClientRect().top;
-      for (const kid of Array.from(col.children)) {
+      for (const kid of el.querySelectorAll<HTMLElement>("[data-virtual-row]")) {
         const r = kid.getBoundingClientRect();
         if (r.bottom > elTop) {
-          prependAnchor.current = { node: kid, offset: elTop - r.top };
+          const rowKey = kid.dataset.rowKey;
+          if (rowKey) prependAnchor.current = { rowKey, offset: elTop - r.top };
           break;
         }
       }
@@ -459,26 +446,23 @@ export function ChatView({
     const pa = prependAnchor.current;
     if (!pa) return;
     prependAnchor.current = null;
-    const col = itemColOf();
-    const idx = col ? Array.prototype.indexOf.call(col.children, pa.node) : -1;
-    if (idx >= 0) startRestore(idx, pa.offset);
+    startRestore(pa);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.items]);
 
   // 发送被接受(发出或排队)即回到贴底跟随:这次发送本身就是回到当前轮次
   // 的明确意图,立即结束锚点恢复并重新贴底
-  const followBottom = () => {
+  const followBottom = useCallback(() => {
     finishRestore();
     pinnedRef.current = true;
     const el = scrollRef.current;
     if (el) setScrollTop(el, el.scrollHeight);
-  };
+  }, [finishRestore, setScrollTop]);
 
   // markdown 工作区文件链接:判界(工作区外拒绝)→ repo_reveal 文件管理器
   // 定位;失败走 composer 提示条(§3:会话内操作失败的法定位置)。
-  // useCallback + 下面两个回读通道同理:LogList 已 memo,打字每敲一键
-  // ChatView 都重渲染,内联箭头函数会把整条消息流(每条 markdown 卡)
-  // 一起拖着重渲染——输入手感卡顿的根因。
+  // useCallback + 下面两个回读通道同理:LogList 的每一行都按这些函数引用
+  // 做 memo，比对稳定才能让流式更新只落到真正变化的尾行。
   // meta 经 ref 读:这三个回调是**每一行** memo 的 props,依赖数组里挂
   // meta.id 就等于身份跟着切会话换——新 meta 首渲染那一拍,旧会话的整列
   // 行 memo 全体失效,先把马上要卸载的旧列表白重渲染一遍(长会话几百 ms,
@@ -490,11 +474,11 @@ export function ChatView({
     (path: string) => {
       const rel = workspaceRelativePath(path, metaRef.current.workdir);
       if (rel === null) {
-        composerRef.current.notifyError(t("chat.revealOutside"));
+        composerRef.current?.notifyError(t("chat.revealOutside"));
         return;
       }
       void repoReveal(metaRef.current.id, rel).catch((e: unknown) => {
-        composerRef.current.notifyError(t("chat.revealFailed", { reason: e instanceof Error ? e.message : String(e) }));
+        composerRef.current?.notifyError(t("chat.revealFailed", { reason: e instanceof Error ? e.message : String(e) }));
       });
     },
     [t],
@@ -507,6 +491,9 @@ export function ChatView({
   // 自然流回来。Enter 提交(IME 选字回车除外)/Esc 放弃/失焦提交。 ====
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  // 计划面板可手动关闭(onDismiss):关闭后本轮 plan 帧仍在就不会再弹,
+  // 切会话/新 plan 帧到达时复位(见下方 effect)
+  const [planDismissed, setPlanDismissed] = useState(false);
   const titleIme = useRef(createImeGuard());
   // 提交/放弃后置位:Enter 提交会卸载输入框,随之而来的 blur 不能再提交一次
   const renameDoneRef = useRef(false);
@@ -536,6 +523,8 @@ export function ChatView({
   useEffect(() => {
     // 切会话丢弃编辑态(草稿属于上一个会话)
     setEditingTitle(false);
+    // 切会话复位计划面板关闭态(上一会话的关闭不该带到新会话)
+    setPlanDismissed(false);
   }, [meta.id]);
 
   // ==== 头部 ⋯ 菜单(重命名/归档/删除):受控 dropdown,外点/Esc 即收
@@ -551,25 +540,6 @@ export function ChatView({
     setConfirmDelete(false);
   };
   useDismiss(menuOpen, menuBoxRef, closeMenu);
-  // 队列持久化查看面板:打开时读 localStorage,展示该会话持久化的队列
-  const [queueViewOpen, setQueueViewOpen] = useState(false);
-  const [persistedQueue, setPersistedQueue] = useState<ComposerPersisted | null>(null);
-  const openQueueView = () => {
-    setPersistedQueue(readComposerQueue(meta.id));
-    setQueueViewOpen(true);
-    closeMenu();
-  };
-  const restorePersisted = () => {
-    if (persistedQueue?.queue.length) {
-      composer.restorePersisted(persistedQueue.queue);
-      writeComposerQueue(meta.id, null);
-    }
-    setQueueViewOpen(false);
-  };
-  const clearPersisted = () => {
-    writeComposerQueue(meta.id, null);
-    setPersistedQueue(null);
-  };
   useEffect(() => {
     // 切会话收起菜单(确认态属于上一个会话)
     closeMenu();
@@ -586,8 +556,12 @@ export function ChatView({
   useEffect(() => {
     let alive = true;
     setOutline([]);
+    outlineOffsetsRef.current = new Map();
     void sessionOutline(meta.id).then((items) => {
-      if (alive) setOutline(items);
+      if (alive) {
+        outlineOffsetsRef.current = new Map(items.map((item) => [item.seq, item.offset]));
+        setOutline(items);
+      }
     });
     return () => {
       alive = false;
@@ -600,13 +574,44 @@ export function ChatView({
     if (!was || state.running) return;
     let alive = true;
     void sessionOutline(meta.id).then((items) => {
-      if (alive) setOutline(items);
+      if (alive) {
+        outlineOffsetsRef.current = new Map(items.map((item) => [item.seq, item.offset]));
+        setOutline(items);
+      }
     });
     return () => {
       alive = false;
     };
   }, [state.running, meta.id]);
-  const entries = useMemo(() => outlineEntriesOf(outline, state.items), [outline, state.items]);
+  const entries = useOutlineEntries(outline, state);
+
+  // 切回一个停在早期历史的任务时,session_open 只给尾部窗口。等尾窗落地后
+  // 用记忆里的稳定 user seq 找大纲 offset 并自动补页；补页提交后上方的
+  // state.items layoutEffect + startRestore 轮询会把该 user 行挂载并对齐。
+  // 同一锚只发起一次,会话切换由 metaIdRef/restoreLoadRef 双重作废旧续程。
+  useEffect(() => {
+    if (!historyLoaded) return;
+    const anchor = restoreRef.current;
+    if (!anchor || anchor.userSeq === undefined || anchor.userOffset === undefined) return;
+    if (listRef.current?.ensureUserSeq(anchor.userSeq)) {
+      align();
+      return;
+    }
+    const historyOffset = anchor.historyOffset ?? outlineOffsetsRef.current.get(anchor.userSeq);
+    if (historyOffset === undefined) return;
+    anchor.historyOffset = historyOffset;
+    const sid = meta.id;
+    const token = `${sid}:${anchor.userSeq}:${historyOffset}`;
+    if (restoreLoadRef.current === token) return;
+    restoreLoadRef.current = token;
+    void ensureLoaded(historyOffset).then(() => {
+      if (metaIdRef.current === sid) align();
+    });
+    // align 只读 refs；outline 变化让尚未带 historyOffset 的旧记忆获得补页锚；
+    // items 也必须入依赖:ensureLoaded 的 Promise 会早于 startTransition 的
+    // DOM 提交结束；页真正挂载后靠 items 再查一次并完成精确对齐。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyLoaded, meta.id, ensureLoaded, outline, state.items]);
 
   // ==== 当前项跟踪:视口顶所在的提问(rAF 节流——流式期间每批帧都重算
   // 会把点列刷成动画;判定纯函数在 lib/util/scrollAnchor,与跳转 INSET
@@ -614,13 +619,7 @@ export function ChatView({
   const [activeSeq, setActiveSeq] = useState<number | null>(null);
   const activeRaf = useRef(0);
   const updateActive = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const seqTops = Array.from(el.querySelectorAll<HTMLElement>("[data-user-seq]"), (node) => ({
-      seq: Number(node.dataset.userSeq),
-      top: node.getBoundingClientRect().top,
-    })).filter((it) => Number.isFinite(it.seq));
-    setActiveSeq(outlineActiveSeq(seqTops, el.getBoundingClientRect().top));
+    setActiveSeq(listRef.current?.activeUser()?.seq ?? null);
   };
   const scheduleActive = () => {
     if (activeRaf.current) return;
@@ -642,9 +641,7 @@ export function ChatView({
   );
 
   // ==== 大纲跳转:offset 精确补页 + 目标气泡闪光 ====
-  const [flashSeq, setFlashSeq] = useState<number | null>(null);
-  const flashTimer = useRef(0);
-  const jumpTimer = useRef(0);
+  // (flashSeq/flashTimer/jumpTimer/metaIdRef 声明在会话边沿 effect 之前)
   useEffect(
     () => () => {
       window.clearTimeout(flashTimer.current);
@@ -656,7 +653,10 @@ export function ChatView({
   const jumpToSeq = (seq: number): boolean => {
     const log = scrollRef.current;
     const node = log?.querySelector<HTMLElement>(`[data-user-seq="${seq}"]`);
-    if (!log || !node) return false;
+    if (!log || !node) {
+      listRef.current?.ensureUserSeq(seq);
+      return false;
+    }
     finishRestore(); // 跳转接管滚动:进行中的锚点恢复轮询不许再拽回去
     pinnedRef.current = false;
     // 明确只滚消息日志。scrollIntoView 会自行挑选可滚祖先，消息区新增
@@ -672,20 +672,24 @@ export function ChatView({
   // jumpWithRetry 随迁);重试耗尽 = 坏 seq/历史被清,放弃不空转。
   // 预算 ~3s:跳转补页的前插走 startTransition(useSessionFeed),大页
   // (50 轮)的时间切片提交可达一两秒——老预算 12×32ms 会在提交完成前
-  // 放弃,表现成「点大纲没反应」。轮询本身是零成本空查
-  const jumpWithRetry = (seq: number, tries = 90) => {
+  // 放弃,表现成「点大纲没反应」。轮询本身是零成本空查。
+  // 整条链锁定发起时的会话:切会话时定时器会被清(meta.id cleanup),但
+  // ensureLoaded 的 promise 延续仍会重新挂链——sid 不再匹配即作废,不许
+  // 旧会话的跳转落到新会话的同号 seq 上
+  const jumpWithRetry = (seq: number, sid: string, tries = 90) => {
+    if (metaIdRef.current !== sid) return;
     if (jumpToSeq(seq) || tries <= 0) return;
-    jumpTimer.current = window.setTimeout(() => jumpWithRetry(seq, tries - 1), 32);
+    jumpTimer.current = window.setTimeout(() => jumpWithRetry(seq, sid, tries - 1), 32);
   };
-  // onJump 必须引用稳定:OutlineNav 是 memo 的(大纲上千条,ChatView 每键
-  // 因草稿态重渲,不拦就是空闲打字的 O(轮数) 底噪)——实现走 ref 取最新,
-  // 外壳 useCallback 恒定
+  // onJump 必须引用稳定:OutlineNav 是 memo 的，大纲上千条时流式批次不能
+  // 因回调身份变化把整个面板重建——实现走 ref 取最新,外壳 useCallback 恒定
   const onJumpImpl = (seq: number, offset?: number) => {
     if (jumpToSeq(seq)) return;
+    const sid = meta.id;
     // 更早的提问还没加载:按它那一轮的 offset 精确补页再定位(session_history
     // 以 offset 为终点);流内新条目无 offset(按理已在 DOM),只走重试兜底
-    if (offset !== undefined) void ensureLoaded(offset).then(() => jumpWithRetry(seq));
-    else jumpWithRetry(seq);
+    if (offset !== undefined) void ensureLoaded(offset).then(() => jumpWithRetry(seq, sid));
+    else jumpWithRetry(seq, sid);
   };
   const onJumpRef = useRef(onJumpImpl);
   onJumpRef.current = onJumpImpl;
@@ -696,160 +700,9 @@ export function ChatView({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [changesToken, setChangesToken] = useState(0);
   const prevTurnEnded = useRef(false);
-  // 模型配置里的自动压缩阈值:当前会话所用模型的 auto_compact_ratio(0 = 关闭)
-  const modelRatioRef = useRef(0);
-  useEffect(() => {
-    void getConfig()
-      .then((cfg) => {
-        // meta.model 是显示名(model_name),配置里可能叫 model(ID)或 name(显示名)
-        modelRatioRef.current = cfg?.models?.find((m) => m.model === meta.model || m.name === meta.model)?.auto_compact_ratio ?? 0;
-      })
-      .catch(() => {});
-  }, [meta.id, meta.model]);
-
-  // ===== 备用模型链:key 失败 → 切下一个备用模型 → 重发该指令 =====
-  const rotatingRef = useRef(false);
-  // 本轮失败是否已处理(一回合发多个 task-error,只处理一次) + 本轮是否含 key 错误
-  const failHandledRef = useRef(false);
-  // 正在使用的备用模型(一次性:任务结束/耗尽恢复主模型,不永久切换)。
-  // ref 供逻辑用,state 供 Composer 显示标记 + 主模型选择不变。
-  const fallbackRef = useRef<{ primary: string; current: string } | null>(null);
-  const [fallbackUse, setFallbackUse] = useState<{ primary: string; current: string } | null>(null);
-  // 任务级隔离:ChatView 以 epoch 为 key(不随会话重挂),切会话必须重置备用
-  // 状态(标记条/显示的主模型),并恢复上一个会话的主模型,不能跨任务泄漏。
-  const prevSidRef = useRef(meta.id);
-  useEffect(() => {
-    if (prevSidRef.current !== meta.id) {
-      const prevSid = prevSidRef.current;
-      prevSidRef.current = meta.id;
-      if (fallbackRef.current) {
-        const fb = fallbackRef.current;
-        fallbackRef.current = null;
-        setFallbackUse(null);
-        void sessionSetModel(prevSid, fb.primary);
-      }
-    }
-  }, [meta.id]);
-  // 任务步骤面板手动关闭:结束未完成时保留供回顾,可收起;任务继续跑自动重现
-  const [planDismissed, setPlanDismissed] = useState(false);
-  // 并行子代理执行卡(面板"子代理执行"区):childSessionId/feed/background 的工具卡
-  const subagentItems = useMemo(
-    () =>
-      state.items.filter(
-        (it): it is ToolItem =>
-          it?.kind === "tool" && Boolean(it.childSessionId || (it.feed?.length ?? 0) > 0 || it.background),
-      ),
-    [state.items],
-  );
-  useEffect(() => {
-    if (state.running && state.plan.length > 0) setPlanDismissed(false);
-  }, [state.running, state.plan.length]);
-  // 已处理过的错误 seq:切换成功后历史错误帧还在 items 里,没有这道闸会反复
-  // 触发轮换 + 重发(用户报障:切换成功还一直重发消息)
-  const keyErrThisTurnRef = useRef(false);
-  const handledErrSeqRef = useRef(0);
-  useEffect(() => {
-    if (state.running) {
-      failHandledRef.current = false; // 新轮开始,复位"本轮失败已处理"
-      return;
-    }
-    if (failHandledRef.current || rotatingRef.current) return; // 本轮已处理/正在轮换
-    // 失败判定不看 running/turnEnded:壳把 task-error 与 task-ended 几乎同时
-    // 发出,React 批量渲染时 turnEnded 已为 true——原逻辑在 turnEnded 分支
-    // 直接复位返回,轮换永远不触发。这里统一查错误项再决定。
-    const errItem = [...state.items].reverse().find((it) => it.kind === "sys" && it.error);
-    const reason =
-      errItem && errItem.kind === "sys" && errItem.params?.reason ? String(errItem.params.reason) : "";
-    const errSeq = (errItem as { seq?: number } | undefined)?.seq;
-    const isNewKeyError = isKeyError(reason) && errSeq !== undefined && errSeq !== handledErrSeqRef.current;
-    if (!isNewKeyError) {
-      // 任务成功 / 非 key 错误 / 历史错误重放:正在用备用则恢复主模型(一次性语义)
-      if (fallbackRef.current) {
-        const fb = fallbackRef.current;
-        fallbackRef.current = null;
-        setFallbackUse(null);
-        void sessionSetModel(meta.id, fb.primary);
-      }
-      return;
-    }
-    keyErrThisTurnRef.current = true;
-    failHandledRef.current = true; // 本轮失败只处理一次(一回合可能多个 task-error)
-    handledErrSeqRef.current = errSeq ?? 0;
-    void (async () => {
-      rotatingRef.current = true;
-      try {
-        const cfg = await getConfig();
-        // meta.model 是显示名(model_name),配置里可能叫 model(ID)或 name(显示名)
-        const model = cfg?.models?.find((m) => m.model === meta.model || m.name === meta.model);
-        if (!model) return;        let lastText = "";
-        for (let i = state.items.length - 1; i >= 0; i--) {
-          const it = state.items[i];
-          if (it?.kind === "user") {
-            lastText = it.text;
-            break;
-          }
-        }
-        const resend = async () => {
-          if (lastText) await sessionSend(meta.id, "user-input", { content: b64encode(lastText) });
-        };
-        // 备用模型链(多 key 已移除,单 key 失败直接切下一个备用模型)。
-        // 备用链存显示名,但 meta.model 可能是引擎返回的模型 ID——直接 indexOf
-        // 匹配不上就永远取第一个备用(无限重试)。这里按"配置项身份"匹配:
-        // 当前模型对应的配置项在备用链中的位置 + 1。
-        const backups = readFallbackModels(meta.id);
-        const resolveModel = (v: string) => cfg?.models?.find((m) => m.model === v || m.name === v)?.model;
-        // 当前实际用的模型:优先取我们自己记的备用(fallbackRef)。会话 meta.model
-        // 切换后可能不刷新(还是主模型名),用它匹配链会永远停在第一个备用。
-        const current = fallbackRef.current?.current ?? meta.model;
-        const nextName = nextFallbackModel(current, backups, resolveModel);
-        const nextCfg = cfg?.models?.find((m) => m.model === nextName || m.name === nextName);
-        // 主模型 = 会话当前模型(壳在 session_set_model 后发 session-model
-        // 事件,meta.model 是新鲜的)。进入备用链后固定用首次认定的主模型,
-        // 任务结束恢复回它。
-        const primary = fallbackRef.current?.primary ?? meta.model;
-        // 无进展判定按"名字是否还是自己"(多个模型可能共用同一 model 字段,
-        // 按 model 比较会把不同备用误判成同一个)。链走完/没进展:恢复主模型。
-        if (!nextName || !nextCfg || nextName === current) {
-          // 没有备用/配置缺失/没进展:恢复主模型,留失败态
-          if (fallbackRef.current) {
-            const fb = fallbackRef.current;
-            fallbackRef.current = null;
-            setFallbackUse(null);
-            // 明确反馈:备用链全部用完,任务失败(不再重发)
-            composerRef.current.notifyError(t("chat.fallbackExhausted", { model: primary }));
-            void sessionSetModel(meta.id, fb.primary);
-          } else {
-            composerRef.current.notifyError(t("chat.fallbackExhausted", { model: meta.model }));
-          }
-          return;
-        }
-        fallbackRef.current = { primary, current: nextName };
-        setFallbackUse({ primary, current: nextName });
-        // 切换提示:主模型 + 错误摘要 + 当前改用哪个备用模型(一次性)
-        composerRef.current.notifyError(
-          t("chat.fallbackSwitched", { model: primary, reason: shortReason(reason), next: nextName }),
-        );
-        await sessionSetModel(meta.id, nextName);
-        await resend();
-      } catch {
-        // 轮换失败:交给失败态人工处理
-      } finally {
-        rotatingRef.current = false;
-      }
-    })();
-  }, [state.running, state.turnEnded, state.items]);
-
   useEffect(() => {
     // 轮次结束边沿:改动列表需要重拉(抽屉开着时立即,关着时下次打开取新)
-    if (state.turnEnded && !prevTurnEnded.current) {
-      setChangesToken((n) => n + 1);
-      // 自动压缩:回合结束检查上下文用量,达到当前模型的阈值即自动触发压缩
-      const ratio = modelRatioRef.current;
-      if (ratio > 0 && state.usage && state.usage.size > 0) {
-        const pct = (state.usage.used / state.usage.size) * 100;
-        if (pct >= ratio) void sessionCompact(meta.id).catch(() => {});
-      }
-    }
+    if (state.turnEnded && !prevTurnEnded.current) setChangesToken((n) => n + 1);
     prevTurnEnded.current = state.turnEnded;
   }, [state.turnEnded]);
   // 改动数徽标:轮末(changesToken 边沿)拉一次计数;浏览器模式 repoChanges
@@ -884,46 +737,6 @@ export function ChatView({
       alive = false;
     };
   }, [changesToken, meta.id]);
-
-  // 每回合「打开输出目录」:轮末优先解析该回合最后一条助手消息里的产物路径
-  // (agent 会明说「已生成:xxx.exe」),解析不到再回退工作区最近文件扫描。
-  // repoReveal 定位产物文件 = 打开产物所在目录。
-  const [turnOutputs, setTurnOutputs] = useState<Record<number, string>>({});
-  const claimedRef = useRef<Set<string>>(new Set());
-  const lastUserSeqRef = useRef<number | undefined>(undefined);
-  useEffect(() => {
-    for (let i = state.items.length - 1; i >= 0; i--) {
-      const it = state.items[i];
-      if (it?.kind === "user" && it.seq !== undefined) {
-        lastUserSeqRef.current = it.seq;
-        break;
-      }
-    }
-  }, [state.items]);
-  useEffect(() => {
-    if (state.turnEnded && !prevTurnEnded.current) {
-      // 该回合最后一条助手消息(agent 明确产物路径)
-      let lastAgentText = "";
-      for (let i = state.items.length - 1; i >= 0; i--) {
-        const it = state.items[i];
-        if (it?.kind === "user") break;
-        if (it?.kind === "agent") lastAgentText = it.text;
-      }
-      const fromMsg = extractOutputPath(lastAgentText);
-      void repoRecentFiles(meta.id, 60)
-        .then((files) => {
-          const pick = fromMsg ?? files.find((p) => !claimedRef.current.has(p));
-          if (!pick) return;
-          claimedRef.current.add(pick);
-          const seq = lastUserSeqRef.current;
-          if (seq !== undefined) {
-            setTurnOutputs((prev) => (prev[seq] === pick ? prev : { ...prev, [seq]: pick }));
-          }
-        })
-        .catch(() => {});
-    }
-    prevTurnEnded.current = state.turnEnded;
-  }, [state.turnEnded, meta.id]);
   const dragDepth = useRef(0);
   const onDragEnter = (e: DragEvent<HTMLElement>) => {
     if (![...(e.dataTransfer?.items ?? [])].some((i) => i.kind === "file")) return;
@@ -943,7 +756,7 @@ export function ChatView({
     dragDepth.current = 0;
     setDragging(false);
     const files = [...(e.dataTransfer?.files ?? [])];
-    if (files.length) void composerRef.current.addFiles(files);
+    if (files.length) void composerRef.current?.addFiles(files);
   };
   // Linux 壳:WebKitGTK 的 HTML5 拖拽拿不到 File,走壳原生 tauri://drag-*
   // (mac/Windows 壳禁用原生处理器,监听永不触发)
@@ -951,8 +764,8 @@ export function ChatView({
     () =>
       onNativeFileDrop({
         onDragging: setDragging,
-        onFiles: (files) => void composerRef.current.addFiles(files),
-        onError: (m) => composerRef.current.notifyError(t("chat.uploadFailed", { reason: m })),
+        onFiles: (files) => void composerRef.current?.addFiles(files),
+        onError: (m) => composerRef.current?.notifyError(t("chat.uploadFailed", { reason: m })),
       }),
     // t 稳定(模块级函数);按会话重订阅即可
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -976,7 +789,7 @@ export function ChatView({
 
   return (
     <main
-      className="relative flex min-w-0 flex-1 flex-col bg-mask-100"
+      className="relative flex min-w-0 flex-1 flex-col bg-base-100"
       onDragEnter={onDragEnter}
       onDragOver={(e) => e.preventDefault()}
       onDragLeave={onDragLeave}
@@ -1050,18 +863,6 @@ export function ChatView({
             </h1>
           )}
         </div>
-        {/* 任务 token 用量:标题右侧,点击弹明细(输入/输出/调用 + 按模型) */}
-        {usage && usage.input + usage.output > 0 && (
-          <button
-            type="button"
-            aria-label={t("stats.title")}
-            title={t("stats.title")}
-            className="shrink-0 rounded bg-base-200/70 px-1.5 font-mono text-[11px] leading-5 text-base-content/55 hover:text-base-content"
-            onClick={(e) => showTokenPopover({ x: e.clientX, y: e.clientY }, usage)}
-          >
-            {fmtCompact(usage.input + usage.output)}
-          </button>
-        )}
         {/* §7:indicator 壳与徽标是头部非交互子节点,必须各自带拖拽属性 */}
         <div data-tauri-drag-region="" className={changesCount > 0 ? "indicator" : undefined}>
           {changesCount > 0 && (
@@ -1102,15 +903,6 @@ export function ChatView({
           </button>
           {menuOpen && (
             <ul role="menu" aria-label={t("chat.menu.label")} className="dropdown-content menu z-40 w-44 flex-nowrap [&_li]:flex-nowrap rounded-box bg-base-100 p-2 shadow-sm">
-              <li role="none">
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={openQueueView}
-                >
-                  {t("chat.menu.queue")}
-                </button>
-              </li>
               <li role="none">
                 <button
                   type="button"
@@ -1172,52 +964,6 @@ export function ChatView({
         </div>
       </header>
 
-      {/* 队列持久化查看面板:展示该会话 localStorage 里持久化的队列数据。
-          弹窗必须脱离 chat 容器(其 transform/overflow 会限制 fixed 定位,
-          见 LAYOUT.md 弹窗契约),经 portal 挂到 body。 */}
-      {queueViewOpen &&
-        createPortal(
-          <div className="modal modal-open" role="dialog" aria-label={t("chat.queueView.title")}>
-            <div className="modal-box max-h-[70vh] w-full max-w-md overflow-y-auto p-5">
-              <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-sm font-semibold">{t("chat.queueView.title")}</h3>
-                <button type="button" aria-label="close" className="btn btn-ghost btn-square btn-xs" onClick={() => setQueueViewOpen(false)}>
-                  <IconX size={14} stroke={1.75} aria-hidden />
-                </button>
-              </div>
-              {!persistedQueue || persistedQueue.queue.length === 0 ? (
-                <div className="py-8 text-center text-xs text-base-content/50">{t("chat.queueView.empty")}</div>
-              ) : (
-                <>
-                  <ul className="space-y-1.5">
-                    {persistedQueue.queue.map((q, i) => (
-                      <li key={`${q.id}-${i}`} className="flex items-center gap-2 rounded-lg border border-base-300 px-2 py-1.5 text-xs">
-                        <span className={`badge badge-xs shrink-0 ${q.state === "failed" ? "badge-error" : "badge-ghost"}`}>
-                          {q.state === "failed" ? t("chat.queueView.failed") : t("chat.queueView.pending")}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate">{q.text}</span>
-                      </li>
-                    ))}
-                  </ul>
-                  {persistedQueue.paused && (
-                    <div className="mt-2 text-[11px] text-base-content/50">{t("chat.queueView.paused")}</div>
-                  )}
-                  <div className="mt-4 flex justify-end gap-2">
-                    <button type="button" className="btn btn-ghost btn-xs" onClick={clearPersisted}>
-                      {t("chat.queueView.clear")}
-                    </button>
-                    <button type="button" className="btn btn-primary btn-xs" onClick={restorePersisted}>
-                      {t("chat.queueView.restore")}
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-            <div className="modal-backdrop cursor-pointer" onClick={() => setQueueViewOpen(false)} aria-hidden />
-          </div>,
-          document.body,
-        )}
-
       {/* 布局规范:header 只放身份与动作;会话连接状态是内容级信息,
           以内嵌条挂在 header 之下,恢复即消。形态 = 「header 的延长线」:
           同 px-4 内距(文字与标题同一竖线)、同 border-b 分隔线、微量
@@ -1240,7 +986,7 @@ export function ChatView({
       {empty ? (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6">
           <img src="/logo.png" alt="" aria-hidden className="h-13 w-13 rounded-2xl shadow-sm" />
-          <p className="max-w-md text-center text-base font-bold">
+          <p className="max-w-md text-center text-lg font-bold">
             {emptyChat ? (
               t("chat.empty.chatTitle")
             ) : (
@@ -1280,6 +1026,7 @@ export function ChatView({
             </p>
           )}
           <LogList
+            ref={listRef}
             state={state}
             sessionId={meta.id}
             flashSeq={flashSeq ?? undefined}
@@ -1288,25 +1035,9 @@ export function ChatView({
             onLocalLink={revealMarkdownLink}
             workdir={meta.workdir}
             loadFullTool={loadFullTool}
-            turnOutputs={turnOutputs}
-            onOpenOutput={(rel) => {
-              void repoReveal(meta.id, rel).catch((e: unknown) => {
-                composerRef.current.notifyError(
-                  t("chat.revealFailed", { reason: e instanceof Error ? e.message : String(e) }),
-                );
-              });
-            }}
           />
         </div>
       </div>
-      )}
-      {/* 备用模型使用中:会话区域提示(主模型报错自动切换,任务结束恢复) */}
-      {fallbackUse && (
-        <div className="flex justify-center py-1" role="status">
-          <span className="badge badge-outline badge-sm border-amber-500/60 text-[10px] text-amber-600/90">
-            ⚠️ {t("chat.model.fallbackInUse")}: {stripSourceSuffix(stripTierPrefix(fallbackUse.current))}
-          </span>
-        </div>
       )}
 
       <OutlineNav entries={entries} activeSeq={activeSeq ?? undefined} onJump={onJump} />
@@ -1317,14 +1048,14 @@ export function ChatView({
       <footer className="shrink-0 p-3">
         <div className="mx-auto flex chat-measure flex-col gap-2">
           {state.plan.length > 0 && !planDismissed && (
-            <TaskPanel entries={state.plan} subagents={subagentItems} onDismiss={() => setPlanDismissed(true)} />
+            <TaskPanel entries={state.plan} onDismiss={() => setPlanDismissed(true)} />
           )}
-          <Composer
+          <LocalComposerHost
+            ref={composerRef}
             sessionId={meta.id}
             state={state}
+            historyLoaded={historyLoaded}
             meta={meta}
-            ctl={composer}
-            fallbackUse={fallbackUse}
             onAfterSend={followBottom}
             focusRequest={focusRequest}
             onFocusRequestHandled={onFocusRequestHandled}
@@ -1388,7 +1119,7 @@ function ChildSessionModal({ id, workdir, onClose }: { id: string; workdir?: str
             <IconX size={14} stroke={1.75} aria-hidden />
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
+        <div data-chat-log="" className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
           <LogList state={state} sessionId={id} readonly uploadUrl={uploadUrl} workdir={workdir} loadFullTool={loadFullTool} />
         </div>
       </div>

@@ -8,11 +8,11 @@
 // - 补投失败时用户恰好切了进来:经 bindActiveComposer 的通道回到活动队列槽。
 import { sessionSend } from "@/lib/ipc/sessions";
 import { b64encode } from "@/lib/protocol/codec";
-import type { ComposerAtt, QueuedInstr } from "./useComposer";
+import type { ComposerAtt, QueueItem } from "./useComposer";
 
 export interface StashEntry {
   draft: string;
-  queue: QueuedInstr[];
+  queue: QueueItem[];
   atts: ComposerAtt[];
   /** 队列暂停态(按会话保留) */
   paused?: boolean;

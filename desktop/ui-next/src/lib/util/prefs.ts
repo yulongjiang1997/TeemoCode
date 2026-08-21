@@ -255,24 +255,27 @@ export function writeSoundConfig(cfg: SoundConfig): void {
   }
 }
 
-/** 指令队列持久化(按会话)。重启后恢复 pending/failed 项与暂停态。 */
-export interface ComposerPersisted {
-  queue: QueuedInstr[];
-  paused: boolean;
-  draft?: string;
-  atts?: ComposerAtt[];
-}
-export type QueuedInstr = {
+/** 指令队列项(本地持久化 + 内存队列共用):待发送 / 执行中 / 失败。 */
+export type QueueItemState = "pending" | "executing" | "failed";
+export interface QueueItem {
   id: string;
   text: string;
+  /** 随指令入队的附件(后台补投 deliverQueued 也按它拼装正文)。 */
   atts: ComposerAtt[];
-  state: "pending" | "failed";
-};
+  state: QueueItemState;
+}
 export type ComposerAtt = {
   path: string;
   name: string;
   isImage: boolean;
 };
+/** 指令队列持久化(按会话)。重启后恢复 pending/executing/failed 项与暂停态。 */
+export interface ComposerPersisted {
+  queue: QueueItem[];
+  paused: boolean;
+  draft?: string;
+  atts?: ComposerAtt[];
+}
 export const COMPOSER_QUEUE_KEY_PREFIX = "mc.queue.";
 
 export function readComposerQueue(sid: string): ComposerPersisted | null {
@@ -280,8 +283,32 @@ export function readComposerQueue(sid: string): ComposerPersisted | null {
     const raw = localStorage.getItem(COMPOSER_QUEUE_KEY_PREFIX + sid);
     if (!raw) return null;
     const v = JSON.parse(raw);
-    if (v && typeof v === "object" && Array.isArray(v.queue)) return v as ComposerPersisted;
-    return null;
+    if (!v || typeof v !== "object" || !Array.isArray(v.queue)) return null;
+    // 旧格式(text/atts/state=pending|failed)向前兼容:跨重启不会真在"执行中",
+    // executing 一律归 pending;非预期 state 同样归 pending;atts 缺失归空数组
+    const queue: QueueItem[] = (v.queue as unknown[])
+      .filter((x): x is { id: unknown; text: unknown; atts?: unknown; state?: unknown } => {
+        if (!x || typeof x !== "object") return false;
+        const o = x as Record<string, unknown>;
+        return typeof o.id === "string" && typeof o.text === "string";
+      })
+      .map((x) => {
+        const o = x as Record<string, unknown>;
+        const st = o.state;
+        const state: QueueItemState = st === "executing" || st === "failed" ? st : "pending";
+        const atts = Array.isArray(o.atts)
+          ? (o.atts as ComposerAtt[]).filter(
+              (a): a is ComposerAtt => Boolean(a && typeof a === "object" && typeof (a as ComposerAtt).path === "string"),
+            )
+          : [];
+        return { id: o.id as string, text: o.text as string, atts, state };
+      });
+    return {
+      queue,
+      paused: Boolean(v.paused),
+      draft: typeof v.draft === "string" ? v.draft : undefined,
+      atts: Array.isArray(v.atts) ? (v.atts as ComposerAtt[]) : undefined,
+    };
   } catch {
     return null;
   }
@@ -289,7 +316,7 @@ export function readComposerQueue(sid: string): ComposerPersisted | null {
 
 export function writeComposerQueue(sid: string, val: ComposerPersisted | null): void {
   try {
-    if (val && (val.queue.length > 0 || val.paused)) {
+    if (val && (val.queue.length > 0 || val.paused || val.draft)) {
       localStorage.setItem(COMPOSER_QUEUE_KEY_PREFIX + sid, JSON.stringify(val));
     } else {
       localStorage.removeItem(COMPOSER_QUEUE_KEY_PREFIX + sid);

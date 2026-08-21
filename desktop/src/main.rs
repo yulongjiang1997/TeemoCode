@@ -16,10 +16,8 @@ mod baizhi;
 mod browser;
 mod config;
 mod driver;
-mod git;
 #[cfg(target_os = "windows")]
 mod native_pet;
-mod import_mc;
 mod repo;
 mod skills;
 mod stats;
@@ -36,9 +34,6 @@ use std::time::{Duration, Instant};
 
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
-
-use crate::driver::ohmy::ShellCtx;
-use serde_json::json;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, RunEvent, WebviewUrl, WebviewWindow,
@@ -366,6 +361,20 @@ pub fn engine_exited(app: &AppHandle, instance: u64, detail: &str, log_tail: &st
     }
 }
 
+/// 将盘上配置应用到壳侧云 transport，并在真正变化的同一条路径上通知 UI。
+/// 通知发生在后续物化/引擎重启之前：即使引擎启动失败，账号和云任务也不会
+/// 继续展示旧服务数据。所有配置应用入口都必须经这里，避免遗漏某条恢复路径。
+fn apply_cloud_config(app: &AppHandle, config: &DesktopConfig) -> bool {
+    let pipes = app.state::<baizhi::monkeycode::CloudPipes>();
+    let Some(generation) = app.state::<baizhi::BaizhiState>().apply_config(config, &pipes) else {
+        return false;
+    };
+    if let Err(e) = app.emit("monkeycode-transport-changed", generation) {
+        eprintln!("[desktop] 通知 UI 云服务切换失败: {e}");
+    }
+    true
+}
+
 /// 退避后自动重启。失败与崩溃在退避上同权,继续退避直到熔断。
 fn schedule_engine_retry(app: &AppHandle, delay: Duration) {
     let generation = app.state::<EngineSupervisor>().generation.load(Ordering::SeqCst);
@@ -388,6 +397,9 @@ fn schedule_engine_retry(app: &AppHandle, delay: Duration) {
                 return;
             }
             load_config(&app).and_then(|config| {
+                // 壳侧云端快照跟随盘上权威配置(配置未变时为 no-op):失败的
+                // 保存/重启可能留下快照落后于盘的分裂态,自动重启在此自愈。
+                apply_cloud_config(&app, &config);
                 materialize_engine_config(&app, &config, browser::mcp_endpoint(&app))?;
                 restart_engine_locked(&app, &config)
             })
@@ -465,6 +477,8 @@ fn schedule_browser_mcp_refresh(app: &AppHandle) {
             // 必须在取得配置事务锁后再读盘：否则并发的设置保存可能先写入
             // 新值，本线程却拿旧快照随后覆盖回去。
             let result = load_config(&app).and_then(|config| {
+                // 同 schedule_engine_retry:壳侧云端快照跟随盘上配置,自愈分裂态。
+                apply_cloud_config(&app, &config);
                 materialize_engine_config(&app, &config, browser::mcp_endpoint(&app))?;
                 restart_engine_locked(&app, &config)
             });
@@ -493,12 +507,13 @@ async fn save_config(app: AppHandle, config: DesktopConfig) -> Result<(), String
         reset_engine_supervision(&app);
         // 壳自有偏好的合并与写盘在 ConfigStore 的同一事务内完成。
         let config = save_ui_config_files(&app, config, browser::mcp_endpoint(&app))?;
-        // 服务地址/ Basic/ TLS 开关变化时推进 transport 代次,使 mc_disconnect /
-        // mc_models_sync|revoke 能校验"切服竞态":UI 持有旧代次发起的操作会被取消。
-        let bz = app.state::<baizhi::BaizhiState>();
-        bz.bump_transport_generation();
-        let _ = app.emit("monkeycode-transport-changed", bz.transport_generation());
-        restart_engine_locked(&app, &config)
+        // 配置一旦落盘,壳侧云端服务快照必须先于引擎重启切换:apply_config
+        // 是纯内存操作不会失败,而 restart_engine_locked 失败会早退——若快照
+        // 切换排在其后,失败路径会留下「盘上/引擎是新地址、壳侧云端打旧地址」
+        // 的分裂态,且两条自动恢复路径都不会替本命令收这个尾。
+        apply_cloud_config(&app, &config);
+        restart_engine_locked(&app, &config)?;
+        Ok(())
     })
     .await
     .map_err(|e| format!("保存失败: {e}"))?
@@ -514,8 +529,12 @@ async fn engine_restart(app: AppHandle) -> Result<(), String> {
         let _host_apply = host.begin_apply();
         reset_engine_supervision(&app);
         let config = load_config(&app)?;
+        // 快照切换先于重启,理由同 save_config;此处配置未变时是纯 no-op,
+        // 但能自愈此前失败路径遗留的「壳侧快照落后于盘上配置」分裂态。
+        apply_cloud_config(&app, &config);
         materialize_engine_config(&app, &config, browser::mcp_endpoint(&app))?;
-        restart_engine_locked(&app, &config)
+        restart_engine_locked(&app, &config)?;
+        Ok(())
     })
     .await
     .map_err(|e| format!("重启失败: {e}"))?
@@ -535,8 +554,6 @@ fn host_info(app: AppHandle, host: tauri::State<'_, DriverHost>) -> serde_json::
     serde_json::json!({
         "version": display_version(&app.package_info().version.to_string()),
         "engine_version": engine_version,
-        // 角标:debug 壳显示 Dev,发布版显示 work
-        "build": if cfg!(debug_assertions) { "dev" } else { "work" },
     })
 }
 
@@ -670,106 +687,39 @@ fn list_wsl_distros() -> Vec<String> {
 }
 
 /// UI 内检查更新:返回结果而非弹对话框(设置视图内联展示)。
-/// 附带清单里的更新内容(notes)与版本历史(history)供客户端展示。
 #[tauri::command]
 async fn update_check(app: AppHandle) -> Result<serde_json::Value, String> {
     let updater = build_updater(&app)?;
-    // notes/history 直接从清单读(tauri 插件不暴露 notes,且与插件解析
-    // 无关的自定义字段也要带出来)
-    let manifest = fetch_update_manifest(&app).await;
-    let notes = manifest
-        .as_ref()
-        .and_then(|m| m.get("notes"))
-        .and_then(|n| n.as_str())
-        .map(String::from);
-    let history = manifest
-        .as_ref()
-        .and_then(|m| m.get("history"))
-        .and_then(|h| h.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let (latest, available) = match updater.check().await {
-        Ok(Some(u)) => (Some(display_version(&u.version)), true),
-        Ok(None) => (None, false),
-        Err(e) => return Err(format!("检查更新失败: {e}")),
-    };
-    Ok(serde_json::json!({
-        "available": available,
-        "current": display_version(&app.package_info().version.to_string()),
-        "latest": latest,
-        "notes": notes,
-        "history": history,
-    }))
-}
-
-/// 更新清单端点(与 tauri-plugin-updater 同一 latest.json)。
-fn updater_endpoint(app: &AppHandle) -> Option<String> {
-    app.config()
-        .plugins
-        .0
-        .get("updater")
-        .and_then(|v| v.get("endpoints"))
-        .and_then(|e| e.as_array())
-        .and_then(|a| a.first())
-        .and_then(|s| s.as_str())
-        .map(String::from)
-}
-
-/// 拉取原始清单(notes + history + 版本)。失败静默返回 None——更新内容
-/// 展示是附加能力,不能拖垮主流程。
-async fn fetch_update_manifest(app: &AppHandle) -> Option<serde_json::Value> {
-    let url = updater_endpoint(app)?;
-    let resp = reqwest::Client::new()
-        .get(&url)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await
-        .ok()?;
-    resp.json::<serde_json::Value>().await.ok()
+    match updater.check().await {
+        Ok(Some(u)) => Ok(serde_json::json!({
+            "available": true,
+            "current": display_version(&u.current_version),
+            "latest": display_version(&u.version),
+        })),
+        Ok(None) => Ok(serde_json::json!({
+            "available": false,
+            "current": display_version(&app.package_info().version.to_string()),
+        })),
+        Err(e) => Err(format!("检查更新失败: {e}")),
+    }
 }
 
 /// UI 内下载安装更新并重启(update_check 确认有新版后调用)。
 #[tauri::command]
 async fn update_install(app: AppHandle) -> Result<(), String> {
-    let pending = PENDING_UPDATE.lock().unwrap().take().ok_or("尚未下载更新,先点「更新」下载")?;
-    let (update, bytes) = pending;
-    update.install(bytes).map_err(|e| format!("安装更新失败: {e}"))?;
-    eprintln!("[desktop] 更新: 安装完成,重启应用");
-    app.restart();
-}
-
-/// update_download 下载完成的安装包暂存:下载(带进度事件)与安装(人工确认)分离。
-static PENDING_UPDATE: std::sync::Mutex<Option<(tauri_plugin_updater::Update, Vec<u8>)>> =
-    std::sync::Mutex::new(None);
-
-/// 仅下载更新(校验签名后暂存字节),不安装。进度经 `update-download` 事件
-/// (progress 0-100 / state)下发;下载完由用户确认后再调 update_install。
-#[tauri::command]
-async fn update_download(app: AppHandle) -> Result<(), String> {
     let updater = build_updater(&app)?;
     let update = match updater.check().await {
         Ok(Some(u)) => u,
         Ok(None) => return Err("当前已是最新版本".into()),
         Err(e) => return Err(format!("检查更新失败: {e}")),
     };
-    eprintln!("[desktop] 更新: 下载 {}", update.version);
-    let app2 = app.clone();
-    let mut got: usize = 0;
-    let bytes = update
-        .download(
-            |chunk, total| {
-                got += chunk;
-                let pct = total.map(|t| if t > 0 { (got as f64 / t as f64 * 100.0) as u8 } else { 0 }).unwrap_or(0);
-                let _ = app2.emit_json("update-download", json!({ "progress": pct.min(100), "state": "downloading" }));
-            },
-            || {
-                let _ = app2.emit_json("update-download", json!({ "progress": 100, "state": "downloaded" }));
-            },
-        )
+    eprintln!("[desktop] 更新: UI 内触发下载安装 {}", update.version);
+    update
+        .download_and_install(|_, _| {}, || eprintln!("[desktop] 更新: 下载完成,安装中"))
         .await
-        .map_err(|e| format!("下载更新失败: {e}"))?;
-    *PENDING_UPDATE.lock().unwrap() = Some((update, bytes));
-    Ok(())
+        .map_err(|e| format!("更新失败: {e}"))?;
+    eprintln!("[desktop] 更新: 安装完成,重启应用");
+    app.restart();
 }
 
 // ==================== 自动更新 ====================
@@ -830,18 +780,6 @@ fn build_updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, Strin
         return Err("当前安装方式(deb/rpm)由系统包管理器升级,应用内不提供自动更新;\
                     AppImage 版本支持一键更新"
             .into());
-    }
-    // 个人构建未配置更新源:不落任何请求,直接提示未启用
-    let has_endpoints = app
-        .config()
-        .plugins
-        .0
-        .get("updater")
-        .and_then(|v| v.get("endpoints"))
-        .and_then(|e| e.as_array())
-        .map_or(false, |a| !a.is_empty());
-    if !has_endpoints {
-        return Err("此版本未配置自动更新源,不提供应用内更新".into());
     }
     let handle = app.clone();
     let mut builder = app
@@ -995,7 +933,7 @@ fn create_main_window(app: &AppHandle, page: &str) {
     }
     let opener = app.clone();
     let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App(page.into()))
-        .title("TeemoCode")
+        .title("MonkeyCode")
         .inner_size(1200.0, 800.0)
         // 布局下限:设置视图(168px 导航 + 内容列 + 保存条)在极窄窗口下
         // 保存按钮会被挤出可视区
@@ -1185,9 +1123,9 @@ fn hide_native_window_buttons(window: &tauri::WebviewWindow) {
 
 // ==================== 桌宠 ====================
 
-/// 桌宠窗口尺寸(逻辑像素):气泡(24)+吉祥物精灵图(200)的画布。
-const PET_W: f64 = 204.0;
-const PET_H: f64 = 232.0;
+/// 桌宠窗口尺寸(逻辑像素):气泡(24)+ 吉祥物精灵图(88)的画布。
+const PET_W: f64 = 116.0;
+const PET_H: f64 = 120.0;
 
 /// 创建非 Windows 桌宠窗口。先隐藏创建以避免定位前在屏幕角落闪现,
 /// 定位完成后按用户开关显示,不受主窗口焦点影响。
@@ -1203,7 +1141,7 @@ fn ensure_pet_window(app: &AppHandle) {
         .0
         .lock_ok();
     let win = WebviewWindowBuilder::new(app, "pet", WebviewUrl::App("pet.html".into()))
-        .title("TeemoCode 桌宠")
+        .title("MonkeyCode 桌宠")
         .inner_size(PET_W, PET_H)
         // GTK 的不可缩放窗口按内容自然尺寸布局,resize 与几何约束全被忽略,
         // 实测落在 WebView 默认的 200x200。Linux 改为保留 resizable,
@@ -1316,7 +1254,7 @@ fn ensure_pet_window(app: &AppHandle) {
     // 对 Win7 的 WebView2 透明限制零依赖。
     if let Err(e) =
         WebviewWindowBuilder::new(app, "pet-service", WebviewUrl::App("pet.html".into()))
-            .title("TeemoCode 桌宠状态服务")
+            .title("MonkeyCode 桌宠状态服务")
             .inner_size(1.0, 1.0)
             .decorations(false)
             .skip_taskbar(true)
@@ -1436,33 +1374,6 @@ fn set_sound_enabled(app: AppHandle, enabled: bool) {
     apply_sound_enabled(&app, enabled);
 }
 
-/// 导入自定义音效文件:把用户选的音频复制到应用数据目录(sounds/),
-/// 返回存储路径(经 asset 协议给主窗口/桌宠播放,避免 base64/IndexedDB)。
-/// 事件 id 按 SOUND_EVENTS:startup/task-done/task-error/ask/idle。
-#[tauri::command]
-async fn import_sound(app: AppHandle, event: String, src: String) -> Result<String, String> {
-    use std::io::Write;
-    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let dir = data.join("sounds");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    // 源路径可能是 file:// 或裸路径
-    let src_path = src.strip_prefix("file://").unwrap_or(&src);
-    let bytes = std::fs::read(src_path).map_err(|e| format!("读取源文件失败: {e}"))?;
-    if bytes.is_empty() {
-        return Err("文件为空".into());
-    }
-    let ext = std::path::Path::new(src_path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("mp3");
-    let name = format!("{event}.{ext}");
-    let dest = dir.join(&name);
-    let mut f = std::fs::File::create(&dest).map_err(|e| e.to_string())?;
-    f.write_all(&bytes).map_err(|e| e.to_string())?;
-    // 返回 asset 协议可用的 URL(main 窗口与桌宠同源)
-    Ok(dest.to_string_lossy().to_string())
-}
-
 /// 提示音开关的唯一落点(设置页命令与托盘勾选项共用):更新运行时真值 →
 /// 同步托盘勾选态 → 广播给桌宠页与设置页 → 落盘。
 ///
@@ -1542,13 +1453,7 @@ fn main() {
             pet_native_render,
             sound_enabled,
             set_sound_enabled,
-            import_sound,
-            git::git_push,
-            git::git_import,
-            git::import_task_data,
-            git::relaunch_app,
             update_check,
-            update_download,
             update_install,
             open_extension_dir,
             open_app_dir,
@@ -1566,11 +1471,7 @@ fn main() {
             driver::session_create,
             driver::session_delete,
             driver::session_patch,
-            import_mc::import_mc_scan,
-            import_mc::import_mc_scan_dir,
-            import_mc::import_mc_apply,
             driver::models_list,
-            driver::usage_stats,
             driver::session_open,
             driver::session_history,
             driver::session_outline,
@@ -1641,12 +1542,10 @@ fn main() {
             *app.state::<MainWindowRuntime>().0.lock_ok() = cfg.main_window_state;
 
             // 百智云/云端服务(壳级单例;凭证 cookie 与配置同目录)。晚于
-            // 配置加载:MonkeyCode 服务地址可由设置指定(mc_base_url,重启
-            // 应用生效);配置损坏时按默认值落官方云,错误页照常外显。
+            // 配置加载:MonkeyCode 服务地址由设置指定,保存后替换服务快照;
+            // 配置损坏时按默认值落官方云,错误页照常外显。
             let cfg_dir = config::config_dir(app.handle()).map_err(std::io::Error::other)?;
-            app.manage(baizhi::BaizhiState::new(
-                baizhi::Service::new(cfg_dir, &cfg),
-            ));
+            app.manage(baizhi::BaizhiState::new(baizhi::Service::new(cfg_dir, &cfg)));
             app.state::<PetEnabled>()
                 .0
                 .store(cfg.pet_enabled, Ordering::Relaxed);
@@ -1821,11 +1720,11 @@ fn setup_tray(app: &AppHandle, pet_enabled: bool, sound_enabled: bool) -> tauri:
     // 托盘这一份还兼顾引擎卡死到 UI 都不响应的场景(2026-08-07 用户报障)
     let restart_engine = MenuItem::with_id(app, "restart-engine", "重启引擎", true, None::<&str>)?;
     let update = MenuItem::with_id(app, "check-update", "检查更新", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出 TeemoCode", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出 MonkeyCode", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &settings, &pet, &sound, &restart_engine, &update, &quit])?;
     let tray = TrayIconBuilder::new()
         .icon(tray_icon())
-        .tooltip("TeemoCode")
+        .tooltip("MonkeyCode")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {

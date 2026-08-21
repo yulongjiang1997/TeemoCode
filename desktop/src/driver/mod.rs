@@ -398,8 +398,11 @@ pub async fn models_list(host: State<'_, DriverHost>) -> Result<Value, String> {
 
 /// 本地会话 token 用量统计(按天/会话/模型聚合,usage 事件记账)。
 #[tauri::command]
-pub async fn usage_stats(host: State<'_, DriverHost>) -> Result<Value, String> {
-    Ok(host.get()?.usage_stats())
+pub async fn usage_stats(app: AppHandle) -> Result<Value, String> {
+    // 本地会话 token 用量统计(按天/会话/模型聚合)。壳在 config 目录持久化
+    // 用量快照,这里直接读盘聚合返回,不依赖运行中的 Driver 实例。
+    let cfg_dir = crate::config::config_dir(&app)?;
+    Ok(crate::stats::UsageStats::new(&cfg_dir).snapshot())
 }
 
 /// 打开会话:返回尾部回放窗口 `{frames, cursor, has_more}`。历史走返回值

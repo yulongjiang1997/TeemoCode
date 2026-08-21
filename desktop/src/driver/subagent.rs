@@ -122,17 +122,16 @@ impl Inner {
         if let Some(d) = event.get("parent_description").and_then(|v| v.as_str()).filter(|d| !d.is_empty()) {
             title = d.to_string();
         }
-        // P2 模型分配(尽力而为):子代理描述里标注 "模型：XXX"(或 模型:XXX)
-        // → 子会话模型名用指定模型。注意子代理的执行循环由引擎以父模型运行,
-        // 壳侧改的是子会话视图的模型名(打开子会话时显示/后续轮次参考)。
-        let model_name = parse_model_hint(&title).unwrap_or(model_name);
         self.sess.sessions.lock_ok().insert(
             child_sid.to_string(),
             SessionState {
                 seq: 0,
                 running: true,
                 compacting: false,
+                manual_compact: false,
+                terminal_error_seen: false,
                 turn: 1,
+                cancel_requested_turn: None,
                 created: true, // 壳侧会话,无引擎实体,open 不做 resume RPC
                 engine_id: child_sid.to_string(),
                 opened: false,
@@ -170,11 +169,11 @@ impl Inner {
             self.push_frame(child_sid, |seq| frame::user_input(&prompt, seq));
         }
         self.push_frame(child_sid, frame::task_started);
-        // 父卡挂子会话链接(UI 点开完整视图)+ 分配模型名(卡片显示)
+        // 父卡挂子会话链接(UI 点开完整视图)
         self.push_frame(&psid, |seq| {
             frame::tool_call_progress(
                 &ptc,
-                json!({ "kind": "child_session", "childSessionId": child_sid, "model": model_name }),
+                json!({ "kind": "child_session", "childSessionId": child_sid }),
                 seq,
             )
         });
@@ -252,21 +251,6 @@ impl Inner {
                         seq,
                     )
                 });
-                // 认证/额度错误:引擎吞在内部重试后静默 task-ended(不产 error 事件),
-                // 壳收不到任何失败信号 → 前端多密钥/备用模型轮换不触发。这里按
-                // 终止错误给父会话收尾,前端才能及时轮换 key/切换备用模型。
-                if super::normalize::is_key_auth_error(&msg) {
-                    eprintln!("[desktop] 子代理认证/额度错误,父会话按终止收尾: {msg}");
-                    self.push_frame(&psid, |seq| frame::task_error(&msg, seq));
-                    self.push_frame(&psid, frame::task_ended);
-                    if let Some(s) = self.sess.sessions.lock_ok().get_mut(&psid) {
-                        s.running = false;
-                        s.open_tools.clear();
-                        s.model_text.clear();
-                    }
-                    self.write_sidecar(&psid, |m| m["status"] = json!(SessionStatus::Error.as_str()));
-                    self.emit_session_event(&psid, SessionStatus::Error.as_str());
-                }
             }
             // thinking_delta/model_done:进度窗不展示思考流与轮界
             _ => {}
@@ -280,6 +264,10 @@ impl Inner {
             match sessions.get_mut(child_sid) {
                 Some(s) if s.running => {
                     s.running = false;
+                    s.compacting = false;
+                    s.manual_compact = false;
+                    s.terminal_error_seen = false;
+                    s.cancel_requested_turn = None;
                     true
                 }
                 _ => false,
@@ -416,25 +404,6 @@ fn agent_label(name: &str, desc: &str, agent_id: &str) -> String {
         (true, false) => desc.to_string(),
         (true, true) => agent_id.to_string(),
     }
-}
-
-/// 子代理描述里的模型标注:支持 "模型：XXX" / "模型:XXX" / "模型 XXX",
-/// 取到下一个分隔符(逗号/括号/竖线/句号)前的名字。解析不出返回 None。
-fn parse_model_hint(desc: &str) -> Option<String> {
-    for sep in ["模型：", "模型:", "模型 "] {
-        if let Some((_, rest)) = desc.rsplit_once(sep) {
-            let m = rest
-                .trim_start()
-                .split(|c| matches!(c, '，' | ',' | ')' | '）' | '|' | '。' | ';' | ';'))
-                .next()
-                .map(str::trim)
-                .unwrap_or("");
-            if !m.is_empty() && m.len() <= 64 {
-                return Some(m.to_string());
-            }
-        }
-    }
-    None
 }
 
 /// 从 task_notification 渲染消息里取 Result 正文。形状对表引擎

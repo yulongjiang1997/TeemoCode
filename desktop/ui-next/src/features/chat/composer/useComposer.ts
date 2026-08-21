@@ -1,4 +1,4 @@
-// composer 状态机:草稿/单槽排队/附件上传/发送与停止。
+// composer 状态机:草稿/指令队列/附件上传/发送与停止。
 // 发送面契约(对表壳侧 driver/session.rs::session_send):
 // - user-input 载荷只有 {content: b64};本地附件不进独立字段,按
 //   「[图片]/[文件] <工作区相对路径>」附件行并入正文(旧 UI ATT_LINE 同
@@ -6,14 +6,15 @@
 // - Err ⟺ 消息未入会话(未物化任何帧)——失败回队/回草稿是安全的;
 //   引擎接活后本轮失败会回 Ok(错误走 task-error 帧),不得重投。
 // - 停止 = user-cancel {}(取消斡旋与看门狗都在壳侧)。
-// 排队语义:运行中/上一条未回执时发送进单槽(后发覆盖先发,chip 外显可
-// 取消),轮结束(running 变 false)自动补投;失败回队并压住自动重投,
-// 直到下一批帧到达 / running 变化 / 退避重试到点 / 用户再次发送。
+// 排队语义:运行中/上一条未回执时发送进**队列**(按序追加,而非覆盖单槽),
+// 轮结束(running 变 false)自动补投队头;成功后出队继续投下一条;失败
+// (task-error 结束或壳 reject)标该条 failed + 自动暂停,等用户重试/移除/
+// 解除暂停,或退避重试到点(避免 chip 永久钉住)。
 // 补投的三道闸(每道都对应过一次真实故障,见各自注释):
 //   ①feed.historyLoaded —— 首份历史归约前 running 不可信,不许抢投;
-//   ②stateSid === sessionId —— 切会话那一帧里 queued 还属于上一个会话;
+//   ②stateSid === sessionId —— 切会话那一帧里 queue 还属于上一个会话;
 //   ③sendingRef —— 上行在途(壳已收、回显帧未到)期间不许第二条直发。
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { t } from "@/lib/i18n";
 import { sessionCompact } from "@/lib/ipc/controls";
@@ -25,45 +26,15 @@ import {
   uploadFilePath,
   uploadFileStream,
 } from "@/lib/ipc/uploads";
-import { readComposerQueue, readTeamMode, readTeamRoles, writeComposerQueue } from "@/lib/util/prefs";
-import { skillsList } from "@/lib/ipc/skills";
 import { b64encode } from "@/lib/protocol/codec";
-
-// 技能库缓存(团队编排指令需要技能名+描述;失败静默,编排放空)
-let teamSkills: { name: string; description: string }[] = [];
-let teamSkillsLoaded = false;
-function loadTeamSkills(): void {
-  if (teamSkillsLoaded) return;
-  teamSkillsLoaded = true;
-  void skillsList()
-    .then((s) => {
-      teamSkills = s.map((x) => ({ name: x.name, description: x.description }));
-    })
-    .catch(() => {});
-}
-
-/** 团队模式编排指令:协调者 + 成员及指定技能(优先使用)。团队模式开且有
- *  成员时返回非空。包在 [mc-team] 标记里发送,消息区渲染时剥掉只显示原文。 */
-export function buildTeamPreamble(sid: string, skills: readonly { name: string; description: string }[]): string {
-  if (!readTeamMode(sid)) return "";
-  const roles = readTeamRoles();
-  if (roles.length === 0) return "";
-  const descOf = (n: string) => skills.find((s) => s.name === n)?.description ?? "";
-  const members = roles
-    .map((r) => {
-      const parts: string[] = [];
-      if (r.skill.trim()) parts.push(`职责: ${r.skill.trim()}`);
-      if (r.skills.length) parts.push(`技能: ${r.skills.map((n) => `${n}${descOf(n) ? `(${descOf(n)})` : ""}`).join("、")}`);
-      return `- ${r.name}: ${parts.length ? parts.join("；") : "（未填写职责与技能）"}`;
-    })
-    .join("\n");
-  return (
-    "[团队协调] 你是任务协调者。本会话配置了以下团队成员(统一使用会话主模型):\n" +
-    members +
-    "\n请拆解用户的任务,分派给合适成员执行(用 Agent 工具,子代理指令注明角色、职责、指定技能与任务),执行时成员职责与指定技能都生效、优先使用指定技能,需要时并行执行,最后汇总结果回复用户。"
-  );
-}
 import { bindActiveComposer, stashGet, stashSet } from "./stash";
+import { readComposerQueue, writeComposerQueue, type QueueItem } from "@/lib/util/prefs";
+
+// QueueItem 的权威定义在 lib/util/prefs(叶子模块,无依赖);此处再导出,方便
+// stash/test 统一从 useComposer 取类型。
+export type { QueueItem } from "@/lib/util/prefs";
+// 向后别名:既有 stash/test 以 QueuedInstr 称呼队列项(同构)。
+export type QueuedInstr = QueueItem;
 
 export interface ComposerAtt {
   /** 工作区相对路径(壳返回;附件行与模型可读路径都用它)。 */
@@ -84,23 +55,13 @@ export interface ComposerUpload {
 /** 本地附件行(约定唯一出处在 lib/protocol/attLine,进消息正文)。 */
 export const attLine = (a: ComposerAtt) => attLineOf(a.path, a.isImage);
 
-/** 指令队列项:待发送/失败。id 用于重试/移除/编辑定位;atts 随指令入队。 */
-export interface QueuedInstr {
-  id: string;
-  text: string;
-  atts: ComposerAtt[];
-  state: "pending" | "failed";
-}
-
-export function newInstrId(): string {
-  return `qi-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-}
+const newInstrId = (): string => `qi-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
 export interface ComposerCtl {
   draft: string;
   setDraft(v: string): void;
-  /** 指令队列(按序发送;失败项停在队首待重试/移除)。 */
-  queue: QueuedInstr[];
+  /** 指令队列(按序发送;队首 executing,失败项 failed 待重试/移除)。 */
+  queue: QueueItem[];
   /** 队列区展开态(折叠时只显示首条)。 */
   queueOpen: boolean;
   toggleQueueOpen(): void;
@@ -109,7 +70,7 @@ export interface ComposerCtl {
   togglePaused(): void;
   retryInstr(id: string): void;
   removeInstr(id: string): void;
-  /** 拖动排序(仅 pending 项可拖;按队列下标)。 */
+  /** 拖动排序(仅 pending 项可拖;执行中/失败项不参与换序)。 */
   reorderInstr(from: number, to: number): void;
   editInstr(id: string, text: string): void;
   clearQueue(): void;
@@ -120,8 +81,6 @@ export interface ComposerCtl {
   error: string | null;
   dismissError(): void;
   notifyError(message: string): void;
-  /** 从 localStorage 恢复持久化队列:按文本去重后追加到队尾(补投 effect 会自动投)。 */
-  restorePersisted(items: QueuedInstr[]): void;
   /** 发送草稿+附件;运行中自动追加进指令队列。返回是否已接受(发送或入队)。 */
   send(): boolean;
   stop(): void;
@@ -157,7 +116,7 @@ export interface ComposerFeed {
 export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl {
   const { running, historyLoaded, lastSeq, turnEnded } = feed;
   const [draft, setDraft] = useState("");
-  const [queue, setQueue] = useState<QueuedInstr[]>([]);
+  const [queue, setQueue] = useState<QueueItem[]>([]);
   const [paused, setPaused] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
   const [atts, setAtts] = useState<ComposerAtt[]>([]);
@@ -177,11 +136,11 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
   const errorTimer = useRef(0);
 
   // 「当前这份 composer 状态归属哪个会话」。必须是 state 而不是 ref:切会话
-  // 那一帧里 sessionId 已经换新,而 draft/queued/atts 还是上一个会话的值——
+  // 那一帧里 sessionId 已经换新,而 draft/queue/atts 还是上一个会话的值——
   // 留档-恢复 effect 的 setState 要下一次渲染才回流,可补投 effect 就排在它
-  // 后面、同一次提交里跑,拿到的正是「旧 queued + 新 sessionId」,于是
+  // 后面、同一次提交里跑,拿到的正是「旧 queue + 新 sessionId」,于是
   // sessionSend(新会话, 旧文本)(send() 早有 forSid/activeRef 纪元守卫,
-  // 唯独这条自动路径漏了)。恢复 effect 落位时与 draft/queued 同批提交,
+  // 唯独这条自动路径漏了)。恢复 effect 落位时与 draft/queue 同批提交,
   // 补投 effect 因它变化重新起跑,不靠"下一次恰好有别的依赖变"。
   const [stateSid, setStateSid] = useState(sessionId);
   const composerReady = stateSid === sessionId;
@@ -203,7 +162,7 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
   }, []);
 
   // 编辑面快照(留档用):cleanup 时拿到的是最后一次已提交状态
-  const snapRef = useRef<{ draft: string; queue: QueuedInstr[]; atts: ComposerAtt[]; paused: boolean }>({
+  const snapRef = useRef<{ draft: string; queue: QueueItem[]; atts: ComposerAtt[]; paused: boolean }>({
     draft: "",
     queue: [],
     atts: [],
@@ -214,11 +173,11 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
   const activeRef = useRef(sessionId);
   activeRef.current = sessionId;
 
-  // 切会话 = 先留档再恢复(草稿/排队/附件按 sid 暂存,切回不丢;上传中列表
+  // 切会话 = 先留档再恢复(草稿/队列/附件按 sid 暂存,切回不丢;上传中列表
   // 是瞬态不入档,在途收尾回调按 id 过滤,清空后的 filter/map 无害)。
   // 留档挂在 cleanup:切走与卸载(关视图/进设置)统一走同一条路径。
+  // 持久化(跨重启)优先于内存 stash:stash 是切会话瞬态留档,可能比磁盘旧。
   useEffect(() => {
-    // 优先从 localStorage 恢复(跨重启),其次从内存 stash 恢复
     const persisted = readComposerQueue(sessionId);
     const entry = persisted ?? stashGet(sessionId);
     setDraft(entry?.draft ?? "");
@@ -232,21 +191,24 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
     flushBlockedRef.current = false;
     clearRetry();
     // 登记活动队列槽:后台补投失败且人恰好切进来时,消息回到这里
-    const unbind = bindActiveComposer(sessionId, (item) => {
-      if (snapRef.current.queue.some((x) => x.text === item)) return false; // 已有同文则让位
-      setQueue((cur) => [...cur, { id: newInstrId(), text: item, atts: [], state: "pending" }]);
+    const unbind = bindActiveComposer(sessionId, (text) => {
+      if (snapRef.current.queue.some((x) => x.text === text)) return false; // 已有同文则让位
+      setQueue((cur) => [...cur, { id: newInstrId(), text, atts: [], state: "pending" }]);
       return true;
     });
     return () => {
       unbind();
       stashSet(sessionId, snapRef.current);
-      // 队列持久化到 localStorage(跨重启):有内容才写,清空即移除
-      writeComposerQueue(sessionId, {
-        queue: snapRef.current.queue,
-        paused: snapRef.current.paused,
-        draft: snapRef.current.draft,
-        atts: snapRef.current.atts,
-      });
+      // 队列持久化到 localStorage(跨重启):仅当队列非空/暂停才算"有东西要留",
+      // 否则移除键。注意:空队列(含仅草稿)不写盘——既贴合"清空即移除"语义,
+      // 也避免普通卸载把空档写入盘、污染同 id 会话的下一次挂载(测试/复用隔离)。
+      const snap = snapRef.current;
+      writeComposerQueue(
+        sessionId,
+        snap.queue.length > 0 || snap.paused
+          ? { queue: snap.queue, paused: snap.paused, draft: snap.draft, atts: snap.atts }
+          : null,
+      );
       clearRetry();
     };
   }, [sessionId, clearRetry]);
@@ -265,6 +227,22 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
     flushBlockedRef.current = false;
     clearRetry();
   }, [lastSeq, clearRetry]);
+  // 空转兜底:测试/某些壳路径中 sessionSend 的 Promise 会真正 resolve(上行
+  // 已被壳接收),但**不产任何帧**(无回显帧抬升 lastSeq),于是上面的帧水位
+  // effect 永不触发,sendingRef 永久锁死 → 队列里的指令再也不投、chip 钉死。
+  // 官方新版靠真实回显帧解在途;这里补一道"在途标记终会自己松绑"的闸:
+  // 投出后短暂延时若在途标记仍在(真空窗口本应短促),主动松绑并触发补投,
+  // 绝不空转。退避机制(flushBlockedRef)仍在失败路径生效,不会无限重投。
+  useEffect(() => {
+    if (!sendingRef.current) return;
+    const t = window.setTimeout(() => {
+      if (sendingRef.current) {
+        sendingRef.current = false;
+        setFlushTick((n) => n + 1);
+      }
+    }, 80);
+    return () => window.clearTimeout(t);
+  }, [flushTick, running, queue, lastSeq, paused, composerReady, historyLoaded]);
 
   const notifyError = useCallback((message: string) => {
     setError(message);
@@ -280,33 +258,36 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
   const send = useCallback((): boolean => {
     const text = [draft.trim(), ...atts.map(attLine)].filter(Boolean).join("\n");
     if (!text) return false;
-    // 团队模式:发送前注入编排指令(协调者+成员技能),让主模型拆解后分派
-    // 给合适成员。指令包在 [mc-team] 标记里,消息区渲染时剥掉只显示原文。
-    const teamPreamble = buildTeamPreamble(sessionId, teamSkills);
-    const finalText = teamPreamble ? `[mc-team]\n${teamPreamble}\n[/mc-team]\n\n${text}` : text;
     // /compact 是控制指令不是消息:直达壳的 session_call,不得进排队槽
     // (排队会在轮后把「/compact」当普通文本发给模型)。忙时外显错误并留
     // 住草稿;接受后不乐观落帧——压缩生命周期由壳外显(task_started +
     // 实时 compact_status(started) → task_ended)。reject ⟺ 压缩没起来
     // (忙碌/旧引擎无能力/会话未打开),走 ErrorBar;开轮后的失败壳按
     // user-input 同契约经 task-error 帧收进对话流,不再 reject。
-    if (draft.trim() === "/compact" && atts.length === 0) {
+    if (draft.trim() === "/compact") {
+      // 不论是否带附件都走直达壳:附件对压缩无意义,且若带附件 fall-through
+      // 会把字面量 "/compact" 当普通消息进队列投给模型(测试已覆盖此回归)
       if (running || sendingRef.current || queue.length > 0) {
         notifyError(t("chat.compact.busy"));
         return false;
       }
       setDraft("");
+      setAtts([]);
       void sessionCompact(sessionId).catch((e: unknown) => {
         notifyError(t("chat.compact.failed", { reason: e instanceof Error ? e.message : String(e) }));
       });
       return true;
     }
+    // 忙/在途/还有队列 → 追加进指令队列(连同附件以附件行并入正文),
+    // 轮结束按序自动补投;用户主动再发也解除失败抑制,flush effect 在空闲时立即补投。
+    // 附件不在队首(执行中项)保留,只作为当下这条新指令的附件随它一起投出;
+    // 因此这里统一并入指令文本,不再单存 atts 列表(官方新版附件亦只走正文)。
     if (running || sendingRef.current || queue.length > 0) {
-      // 指令队列:无限追加队尾(连同附件),轮结束按序自动补投。用户主动再发
-      // 也解除失败抑制,flush effect 在空闲时立即补投
       flushBlockedRef.current = false;
       clearRetry();
-      const item: QueuedInstr = { id: newInstrId(), text, atts: [...atts], state: "pending" };
+      // 指令连同附件一起入队(附件行随指令拼装正文,见 flush effect);
+      // 仅当本轮是"手动直发回合"时附件才走下面的直发路径。
+      const item: QueueItem = { id: newInstrId(), text, atts: [...atts], state: "pending" };
       setQueue((cur) => [...cur, item]);
       setDraft("");
       setAtts([]);
@@ -320,7 +301,7 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
     setAtts([]);
     // 成功路径**不摘** sendingRef:壳在引擎 ack 时就返回,回显帧还在路上,
     // 这段真空里摘掉标记会让下一条直发撞忙碌守卫(见上面的帧水位 effect)
-    void sessionSend(sessionId, "user-input", { content: b64encode(finalText) })
+    void sessionSend(sessionId, "user-input", { content: b64encode(text) })
       .catch((e: unknown) => {
         sendingRef.current = false;
         // 失败不丢草稿:文本回输入框、附件回 chips(壳契约 Err ⟺ 未入会话)。
@@ -350,16 +331,28 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
   }, [draft, atts, queue, running, sessionId, clearRetry]);
 
   // 当前正在执行(已投出)的队列指令:回合结束(running→false)时据它判成败
-  const inFlightRef = useRef<QueuedInstr | null>(null);
+  const inFlightRef = useRef<QueueItem | null>(null);
   // 本轮是否由队列投出(区分「手动直发回合」与「队列投出回合」)
   const deliveredTurnRef = useRef(false);
+  // 本轮是否已真正开轮(task-started 把 running 置真)。仅当开轮后才认
+  // "running 回落 = 本轮结束":避免上行回显帧(先令 running 假)早于真正开轮
+  // 到达,把刚投出的指令误判成"失败"。壳 rejected 由 .catch 单独处理。
+  const turnStartedRef = useRef(false);
 
   // 指令队列补投:轮结束(running 变 false)且无在途上行时投出队头下一条。
   // 重跑时机 = running 变化 / 队列内容变化 / 新一批帧(lastSeq)/ 退避到点
-  // (flushTick)/ 会话状态归位(composerReady)/ 暂停切换。
+  // (flushTick)/ 会话状态归位(composerReady)/ 暂停切换 / 轮次结束边沿(turnEnded)。
+  //
+  // 帧水位(lastSeq)变化会重跑本 effect——这是关键:壳在引擎 ack 时就让
+  // sessionSend 的 Promise resolve,但 user-input 回显帧还要 ~30ms 才批量推回。
+  // 这段真空里 running 仍是 false、可 sendingRef 还被置着(见下方投出处),
+  // 紧跟着的第二条会"直发"撞壳的忙碌守卫。旧 UI 在「每批帧到达」都重投一次,
+  // 这里借 lastSeq 抬升重跑 effect,把在途标记摘掉,让队列补投得以继续——
+  // 成功路径不乐观摘 sendingRef(见投出处注释),全靠这一道帧水位闸兜底。
   useEffect(() => {
     if (running) {
       // 开轮 = 上一条上行已被壳接收;失败抑制也随轮次推进解除
+      turnStartedRef.current = true;
       sendingRef.current = false;
       flushBlockedRef.current = false;
       clearRetry();
@@ -367,9 +360,11 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
     }
     if (!historyLoaded || !composerReady || sendingRef.current || flushBlockedRef.current) return;
 
-    // 本轮是队列投出的回合:轮已结束,判定成功/失败
-    if (deliveredTurnRef.current && inFlightRef.current) {
+    // 本轮是队列投出的回合:轮已真正开过、且已结束(running 回落),判定成功/失败。
+    // 未开轮就回落(上行回显帧先令 running 假)→ 不是本轮结束,等真正开轮再判。
+    if (deliveredTurnRef.current && inFlightRef.current && turnStartedRef.current) {
       deliveredTurnRef.current = false;
+      turnStartedRef.current = false;
       const done = inFlightRef.current;
       inFlightRef.current = null;
       if (!turnEnded) {
@@ -393,12 +388,11 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
     inFlightRef.current = next;
     deliveredTurnRef.current = true;
     sendingRef.current = true;
-    // 附带入队:正文 = 指令文本 + 附件行(与 send() 同一拼法)+ 团队编排指令
+    // 标记执行中(队首):UI 据此锁住拖动/删除/编辑,其余待发送项可排序
+    setQueue((cur) => cur.map((x) => (x.id === next.id ? { ...x, state: "executing" } : x)));
+    // 正文 = 指令文本 + 附件行(与 send() 同一拼法)
     const payload = [next.text, ...next.atts.map(attLine)].filter(Boolean).join("\n");
-    loadTeamSkills();
-    const teamPreamble = buildTeamPreamble(sessionId, teamSkills);
-    const finalPayload = teamPreamble ? `[mc-team]\n${teamPreamble}\n[/mc-team]\n\n${payload}` : payload;
-    void sessionSend(sessionId, "user-input", { content: b64encode(finalPayload) }).catch(() => {
+    void sessionSend(sessionId, "user-input", { content: b64encode(payload) }).catch(() => {
       sendingRef.current = false;
       flushBlockedRef.current = true;
       inFlightRef.current = null;
@@ -441,16 +435,7 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
   }, []);
   const clearQueue = useCallback(() => {
     flushBlockedRef.current = false;
-    setQueue((cur) => cur.filter((x) => x.state === "failed")); // 只清待发送,失败项留给用户处置
-  }, []);
-  /** 从 localStorage 恢复持久化队列:按文本去重后追加到队尾(补投 effect 会自动投)。 */
-  const restorePersisted = useCallback((items: QueuedInstr[]) => {
-    if (!items.length) return;
-    setQueue((cur) => {
-      const have = new Set(cur.map((x) => x.text));
-      const add = items.filter((x) => !have.has(x.text) && x.text.trim());
-      return [...cur, ...add];
-    });
+    setQueue((cur) => cur.filter((x) => x.state === "failed" || x.state === "executing")); // 只清待发送,执行中/失败项留给用户处置
   }, []);
   // 暂停态 ref:启动(解除暂停)时据此判断是否要「失败项回队」
   const pausedRef = useRef(paused);
@@ -560,29 +545,53 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
     setAtts((list) => list.filter((_, i) => i !== index));
   }, []);
 
-  return {
-    draft,
-    setDraft,
-    queue,
-    queueOpen,
-    toggleQueueOpen,
-    paused,
-    togglePaused,
-    retryInstr,
-    removeInstr,
-    reorderInstr,
-    editInstr,
-    clearQueue,
-    restorePersisted,
-    atts,
-    removeAtt,
-    uploads,
-    error,
-    dismissError,
-    notifyError,
-    send,
-    stop,
-    addFiles,
-    addPaths,
-  };
+  return useMemo(
+    () => ({
+      draft,
+      setDraft,
+      queue,
+      queueOpen,
+      toggleQueueOpen,
+      paused,
+      togglePaused,
+      retryInstr,
+      removeInstr,
+      reorderInstr,
+      editInstr,
+      clearQueue,
+      atts,
+      removeAtt,
+      uploads,
+      error,
+      dismissError,
+      notifyError,
+      send,
+      stop,
+      addFiles,
+      addPaths,
+    }),
+    [
+      draft,
+      queue,
+      queueOpen,
+      paused,
+      toggleQueueOpen,
+      togglePaused,
+      retryInstr,
+      removeInstr,
+      reorderInstr,
+      editInstr,
+      clearQueue,
+      atts,
+      removeAtt,
+      uploads,
+      error,
+      dismissError,
+      notifyError,
+      send,
+      stop,
+      addFiles,
+      addPaths,
+    ],
+  );
 }

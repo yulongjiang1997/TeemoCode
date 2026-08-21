@@ -18,6 +18,60 @@ import type {
   ToolStatus,
 } from "./types";
 
+export interface TimelineDelta {
+  from: ChatState;
+  kind: "meta" | "update" | "append" | "prepend" | "reset";
+  changed: readonly number[];
+}
+
+// UI 派生缓存的非持久 sidecar：不污染 ChatState 的协议/全等语义，也会随
+// snapshot 被 GC。消费者只有拿到精确的 from snapshot 才可走增量快路。
+const timelineDeltas = new WeakMap<ChatState, TimelineDelta>();
+
+export function timelineDeltaOf(state: ChatState): TimelineDelta | undefined {
+  return timelineDeltas.get(state);
+}
+
+function recordTimelineDelta(
+  from: ChatState,
+  to: ChatState,
+  forcedKind?: TimelineDelta["kind"],
+  knownChanged?: readonly number[],
+): ChatState {
+  if (to === from) return to;
+  const kind =
+    forcedKind ??
+    (to.items === from.items
+      ? "meta"
+      : to.items.length > from.items.length
+        ? "append"
+        : to.items.length < from.items.length
+          ? "reset"
+          : "update");
+  // 高频 meta 帧根本没换 items；纯流式批次也在调用方精确知道只会改尾行。
+  // 这两条快路不能再为了产 sidecar 扫一遍万级历史，否则刚从投影层拿掉的
+  // O(n) 会悄悄搬回 reducer。前插的消费者必然重建，本来也不需要逐项 diff。
+  const changed: number[] = knownChanged
+    ? [...knownChanged]
+    : to.items === from.items || kind === "prepend"
+      ? []
+      : (() => {
+          const indexes: number[] = [];
+          const common = Math.min(from.items.length, to.items.length);
+          for (let i = 0; i < common; i++) if (from.items[i] !== to.items[i]) indexes.push(i);
+          return indexes;
+        })();
+  // 只保留「当前快照 → 直接前驱」这一跳。WeakMap 的 key 虽是弱引用，value
+  // 里的 from 却是强引用；若前驱自己的 sidecar 继续指向更早状态，最新
+  // ChatState 就会把每个流式批次产生的 items 数组串成永久链，长任务最终
+  // 仍会因内存与 GC 压力变卡。删掉前驱入口不会影响本次增量：消费者只需
+  // 用当前 delta 找已经缓存过的直接前驱；若 React 跳过了中间提交，本来就
+  // 没有那份派生缓存，会安全回退到一次完整投影。
+  timelineDeltas.delete(from);
+  timelineDeltas.set(to, { from, kind, changed });
+  return to;
+}
+
 export function createChatState(): ChatState {
   return {
     items: [],
@@ -484,13 +538,23 @@ function reduceAcp(s: ChatState, u: AcpUpdate, timestamp?: number): ChatState {
       return { ...s, commands: (u.availableCommands ?? []).filter((c) => !!c?.name) };
     case "usage_update":
       return { ...s, usage: { used: u.used ?? 0, size: u.size ?? 0 } };
-    case "compact_status":
+    case "compact_status": {
+      const key: MessageKey =
+        u.status === "started"
+          ? "chat.sys.compacting"
+          : u.status === "failed"
+            ? "chat.sys.compactFailed"
+            : u.status === "cancelled"
+              ? "chat.sys.compactCancelled"
+              : "chat.sys.compacted";
       return pushItem(s, {
         kind: "sys",
         tag: "compact",
         text: "",
-        key: u.status === "started" ? "chat.sys.compacting" : "chat.sys.compacted",
+        key,
+        ...(u.status === "failed" ? { error: true } : {}),
       });
+    }
     case "model_update": {
       // 系统行外显短名(先剥 @来源#配置id 的寻址后缀,再剥会员档位前缀);
       // 状态 model 保持原始名——它是按 name 回查模型/think 档的键
@@ -552,13 +616,16 @@ export function reduceFrame(s: ChatState, f: Frame): ChatState {
         items: [...expireOpenAsks(s.items), { kind: "sys", tag: "turn-end", text: "", key: "chat.sys.turnEnd" }],
       };
     case "task-error": {
-      const data = frameData<{ error?: string }>(f);
+      const data = frameData<{ error?: string; terminal?: boolean }>(f);
+      const terminal = data?.terminal !== false;
       return {
         ...s,
-        running: false,
+        // 本地引擎先发 error 事件、稍后才发权威 turn/stopped。terminal=false
+        // 只负责即时展示，不能提前放开输入/排队闸；云端旧帧缺字段仍终止。
+        running: terminal ? false : s.running,
         streamKind: "",
         items: [
-          ...expireOpenAsks(s.items),
+          ...(terminal ? expireOpenAsks(s.items) : s.items),
           data?.error
             ? { kind: "sys" as const, tag: "error" as const, text: "", key: "chat.sys.error" as const, params: { reason: data.error }, error: true, seq: (f as { seq?: number }).seq ?? 0 }
             : { kind: "sys" as const, tag: "error" as const, text: "", key: "chat.sys.errorUnknown" as const, error: true, seq: (f as { seq?: number }).seq ?? 0 },
@@ -672,6 +739,16 @@ export function reduceBatch(s: ChatState, batch: readonly Frame[]): ChatState {
   let next = s;
   let watermark = s.lastSeq;
   const seenInBatch = new Set<number>();
+  // 壳约 30ms 推一批，常含多个连续文本碎片。逐帧 appendStream 会为每片
+  // slice 整个历史数组；先合并同类连续碎片后，一批流式文本只复制一次。
+  let stream: { kind: "agent" | "thought"; parts: string[]; timestamp?: number } | null = null;
+  let streamOnly = true;
+  let sawStream = false;
+  const flushStream = () => {
+    if (!stream) return;
+    next = appendStream(next, stream.kind, stream.parts.join(""), stream.timestamp);
+    stream = null;
+  };
   for (const f of batch) {
     const seq = typeof f.seq === "number" && f.seq > 0 ? f.seq : null;
     if (seq !== null) {
@@ -679,9 +756,46 @@ export function reduceBatch(s: ChatState, batch: readonly Frame[]): ChatState {
       seenInBatch.add(seq);
       if (seq > watermark) watermark = seq;
     }
+    if (f.type === "task-running" && f.kind === "acp_event") {
+      const data = frameData<{ update?: AcpUpdate }>(f);
+      const update = data?.update;
+      const kind =
+        update?.sessionUpdate === "agent_message_chunk"
+          ? "agent"
+          : update?.sessionUpdate === "agent_thought_chunk"
+            ? "thought"
+            : null;
+      if (kind) {
+        sawStream = true;
+        const text = toolContentText(update!.content);
+        const pending = stream as { kind: "agent" | "thought"; parts: string[]; timestamp?: number } | null;
+        if (pending?.kind === kind) pending.parts.push(text);
+        else {
+          flushStream();
+          stream = { kind, parts: [text], ...(f.timestamp !== undefined ? { timestamp: f.timestamp } : {}) };
+        }
+        continue;
+      }
+    }
+    streamOnly = false;
+    flushStream();
     next = reduceFrame(next, f);
   }
-  return watermark === s.lastSeq ? next : { ...next, lastSeq: watermark };
+  flushStream();
+  const result = watermark === s.lastSeq ? next : { ...next, lastSeq: watermark };
+  if (streamOnly && sawStream) {
+    const kind: TimelineDelta["kind"] =
+      result.items === s.items
+        ? "meta"
+        : result.items.length > s.items.length
+          ? "append"
+          : result.items.length < s.items.length
+            ? "reset"
+            : "update";
+    const changed = kind === "update" && result.items.length > 0 ? [result.items.length - 1] : [];
+    return recordTimelineDelta(s, result, kind, changed);
+  }
+  return recordTimelineDelta(s, result);
 }
 
 /** 「加载更早」:把更早的一段历史帧归约后插到最前。
@@ -693,11 +807,12 @@ export function reduceBatch(s: ChatState, batch: readonly Frame[]): ChatState {
 export function prependHistory(s: ChatState, batch: readonly Frame[]): ChatState {
   const older = reduceBatch(createChatState(), batch);
   if (older.items.length === 0) return s;
-  return {
+  const result = {
     ...s,
     items: [...older.items, ...s.items],
     keyBase: s.keyBase - older.items.length,
   };
+  return recordTimelineDelta(s, result, "prepend", []);
 }
 
 /** 渲染 key:keyBase + 下标(前插历史时二者同步平移,和恒定)。 */

@@ -6,13 +6,14 @@
 // activeSeq 当前项:点列以不透明度差加重当前点,面板项 menu-active +
 // aria-current,打开时当前项滚入视野(移植旧 outline.tsx)。形态差异:
 // 旧「浮窗跟随指针高度」不做——dropdown 锚定已确定面板落点。
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 
-import { fmtCompact } from "@/features/sidebar/listKit";
 import { useI18n } from "@/lib/i18n";
 import type { OutlineItem } from "@/lib/ipc/controls";
 import { ATT_LINE } from "@/lib/protocol/attLine";
 import type { ChatItem } from "@/lib/protocol/types";
+import type { ChatState } from "@/lib/protocol/types";
+import { timelineDeltaOf } from "@/lib/protocol/reduce";
 import { fmtClock } from "@/lib/util/fmt";
 
 const MAX_LABEL = 60;
@@ -30,8 +31,6 @@ export interface OutlineEntry {
   attCount: number;
   /** 当天 HH:MM,跨天带日期(fmtClock);无可靠时间为空。 */
   time: string;
-  /** 该轮助手回复的 token 用量(壳侧 usage 挂帧;已加载进流的轮次才有) */
-  usage?: { input_tokens?: number; output_tokens?: number };
 }
 
 /** 目录 + 流内实时用户消息 → 合并去重的大纲条目。
@@ -40,27 +39,6 @@ export interface OutlineEntry {
  * 跳转锚,两条同 seq 只能定位到同一气泡。目录条目带真实翻页 offset,
  * 流内补的没有(undefined)。 */
 export function outlineEntriesOf(outline: OutlineItem[], items: readonly ChatItem[]): OutlineEntry[] {
-  // 每条用户提问 → 其回合内各助手回复的 token 用量合计(usage 事件挂帧,
-  // 仅已加载进流的轮次有数据)。agent 项不带所属用户 seq,按「用户项之后到
-  // 下一条用户项之前的所有 agent 项」聚合。
-  const usageBySeq = new Map<number, { input_tokens?: number; output_tokens?: number }>();
-  for (let i = 0; i < items.length; i++) {
-    const it = items[i];
-    if (!it || it.kind !== "user") continue;
-    if (it.seq === undefined) continue;
-    let input = 0;
-    let output = 0;
-    for (let j = i + 1; j < items.length; j++) {
-      const nj = items[j];
-      if (!nj || nj.kind === "user") break;
-      if (nj.kind === "agent" && nj.usage) {
-        input += nj.usage.input_tokens ?? 0;
-        output += nj.usage.output_tokens ?? 0;
-      }
-    }
-    if (input + output > 0) usageBySeq.set(it.seq, { input_tokens: input, output_tokens: output });
-  }
-
   const merged: Array<{ seq: number; text: string; timestamp?: number; offset?: number }> = [...outline];
   const seen = new Set(outline.map((o) => o.seq));
   for (const it of items) {
@@ -81,17 +59,61 @@ export function outlineEntriesOf(outline: OutlineItem[], items: readonly ChatIte
     }
     const text = body.join(" ").replace(/\s+/g, " ").trim();
     const label = text.length > MAX_LABEL ? `${text.slice(0, MAX_LABEL)}…` : text;
-    const usage = usageBySeq.get(it.seq);
     out.push({
       seq: it.seq,
       label,
       attCount,
       time: fmtClock(it.timestamp),
       ...(it.offset !== undefined ? { offset: it.offset } : {}),
-      ...(usage ? { usage } : {}),
     });
   }
   return out;
+}
+
+/** agent/thought 流式尾部更新不可能改变提问目录，直接复用上次结果；只有
+ * user 行增删改或目录接口返回新值时才重新扫描。 */
+type ItemProjector = (items: readonly ChatItem[]) => readonly ChatItem[];
+const outlineProjectionCache = new WeakMap<
+  ChatState,
+  { outline: OutlineItem[]; projector?: ItemProjector; entries: OutlineEntry[] }
+>();
+
+function outlineEntriesIncremental(
+  outline: OutlineItem[],
+  state: ChatState,
+  projector?: ItemProjector,
+): OutlineEntry[] {
+  const hit = outlineProjectionCache.get(state);
+  if (hit?.outline === outline && hit.projector === projector) return hit.entries;
+  const delta = timelineDeltaOf(state);
+  const previous = delta ? outlineProjectionCache.get(delta.from) : undefined;
+  if (previous?.outline === outline && previous.projector === projector && delta) {
+    let affectsUsers = delta.kind === "prepend" || delta.kind === "reset";
+    for (const index of delta.changed) {
+      if (delta.from.items[index]?.kind === "user" || state.items[index]?.kind === "user") affectsUsers = true;
+    }
+    if (delta.kind === "append") {
+      for (let index = delta.from.items.length; index < state.items.length; index++) {
+        if (state.items[index]?.kind === "user") affectsUsers = true;
+      }
+    }
+    if (!affectsUsers) {
+      const next = { outline, ...(projector ? { projector } : {}), entries: previous.entries };
+      outlineProjectionCache.set(state, next);
+      return next.entries;
+    }
+  }
+  const entries = outlineEntriesOf(outline, projector ? projector(state.items) : state.items);
+  outlineProjectionCache.set(state, { outline, ...(projector ? { projector } : {}), entries });
+  return entries;
+}
+
+export function useOutlineEntries(
+  outline: OutlineItem[],
+  state: ChatState,
+  projector?: ItemProjector,
+): OutlineEntry[] {
+  return useMemo(() => outlineEntriesIncremental(outline, state, projector), [outline, state, projector]);
 }
 
 /** 点列常驻 + 悬停浮出面板(daisyUI dropdown 外壳,受控 dropdown-open)。
@@ -99,9 +121,8 @@ export function outlineEntriesOf(outline: OutlineItem[], items: readonly ChatIte
  * 容器级 mouseenter/leave 即可管开合(mouseleave 把绝对定位子面板算在内),
  * 旧 200ms 延时收起随空隙一起退役。
  *
- * memo:ChatView 每次按键都因草稿态重渲(useComposer 在彼处),长会话的
- * 大纲上千条,不拦的话每键全量重建一遍点列+面板(空闲打字的 O(轮数)
- * 底噪,2026-08-10)。前提是调用方三个 props 全稳定:entries 已 useMemo,
+ * memo:流式帧仍会高频更新 ChatView；长会话的大纲上千条，不拦的话每批
+ * 都全量重建点列+面板。前提是调用方三个 props 全稳定:entries 已增量缓存,
  * activeSeq 是 state,onJump 必须 useCallback/ref 包稳(见 ChatView)。 */
 export const OutlineNav = memo(function OutlineNav({
   entries,
@@ -117,13 +138,14 @@ export const OutlineNav = memo(function OutlineNav({
   const [open, setOpen] = useState(false);
   const panelRef = useRef<HTMLUListElement>(null);
 
-  // 默认定位到最底部(最新指令):打开面板即停在最新一条上,而不是当前项的
-  // 居中(用户定案 2026-08-14)。只随「打开」滚,打开后自由翻看不打扰。
+  // 当前项始终可见:提问多到面板要内滚时,打开就已经停在「我现在在哪」上
+  // (移植旧 outline.tsx 的居中滚动;jsdom 几何全 0 时是无害空转)
   useEffect(() => {
     const box = panelRef.current;
-    if (!open || !box) return;
-    box.scrollTop = box.scrollHeight;
-  }, [open]);
+    const target = box?.querySelector<HTMLElement>('[aria-current="true"]');
+    if (!open || !box || !target) return;
+    box.scrollTop = Math.max(0, target.offsetTop - box.clientHeight / 2 + target.offsetHeight / 2);
+  }, [open, activeSeq, entries.length]);
 
   // 一条提问的会话不值得占一条轨道
   if (entries.length < 2) return null;
@@ -184,15 +206,7 @@ export const OutlineNav = memo(function OutlineNav({
                   }}
                 >
                   <span className="min-w-0 flex-1 truncate text-left text-xs">{labelOf(e)}</span>
-                  {e.usage && (e.usage.input_tokens ?? 0) + (e.usage.output_tokens ?? 0) > 0 && (
-                    <span
-                      className="shrink-0 font-mono text-[10px] opacity-60"
-                      title={`${t("stats.input")} ${(e.usage.input_tokens ?? 0).toLocaleString("en-US")} · ${t("stats.output")} ${(e.usage.output_tokens ?? 0).toLocaleString("en-US")}`}
-                    >
-                      ↑{fmtCompact(e.usage.input_tokens ?? 0)} ↓{fmtCompact(e.usage.output_tokens ?? 0)}
-                    </span>
-                  )}
-                  {e.time && <span className="shrink-0 text-[10px] opacity-50">{e.time}</span>}
+                  {e.time && <span className="shrink-0 text-2xs opacity-50">{e.time}</span>}
                 </button>
               </li>
             ))}

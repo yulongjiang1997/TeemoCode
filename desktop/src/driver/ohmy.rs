@@ -104,11 +104,6 @@ impl OhmyDriver {
             crate::wsl::host_fs_view(&w.distro, &w.guest_home).to_string_lossy().into_owned()
         })
     }
-
-    /// 本地会话 token 用量统计快照(按天/会话/模型聚合)。
-    pub fn usage_stats(&self) -> Value {
-        self.0.stats.snapshot()
-    }
 }
 
 /// WSL 运行环境上下文(kernel_env=wsl:* 时随引擎启动填入;一次 prepare
@@ -150,8 +145,6 @@ pub(super) struct Inner {
     pub(super) chat_workspaces_dir: PathBuf,
     /// 壳侧审批记忆持久化路径(兼容尾巴,配对 SessionsState::perm_remember)
     pub(super) perm_persist_path: PathBuf,
-    /// 本地会话 token 用量统计(按天/会话/模型;usage 事件记账,落盘 usage-stats.json)
-    pub(super) stats: crate::stats::UsageStats,
     /// WSL 运行环境上下文(本机模式 None;见 WslCtx)
     pub(super) wsl: Option<WslCtx>,
     /// 技能库来源(skills.rs):内置(bundle 资源,可缺)与用户目录,
@@ -159,9 +152,8 @@ pub(super) struct Inner {
     pub(super) skills_builtin_dir: Option<PathBuf>,
     pub(super) skills_user_dir: PathBuf,
     pub(super) skills_defaults_path: PathBuf,
-    /// 技能物化闸:<engine_dir>/skills 是全局一份,"重写目录 → session/create"
-    /// 必须成对不被并发创建打断(引擎 catalog 按创建时刻的目录内容定格)。
-    /// tokio Mutex——守卫要跨 create RPC 的 await 持有。
+    /// 技能物化闸:同一会话的"重写目录 → session/create"必须成对,
+    /// 避免并发切换互相覆盖。目录本身已按 engine session id 隔离。
     pub(super) skills_gate: tokio::sync::Mutex<()>,
 }
 

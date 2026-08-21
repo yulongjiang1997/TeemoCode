@@ -16,8 +16,11 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import {
+  forwardRef,
+  memo,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
@@ -27,15 +30,14 @@ import {
 
 import { useI18n } from "@/lib/i18n";
 import { useEscLayer } from "@/lib/util/escLayer";
-import { sessionCompact, sessionSetMode, sessionSetModel, sessionSetSkills, sessionSetThink } from "@/lib/ipc/controls";
+import { sessionSetMode, sessionSetModel, sessionSetSkills, sessionSetThink } from "@/lib/ipc/controls";
 import { afterEngineReady } from "@/lib/ipc/engine";
-import { modelMenuList, resolveModelName, stripSourceSuffix, stripTierPrefix } from "@/lib/models/modelMenu";
-import { readTeamMode, writeTeamMode } from "@/lib/util/prefs";
-import { gitImport, gitPush } from "@/lib/ipc/git";
+import { modelMenuList, resolveModelName } from "@/lib/models/modelMenu";
 import { modelsList, type ModelInfo, type SessionMeta } from "@/lib/ipc/sessions";
 import { defaultEnabledSkills, skillsList, type SkillInfo } from "@/lib/ipc/skills";
 import { pickAttachmentPaths } from "@/lib/ipc/uploads";
-import type { ChatState, SlashCommand } from "@/lib/protocol/types";
+import type { ChatState, SlashCommand, Usage } from "@/lib/protocol/types";
+import { timelineDeltaOf } from "@/lib/protocol/reduce";
 import { fmtK } from "@/lib/util/fmt";
 import { commandText, createImeGuard, cycleIndex, filterCommands, slashQuery } from "@/lib/util/slash";
 import { ComposerCard, ComposerTextarea, ErrorBar, RunBar, SlashPanel, UsageRing } from "./composerKit";
@@ -50,8 +52,9 @@ function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** 指令队列区:待发送/失败的指令(输入区上方)。折叠只显示首条+暂停/展开;
- *  展开可拖拽排序(仅拖动图标可拖)/点击编辑/移除;失败项带重试。 */
+/** 指令队列区:待发送/执行中/失败的指令(输入区上方)。折叠只显示首条+暂停/
+ * 展开/失败角标;展开可拖拽排序(仅非执行/失败项可拖,落点不会插到执行中前)、
+ * 点击编辑/移除;失败项带重试。队首为执行中,锁定不可拖动/删除/编辑。 */
 function QueueArea({ ctl }: { ctl: ComposerCtl }) {
   const { t } = useI18n();
   const { queue, queueOpen, toggleQueueOpen, paused, togglePaused, retryInstr, removeInstr, reorderInstr, editInstr, clearQueue } = ctl;
@@ -83,7 +86,7 @@ function QueueArea({ ctl }: { ctl: ComposerCtl }) {
         <IconList size={13} stroke={1.75} aria-hidden className="shrink-0 text-base-content/50" />
         <span className="shrink-0 font-medium text-base-content/70">{t("chat.queue.count", { n: queue.length })}</span>
         {paused && <span className="shrink-0 rounded bg-warning/15 px-1 text-[10px] font-medium text-warning">{t("chat.queue.paused")}</span>}
-        <span className={`min-w-0 flex-1 truncate ${first.state === "failed" ? "text-error" : "text-base-content/80"}`}>{first.text}</span>
+        <span className={`min-w-0 flex-1 truncate ${first.state === "failed" ? "text-error" : first.state === "executing" ? "text-info" : "text-base-content/80"}`}>{first.text}</span>
         {failed > 0 && <span className="shrink-0 font-medium text-error">{t("chat.queue.failed", { n: failed })}</span>}
         {pauseBtn}
       </div>
@@ -111,27 +114,28 @@ function QueueArea({ ctl }: { ctl: ComposerCtl }) {
       </div>
       <ul className="flex flex-col gap-0.5">
         {queue.map((item, i) => {
-          // 执行中的指令 = 队首:锁在首位,不可拖动/删除/编辑(其余待发送才可排序)
-          const executing = i === 0;
+          // 队首(执行中)锁住:不可拖动/删除/编辑;其余指令可排序/编辑/移除。
+          // 旧 UI QueueArea 以位置(i===0)判定锁定(队首恒为执行中项),这里保持一致。
+          const locked = i === 0;
           return (
           <li
             key={item.id}
-            className={`flex items-center gap-1.5 rounded px-1.5 py-1 ${item.state === "failed" ? "bg-error/10" : "hover:bg-base-content/5"} ${dragIdx === i ? "opacity-50" : ""}`}
+            className={`flex items-center gap-1.5 rounded px-1.5 py-1 ${item.state === "failed" ? "bg-error/10" : item.state === "executing" ? "bg-info/10" : "hover:bg-base-content/5"} ${dragIdx === i ? "opacity-50" : ""}`}
             onDragOver={(e) => {
-              if (dragIdx !== null && dragIdx !== i && !executing) e.preventDefault();
+              if (dragIdx !== null && dragIdx !== i && !locked) e.preventDefault();
             }}
             onDrop={(e) => {
               e.preventDefault();
-              // 不允许插到执行中指令之前:落点 0 视为落到 1(紧随其后)
-              if (dragIdx !== null && dragIdx !== i) reorderInstr(dragIdx, executing ? Math.max(1, i) : i);
+              // 不允许插到锁住项(执行中/失败)之前:落点若是锁定项,落到它之后
+              if (dragIdx !== null && dragIdx !== i) reorderInstr(dragIdx, locked ? i + 1 : i);
               setDragIdx(null);
             }}
           >
-            {/* 仅此图标可拖(队首执行中不可拖):拖动排序不误触其它区域 */}
+            {/* 仅此图标可拖(pending 才可拖):拖动排序不误触其它区域 */}
             <span
-              draggable={!executing}
-              className={`shrink-0 ${executing ? "text-base-content/20" : "cursor-grab text-base-content/30 hover:text-base-content/60 active:cursor-grabbing"}`}
-              title={executing ? t("chat.queue.executing") : t("chat.queue.drag")}
+              draggable={!locked}
+              className={`shrink-0 ${locked ? "text-base-content/20" : "cursor-grab text-base-content/30 hover:text-base-content/60 active:cursor-grabbing"}`}
+              title={item.state === "executing" ? t("chat.queue.executing") : item.state === "failed" ? t("chat.queue.failedItem") : t("chat.queue.drag")}
               onDragStart={(e) => {
                 e.dataTransfer.effectAllowed = "move";
                 e.dataTransfer.setData("text/plain", String(i));
@@ -142,11 +146,14 @@ function QueueArea({ ctl }: { ctl: ComposerCtl }) {
               <IconGripVertical size={13} stroke={1.75} aria-hidden />
             </span>
             <span className="w-4 shrink-0 text-center tabular-nums text-base-content/40">{i + 1}</span>
-            {executing && (
+            {item.state === "executing" && (
               <span className="shrink-0 text-[10px] font-medium text-info">
                 <span className="status status-info mr-1 motion-safe:animate-pulse" aria-hidden />
                 {t("chat.queue.executing")}
               </span>
+            )}
+            {item.state === "failed" && (
+              <span className="shrink-0 text-[10px] font-medium text-error">{t("chat.queue.failedItem")}</span>
             )}
             {editingId === item.id ? (
               <input
@@ -169,9 +176,9 @@ function QueueArea({ ctl }: { ctl: ComposerCtl }) {
               <button
                 type="button"
                 className="min-w-0 flex-1 truncate text-left text-base-content/80 hover:text-base-content"
-                title={executing ? t("chat.queue.executing") : t("chat.queue.edit")}
+                title={item.state === "executing" ? t("chat.queue.executing") : item.state === "failed" ? t("chat.queue.failedItem") : t("chat.queue.edit")}
                 onClick={() => {
-                  if (!executing) setEditingId(item.id);
+                  if (!locked) setEditingId(item.id);
                 }}
               >
                 {item.text}
@@ -185,9 +192,9 @@ function QueueArea({ ctl }: { ctl: ComposerCtl }) {
             <button
               type="button"
               className="btn btn-ghost btn-square btn-xs shrink-0 text-base-content/50"
-              aria-label={executing ? t("chat.queue.executing") : t("chat.queue.remove")}
-              title={executing ? t("chat.queue.executing") : t("chat.queue.remove")}
-              disabled={executing}
+              aria-label={locked ? t("chat.queue.executing") : t("chat.queue.remove")}
+              title={locked ? t("chat.queue.executing") : t("chat.queue.remove")}
+              disabled={locked}
               onClick={() => removeInstr(item.id)}
             >
               <IconX size={12} stroke={1.75} aria-hidden />
@@ -200,49 +207,109 @@ function QueueArea({ ctl }: { ctl: ComposerCtl }) {
   );
 }
 
-export function Composer({
-  sessionId,
-  state,
-  meta,
-  ctl,
-  fallbackUse,
-  onAfterSend,
-  focusRequest = 0,
-  onFocusRequestHandled,
-}: {
+/** Composer 真正需要的会话投影。草稿更新不得携带整份 ChatState 重走
+ * ChatView/时间线；items 的全量派生也只在 items 引用变化时算一次。 */
+export interface ComposerPresentation {
+  running: boolean;
+  usage: Usage | null;
+  model: string;
+  think: string;
+  permMode: string;
+  commands: SlashCommand[];
+  openPermission: boolean;
+  toolRunning: boolean;
+  roundNo: number;
+}
+
+interface ComposerCounts {
+  users: number;
+  openPermissions: number;
+  runningTools: number;
+}
+
+const presentationCache = new WeakMap<ChatState, { presentation: ComposerPresentation; counts: ComposerCounts }>();
+const countItem = (counts: ComposerCounts, item: ChatState["items"][number] | undefined, direction: 1 | -1) => {
+  if (item?.kind === "user") counts.users += direction;
+  else if (item?.kind === "perm" && item.state === "open") counts.openPermissions += direction;
+  else if (item?.kind === "tool" && item.status === "run") counts.runningTools += direction;
+};
+
+export function composerPresentationOf(state: ChatState): ComposerPresentation {
+  const hit = presentationCache.get(state);
+  if (hit) return hit.presentation;
+  const delta = timelineDeltaOf(state);
+  const previous = delta ? presentationCache.get(delta.from) : undefined;
+  let counts: ComposerCounts;
+  if (previous && delta && delta.kind !== "prepend" && delta.kind !== "reset") {
+    counts = { ...previous.counts };
+    for (const index of delta.changed) {
+      countItem(counts, delta.from.items[index], -1);
+      countItem(counts, state.items[index], 1);
+    }
+    if (delta.kind === "append") {
+      for (let index = delta.from.items.length; index < state.items.length; index++) countItem(counts, state.items[index], 1);
+    }
+  } else {
+    counts = { users: 0, openPermissions: 0, runningTools: 0 };
+    for (const item of state.items) countItem(counts, item, 1);
+  }
+  const nextPresentation: ComposerPresentation = {
+    running: state.running,
+    usage: state.usage,
+    model: state.model,
+    think: state.think,
+    permMode: state.permMode,
+    commands: state.commands,
+    openPermission: counts.openPermissions > 0,
+    toolRunning: counts.runningTools > 0,
+    roundNo: Math.max(1, counts.users),
+  };
+  const old = previous?.presentation;
+  const presentation =
+    old &&
+    old.running === nextPresentation.running &&
+    old.usage === nextPresentation.usage &&
+    old.model === nextPresentation.model &&
+    old.think === nextPresentation.think &&
+    old.permMode === nextPresentation.permMode &&
+    old.commands === nextPresentation.commands &&
+    old.openPermission === nextPresentation.openPermission &&
+    old.toolRunning === nextPresentation.toolRunning &&
+    old.roundNo === nextPresentation.roundNo
+      ? old
+      : nextPresentation;
+  presentationCache.set(state, { presentation, counts });
+  return presentation;
+}
+
+export interface ComposerInputHandle {
+  focus(): void;
+}
+
+interface ComposerProps {
   sessionId: string;
-  state: ChatState;
+  presentation: ComposerPresentation;
   meta: SessionMeta;
   ctl: ComposerCtl;
-  /** 备用模型使用中:主模型选择保持不变,仅标记当前实际用的备用模型 */
-  fallbackUse?: { primary: string; current: string } | null;
   onAfterSend?: () => void;
   focusRequest?: number;
   onFocusRequestHandled?: (request: number) => void;
-}) {
+}
+
+const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Composer({
+  sessionId,
+  presentation,
+  meta,
+  ctl,
+  onAfterSend,
+  focusRequest = 0,
+  onFocusRequestHandled,
+}: ComposerProps, ref) {
   const { t } = useI18n();
   const taRef = useRef<HTMLTextAreaElement | null>(null);
+  useImperativeHandle(ref, () => ({ focus: () => taRef.current?.focus() }), []);
   const imeRef = useRef(createImeGuard());
-  // 团队模式(按会话):开启后发送任务注入团队编排指令
-  const [teamOn, setTeamOn] = useState(() => readTeamMode(sessionId));
-  useEffect(() => setTeamOn(readTeamMode(sessionId)), [sessionId]);
   const [models, setModels] = useState<ModelInfo[]>([]);
-  // 备用模型链(按会话存 localStorage):主模型 key 全部失败后按此顺序自动切换
-  const [fallbackModels, setFallbackModels] = useState<string[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem(`mc.fallbackModels.${sessionId}`) ?? "[]");
-    } catch {
-      return [];
-    }
-  });
-  const changeFallback = (names: string[]) => {
-    setFallbackModels(names);
-    try {
-      localStorage.setItem(`mc.fallbackModels.${sessionId}`, JSON.stringify(names));
-    } catch {
-      // 只丢持久化
-    }
-  };
 
   // 切会话后焦点落到输入框:sessionId 处理同实例内切换;focusRequest 处理
   // 设置/新建/云端视图切回时的重挂载。请求消费后由 App 清零,避免引擎
@@ -331,8 +398,8 @@ export function Composer({
     [t, enabledSkillList],
   );
   const commands = useMemo(
-    () => [...builtinCommands, ...state.commands.filter((c) => !builtinCommands.some((b) => b.name === c.name))],
-    [builtinCommands, state.commands],
+    () => [...builtinCommands, ...presentation.commands.filter((c) => !builtinCommands.some((b) => b.name === c.name))],
+    [builtinCommands, presentation.commands],
   );
   const [slashSuppressed, setSlashSuppressed] = useState(false);
   const [active, setActive] = useState(0);
@@ -371,50 +438,12 @@ export function Composer({
   // 严格比对的话下拉里一项都选不中、来源 tab 也算成空串停在「自定义」,
   // modelThink 同样查不到 → 思考档触发器回落「低」给出错读数。
   // modelMenuList:模型被删/改名后补一条兜底项,否则连"当前用的是哪条"都看不出。
-  const currentModel = resolveModelName(models, state.model || meta.model);
-  // 备用模型使用中:主模型选择保持不变(shownModel = 主),标记条单独提示实际备用
-  const shownModel = fallbackUse ? fallbackUse.primary : currentModel;
-  const menuModels = modelMenuList(models, shownModel);
+  const currentModel = resolveModelName(models, presentation.model || meta.model);
+  const menuModels = modelMenuList(models, currentModel);
   const modelThink = models.find((m) => m.name === currentModel)?.think;
-  const effThink = state.think || meta.think || modelThink || "low";
-  const mode = state.permMode || meta.mode || "default";
+  const effThink = presentation.think || meta.think || modelThink || "low";
+  const mode = presentation.permMode || meta.mode || "default";
   const yolo = mode === "yolo";
-
-  // Git 上传/导入:工作目录文件 ↔ 远程仓库
-  const doGitPush = async () => {
-    const dir = meta.workdir;
-    if (!dir) {
-      ctl.notifyError(t("chat.git.noWorkdir"));
-      return;
-    }
-    try {
-      const url = window.prompt(t("chat.git.pushPrompt"))?.trim() || undefined;
-      const r = await gitPush(dir, url);
-      ctl.notifyError(
-        r.pushed
-          ? t("chat.git.pushOk", { remote: r.remote ?? "", branch: r.branch ?? "", commit: r.commit ?? "" })
-          : t("chat.git.pushCommitted"),
-      );
-    } catch (e) {
-      ctl.notifyError(t("chat.git.pushFailed", { reason: errText(e) }));
-    }
-  };
-
-  const doGitImport = async () => {
-    const dir = meta.workdir;
-    if (!dir) {
-      ctl.notifyError(t("chat.git.noWorkdir"));
-      return;
-    }
-    const url = window.prompt(t("chat.git.importPrompt"))?.trim();
-    if (!url) return;
-    try {
-      const r = await gitImport(dir, url);
-      ctl.notifyError(t("chat.git.importOk", { remote: r.remote ?? "", branch: r.branch ?? "" }));
-    } catch (e) {
-      ctl.notifyError(t("chat.git.importFailed", { reason: errText(e) }));
-    }
-  };
 
   const pickModel = (name: string) => {
     if (!name || name === currentModel) return;
@@ -501,25 +530,19 @@ export function Composer({
   };
 
   // ==== 运行态文案 ====
-  const openPerm = state.items.some((it) => it.kind === "perm" && it.state === "open");
-  const anyToolRunning = state.items.some((it) => it.kind === "tool" && it.status === "run");
-  const runningLabel = openPerm
+  const runningLabel = presentation.openPermission
     ? t("chat.running.waitPerm")
-    : anyToolRunning
+    : presentation.toolRunning
       ? t("chat.running.acting")
       : t("chat.running.thinking");
   // 运行条 detail:「第 N 轮 · X tokens」(旧 UI RunningBar 同款;轮数 = user 项计数)
-  const roundNo = Math.max(1, state.items.filter((it) => it.kind === "user").length);
   const runningDetail =
-    t("chat.running.round", { round: roundNo }) +
-    (state.usage && state.usage.used > 0 ? ` · ${fmtK(state.usage.used)} tokens` : "");
+    t("chat.running.round", { round: presentation.roundNo }) +
+    (presentation.usage && presentation.usage.used > 0 ? ` · ${fmtK(presentation.usage.used)} tokens` : "");
   const usagePct =
-    state.usage && state.usage.size > 0 ? Math.round((state.usage.used / state.usage.size) * 100) : null;
-  const compact = () => {
-    void sessionCompact(sessionId).catch((e: unknown) => {
-      ctl.notifyError(t("chat.compact.failed", { reason: errText(e) }));
-    });
-  };
+    presentation.usage && presentation.usage.size > 0
+      ? Math.round((presentation.usage.used / presentation.usage.size) * 100)
+      : null;
 
   return (
     <div className="flex flex-col gap-2">
@@ -527,7 +550,7 @@ export function Composer({
           soft 底 + 14px 语义图标 + truncate 正文 + 右端关闭 */}
       {ctl.error && <ErrorBar text={ctl.error} onDismiss={ctl.dismissError} />}
 
-      {/* 指令队列:待发送/失败的指令,折叠显示首条,展开可拖拽排序/重试/移除/编辑 */}
+      {/* 指令队列:待发送/执行中/失败的指令,折叠显示首条,展开可拖拽排序/重试/移除/编辑 */}
       {ctl.queue.length > 0 && <QueueArea ctl={ctl} />}
 
       {/* 输入卡外框(形态收口在 composerKit:出血/聚焦边线/禁挂 dropdown 类
@@ -539,7 +562,7 @@ export function Composer({
         )}
 
         {/* 运行条:一行紧凑态——spinner + 文案 + 停止 icon 按钮 */}
-        {state.running && <RunBar label={runningLabel} detail={runningDetail} stopLabel={t("chat.stop")} onStop={ctl.stop} />}
+        {presentation.running && <RunBar label={runningLabel} detail={runningDetail} stopLabel={t("chat.stop")} onStop={ctl.stop} />}
 
         {(ctl.uploads.length > 0 || ctl.atts.length > 0) && (
           <div className="flex flex-wrap gap-2 px-3 pt-2">
@@ -569,7 +592,7 @@ export function Composer({
         <ComposerTextarea
           taRef={taRef}
           aria-label={t("chat.composer")}
-          placeholder={state.running ? t("chat.composerPlaceholderRunning") : t("chat.composerPlaceholder")}
+          placeholder={presentation.running ? t("chat.composerPlaceholderRunning") : t("chat.composerPlaceholder")}
           value={ctl.draft}
           onChange={(e) => ctl.setDraft(e.target.value)}
           onCompositionEnd={(e) => imeRef.current.markEnd(e.timeStamp)}
@@ -608,86 +631,34 @@ export function Composer({
             skills={skills}
             enabled={enabledSkills}
             onChange={pickSkills}
-            disabled={state.running}
-            title={state.running ? t("chat.switchWhileRunning") : t("chat.skills.tip")}
+            disabled={presentation.running}
+            title={presentation.running ? t("chat.switchWhileRunning") : t("chat.skills.tip")}
           />
           <ThinkMenu
             current={effThink}
             onPick={pickThink}
-            disabled={state.running}
-            title={state.running ? t("chat.switchWhileRunning") : t("chat.think.tip")}
+            disabled={presentation.running}
+            title={presentation.running ? t("chat.switchWhileRunning") : t("chat.think.tip")}
           />
           <ModelMenu
             models={menuModels}
-            current={shownModel}
+            current={currentModel}
             onPick={pickModel}
-            disabled={state.running}
-            title={state.running ? t("chat.switchWhileRunning") : t("chat.model.tip")}
-            fallbackModels={fallbackModels}
-            onFallbackChange={changeFallback}
+            disabled={presentation.running}
+            title={presentation.running ? t("chat.switchWhileRunning") : t("chat.model.tip")}
           />
-          {/* 备用模型使用中标记:主模型选择不变,这里提示当前实际用的是备用 */}
-          {fallbackUse && (
-            <span
-              className="badge badge-outline badge-sm shrink-0 border-amber-500/60 text-[10px] text-amber-600/90"
-              title={t("chat.model.fallbackInUse")}
-            >
-              {t("chat.model.fallbackInUse")}: {stripSourceSuffix(stripTierPrefix(fallbackUse.current))}
-            </span>
-          )}
-
-          {/* 团队模式开关:开启后发送任务注入团队编排指令(协调者分派成员) */}
-          <button
-            type="button"
-            className={`badge badge-sm shrink-0 cursor-pointer transition-colors ${
-              teamOn ? "border-primary/60 bg-primary/10 text-primary" : "badge-outline text-base-content/40 hover:text-base-content/60"
-            }`}
-            title={t("chat.team.toggleTip")}
-            onClick={() => setTeamOn((on) => {
-              const next = !on;
-              writeTeamMode(sessionId, next);
-              return next;
-            })}
-          >
-            {t("chat.team.mode")}
-          </button>
-
-          {/* Git 上传/导入:把工作目录文件推到远程 / 从远程拉取到工作目录 */}
-          <div className="dropdown dropdown-end dropdown-top shrink-0">
-            <button
-              type="button"
-              tabIndex={0}
-              className="badge badge-sm cursor-pointer badge-outline text-base-content/40 hover:text-base-content/60"
-              title={t("chat.git.menu")}
-            >
-              {t("chat.git.menu")}
-            </button>
-            <ul tabIndex={0} className="dropdown-content menu z-50 mt-1 w-52 rounded-box border border-base-300 bg-base-100 p-1 shadow-lg">
-              <li>
-                <button type="button" className="text-xs" onClick={() => void doGitPush()}>
-                  {t("chat.git.push")}
-                </button>
-              </li>
-              <li>
-                <button type="button" className="text-xs" onClick={() => void doGitImport()}>
-                  {t("chat.git.import")}
-                </button>
-              </li>
-            </ul>
-          </div>
 
           {/* 布局规范:上下文用量是输入侧元信息,归 composer 集群右端
               (形态收口在 composerKit/UsageRing) */}
           <UsageRing
             pct={usagePct}
             label={t("chat.contextUsage")}
-            onCompact={compact}
             tip={
-              usagePct !== null && state.usage
+              usagePct !== null && presentation.usage
                 ? t("chat.usageTip", {
                     pct: usagePct,
-                    used: fmtK(state.usage.used),
-                    size: fmtK(state.usage.size),
+                    used: fmtK(presentation.usage.used),
+                    size: fmtK(presentation.usage.size),
                   })
                 : t("chat.usageEmpty")
             }
@@ -706,4 +677,8 @@ export function Composer({
       </ComposerCard>
     </div>
   );
-}
+});
+
+/** ChatState 的流式尾部变化会让 LocalComposerHost 轻量重跑，但只要输入态与
+ * ComposerPresentation 没变，输入框子树完全跳过提交。 */
+export const Composer = memo(ComposerImpl);
