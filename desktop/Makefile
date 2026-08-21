@@ -141,6 +141,7 @@ windows-release: EXTRA_TAURI_CONFIG := --config tauri.release.conf.json
 # 跑完(曾漏掉,本地出包会把占位版本 26071401 烙进安装包名、updater 文件名
 # 和 latest-windows.json)。用 $(MAKE) 串行而非并列先决条件——并列先决在
 # make -j 下无顺序保证。
+# 发布流程(含签名私钥位置、Gitee 更新源、v0.1.x 手动发布步骤)见 desktop/RELEASE.md
 windows-release:
 	$(MAKE) check-signing
 	$(MAKE) set-release-version
