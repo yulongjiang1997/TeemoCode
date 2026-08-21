@@ -913,6 +913,7 @@ export const en: Record<MessageKey, string> = {
   "account.loginHint": "Sign in to Baizhi Cloud to sync the models and MCP configs under your account.",
   "account.tab.wechat": "WeChat QR",
   "account.tab.sms": "SMS code",
+  "account.tab.password": "Password",
   "account.wechat.qrAlt": "Sign in with WeChat QR code",
   "account.wechat.loading": "Loading QR code…",
   "account.wechat.waiting": "Scan with WeChat to sign in",

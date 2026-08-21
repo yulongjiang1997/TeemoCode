@@ -930,6 +930,7 @@ export const zh = {
   "account.loginHint": "登录百智云账号后,可同步账号下的模型与 MCP 配置。",
   "account.tab.wechat": "微信扫码",
   "account.tab.sms": "短信验证码",
+  "account.tab.password": "密码",
   "account.wechat.qrAlt": "微信扫码登录",
   "account.wechat.loading": "二维码加载中…",
   "account.wechat.waiting": "用微信扫一扫登录",

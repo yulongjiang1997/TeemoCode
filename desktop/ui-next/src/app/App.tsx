@@ -601,6 +601,7 @@ export function App() {
       offOpenSettings();
       offMcpReloaded();
       offMcpTimeout();
+      offMcTransport();
       shellTimers.current.forEach(window.clearTimeout);
       shellTimers.current.clear();
       noticeTimers.current.forEach(window.clearTimeout);
