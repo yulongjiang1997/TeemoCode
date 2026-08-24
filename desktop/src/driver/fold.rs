@@ -253,13 +253,15 @@ impl TurnFold {
         self.tail = None;
     }
 
-    /// usage 事件(input/output tokens)挂到本轮最后一条 agent_message 帧上,
+    /// usage 事件(input/output tokens)挂到本轮最后一条流式帧上,
     /// 供 UI 在每条助手消息旁展示其 token 用量。provider 在同一次模型调用
     /// 的头尾可能各发一次 usage,后到者覆盖前值(取该调用的最终计数)。
+    /// 同时匹配 agent_message_chunk 和 agent_thought_chunk(纯思考轮)。
     pub(super) fn attach_usage(&mut self, input: u64, output: u64) {
         for f in self.out.iter_mut().rev() {
             let Some(data) = f.get("data") else { continue };
-            if session_update(data) != Some("agent_message_chunk") {
+            let Some(su) = session_update(data) else { continue };
+            if su != "agent_message_chunk" && su != "agent_thought_chunk" {
                 continue;
             }
             if let Some(update) = f.get_mut("data").and_then(|d| d.get_mut("update")).and_then(|u| u.as_object_mut()) {
