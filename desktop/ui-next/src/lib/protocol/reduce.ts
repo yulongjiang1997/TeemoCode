@@ -182,13 +182,18 @@ function appendStream(
   return { ...s, items, streamKind: kind };
 }
 
-/** session-usage 实时补丁:把用量挂到最后一条助手消息上(壳在 usage 事件
- * 晚于流式帧时单独发 session-usage;回放路径则靠帧内 usage 字段走 appendStream)。 */
+/** session-usage 实时补丁:把用量挂到最后一条 agent 消息上(壳在 usage 事件
+ * 晚于流式帧时单独发 session-usage;回放路径则靠帧内 usage 字段走 appendStream)。
+ * 注意:多轮对话中最后一条可能是 tool/sys/turn-end 等,必须倒序查找最近的一条 agent。 */
 export function patchLastAgentUsage(s: ChatState, input: number, output: number): ChatState {
   const items = s.items.slice();
-  const last = items.at(-1);
-  if (last?.kind === "agent") {
-    items[items.length - 1] = { ...last, usage: { input_tokens: input, output_tokens: output } };
+  // 倒序查找最后一条有 token 用量的 agent 消息(多轮对话可能以 tool/sys 结尾)
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i];
+    if (item?.kind === "agent") {
+      items[i] = { ...item, usage: { input_tokens: input, output_tokens: output } };
+      break;
+    }
   }
   return { ...s, items };
 }
