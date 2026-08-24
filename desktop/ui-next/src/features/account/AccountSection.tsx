@@ -647,7 +647,9 @@ function ServiceCard({
           <span className="truncate text-xs text-base-content/40">{t("account.service.switchNote")}</span>
         </div>
       )}
-      <div className="divide-y divide-base-300">{rows.map(renderRow)}</div>
+      <div className="divide-y divide-base-300 overflow-x-hidden overflow-y-auto px-3 py-2">
+        {rows.map(renderRow)}
+      </div>
     </div>
   );
 }

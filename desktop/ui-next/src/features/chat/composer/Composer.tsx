@@ -715,7 +715,7 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
             >
               {t("chat.git.menu")}
             </button>
-            <ul tabIndex={0} className="dropdown-content menu flex-nowrap [&>li]:flex-nowrap z-50 mt-1 w-52 rounded-box border border-base-300 bg-base-100 p-1 shadow-lg">
+            <ul tabIndex={0} className="dropdown-content menu flex-nowrap [&_li]:flex-nowrap z-50 mt-1 w-52 rounded-box border border-base-300 bg-base-100 p-1 shadow-lg">
               <li>
                 <button type="button" className="text-xs" onClick={() => void doGitPush()}>
                   {t("chat.git.push")}

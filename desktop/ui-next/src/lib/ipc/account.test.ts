@@ -59,6 +59,7 @@ describe("account 契约:浏览器模式降级", () => {
       () => mcCheckin(),
       () => mcModelsSync(),
       () => mcModelsRevoke(),
+      () => disconnectMc(),
       () => disconnectMc(0),
     ];
     for (const act of actions) {
@@ -138,19 +139,19 @@ describe("account 契约:MonkeyCode 命令名与载荷形状", () => {
 describe("disconnectMc:壳内原子断开", () => {
   it("正常断开只调用一次 mc_disconnect", async () => {
     const calls = stubInvoke(() => Promise.resolve({ ok: true }));
-    expect(await disconnectMc(7)).toEqual({});
+    expect(await disconnectMc(7)).toEqual({ cancelled: false });
     expect(calls).toEqual([{ cmd: "mc_disconnect", args: { expectedGeneration: 7 } }]);
   });
 
   it("吊销失败由壳在同一应答中返回 warning", async () => {
     const calls = stubInvoke(() => Promise.resolve({ ok: true, warning: "网络不可达" }));
-    expect(await disconnectMc(0)).toEqual({ warning: "网络不可达" });
+    expect(await disconnectMc(0)).toEqual({ warning: "网络不可达", cancelled: false });
     expect(calls.map((c) => c.cmd)).toEqual(["mc_disconnect"]);
   });
 
   it("切服时壳取消旧断开", async () => {
     stubInvoke(() => Promise.resolve({ ok: false, cancelled: true }));
-    expect(await disconnectMc(0)).toEqual({ cancelled: true });
+    expect(await disconnectMc(0)).toEqual({ cancelled: true, warning: "服务配置已切换,断开已取消,请重试" });
   });
 
   it("壳命令失败照常上抛", async () => {

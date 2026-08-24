@@ -167,7 +167,7 @@ export function AboutSection() {
           {update.history && update.history.length > 0 && (
             <div>
               <div className="mb-1 text-xs font-bold">{t("settings.about.history")}</div>
-              <ul className="flex max-h-48 flex-col gap-2 overflow-y-auto pr-1">
+              <ul className="flex max-h-48 flex-col gap-2 overflow-x-hidden overflow-y-auto pr-1">
                 {update.history.map((h) => (
                   <li key={h.version} className="text-xs">
                     <span className="font-mono font-semibold text-base-content/90">{h.version}</span>
