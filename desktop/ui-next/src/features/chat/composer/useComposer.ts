@@ -383,9 +383,10 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
       return;
     }
 
-    // 队列非空 + 未暂停 + 队头未失败 → 投出队头下一条
+    // 队列非空 + 未暂停 + 队头未失败/执行中 → 投出队头下一条
+    // 注意:队头可能是 executing(从持久化恢复的),要跳过等本轮结束再处理
     const next = queue[0];
-    if (!next || paused || next.state === "failed") return;
+    if (!next || paused || next.state === "failed" || next.state === "executing") return;
     const forSid = sessionId;
     inFlightRef.current = next;
     deliveredTurnRef.current = true;
