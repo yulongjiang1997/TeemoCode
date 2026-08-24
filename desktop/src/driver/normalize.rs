@@ -468,6 +468,18 @@ impl Inner {
                 if let Some((used, window)) = context_usage_fields(&data) {
                     self.push_usage(&sid, used, window);
                 }
+                // 同时附加 input/output tokens 到当前轮的最后一条 agent 消息:
+                // 供 UI 在大纲面板展示每轮的 token 用量
+                if let Some((input, output)) = data.get("input_tokens").and_then(|v| v.as_u64())
+                    .zip(data.get("output_tokens").and_then(|v| v.as_u64()))
+                {
+                    if input > 0 || output > 0 {
+                        let mut sessions = self.sess.sessions.lock_ok();
+                        if let Some(s) = sessions.get_mut(&sid) {
+                            s.fold.attach_usage(input, output);
+                        }
+                    }
+                }
                 // applyCompaction 的 wire 顺序是 final compaction → usage →
                 // session/compact RPC 应答。手动操作以 usage 作为事件通路的
                 // 最后一帧再收轮：这样 RPC 应答丢失/超时仍可完成，又不会把
