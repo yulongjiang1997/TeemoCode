@@ -74,6 +74,8 @@ export interface ComposerCtl {
   reorderInstr(from: number, to: number): void;
   editInstr(id: string, text: string): void;
   clearQueue(): void;
+  /** 从 localStorage 恢复持久化队列:按文本去重后追加到队尾(补投 effect 会自动投)。 */
+  restorePersisted(items: QueueItem[]): void;
   atts: ComposerAtt[];
   removeAtt(index: number): void;
   uploads: ComposerUpload[];
@@ -437,6 +439,15 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
     flushBlockedRef.current = false;
     setQueue((cur) => cur.filter((x) => x.state === "failed" || x.state === "executing")); // 只清待发送,执行中/失败项留给用户处置
   }, []);
+  /** 从 localStorage 恢复持久化队列:按文本去重后追加到队尾(补投 effect 会自动投)。 */
+  const restorePersisted = useCallback((items: QueueItem[]) => {
+    if (!items.length) return;
+    setQueue((cur) => {
+      const have = new Set(cur.map((x) => x.text));
+      const add = items.filter((x) => !have.has(x.text) && x.text.trim());
+      return [...cur, ...add];
+    });
+  }, []);
   // 暂停态 ref:启动(解除暂停)时据此判断是否要「失败项回队」
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
@@ -559,6 +570,7 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
       reorderInstr,
       editInstr,
       clearQueue,
+      restorePersisted,
       atts,
       removeAtt,
       uploads,
@@ -582,6 +594,7 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
       reorderInstr,
       editInstr,
       clearQueue,
+      restorePersisted,
       atts,
       removeAtt,
       uploads,

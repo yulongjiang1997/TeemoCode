@@ -6,11 +6,13 @@ import type { SessionMeta } from "@/lib/ipc/sessions";
 import type { ChatState } from "@/lib/protocol/types";
 import { Composer, composerPresentationOf, type ComposerInputHandle } from "./Composer";
 import { useComposer } from "./useComposer";
+import type { QueueItem } from "./useComposer";
 
 export interface LocalComposerHandle {
   addFiles(files: File[]): Promise<void>;
   notifyError(message: string): void;
   focus(): void;
+  restorePersisted(items: QueueItem[]): void;
 }
 
 export const LocalComposerHost = forwardRef<
@@ -40,8 +42,9 @@ export const LocalComposerHost = forwardRef<
       addFiles: ctl.addFiles,
       notifyError: ctl.notifyError,
       focus: () => inputRef.current?.focus(),
+      restorePersisted: ctl.restorePersisted,
     }),
-    [ctl.addFiles, ctl.notifyError],
+    [ctl.addFiles, ctl.notifyError, ctl.restorePersisted],
   );
 
   return (

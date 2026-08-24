@@ -23,6 +23,7 @@ import {
 import { useApprovalHotkeys } from "@/app/shortcuts";
 import { fmtCompact, showTokenPopover } from "@/features/sidebar/listKit";
 import { useI18n } from "@/lib/i18n";
+import type { QueueItem } from "@/features/chat/composer/useComposer";
 import { sessionOutline, sessionSetModel, type OutlineItem } from "@/lib/ipc/controls";
 import { getConfig } from "@/lib/ipc/config";
 import { repoChanges, repoReveal } from "@/lib/ipc/repo";
@@ -37,6 +38,7 @@ import {
   markProgrammaticScroll,
 } from "@/lib/util/scrollAnchor";
 import { renameIsNoop } from "@/lib/util/rename";
+import { readComposerQueue, writeComposerQueue } from "@/lib/util/prefs";
 import { createImeGuard } from "@/lib/util/slash";
 import { useEscLayer } from "@/lib/util/escLayer";
 import { useDismiss } from "@/lib/util/useDismiss";
@@ -747,6 +749,33 @@ export function ChatView({
     setMenuOpen(false);
     setConfirmDelete(false);
   };
+  // ==== 队列持久化:按钮 + 面板(见 ChatView.tsx 头注) ====
+  const [queuePersistOpen, setQueuePersistOpen] = useState(false);
+  const [queuePersistItems, setQueuePersistItems] = useState<QueueItem[]>([]);
+  // 每打开一次:抓一次快照 + 当前未投;关闭时落盘(覆盖旧档)
+  const openQueuePersist = () => {
+    if (!composerRef.current) return;
+    setQueuePersistOpen(true);
+    composerRef.current.restorePersisted([]);
+    const saved = readComposerQueue(meta.id);
+    if (saved) setQueuePersistItems(saved.queue);
+  };
+  const closeQueuePersist = () => {
+    writeComposerQueue(meta.id, { queue: queuePersistItems, paused: false });
+    setQueuePersistOpen(false);
+  };
+  const removeQueuePersistItem = (idx: number) => setQueuePersistItems((cur) => cur.filter((_, i) => i !== idx));
+  const moveQueuePersistItem = (idx: number, delta: number) =>
+    setQueuePersistItems((cur) => {
+      const pos = idx + delta;
+      if (pos < 0 || pos >= cur.length) return cur;
+      const arr = [...cur];
+      if (arr[idx] && arr[pos]) {
+        [arr[idx], arr[pos]] = [arr[pos], arr[idx]];
+      }
+      return arr;
+    });
+  useEscLayer(queuePersistOpen, () => { closeQueuePersist(); return true; });
   useDismiss(menuOpen, menuBoxRef, closeMenu);
   useEffect(() => {
     // 切会话收起菜单(确认态属于上一个会话)
@@ -1151,6 +1180,25 @@ export function ChatView({
                   {meta.archived ? t("chat.menu.unarchive") : t("chat.menu.archive")}
                 </button>
               </li>
+              {/* 队列持久化:查看/编辑 localStorage 的待投队列并落盘;运行中置灰,
+                  防止用户以为在调任务 */}
+              <li
+                role="none"
+                className={state.running ? "menu-disabled" : ""}
+                title={state.running ? t("chat.menu.queueDisabled") : undefined}
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={state.running}
+                  onClick={() => {
+                    closeMenu();
+                    openQueuePersist();
+                  }}
+                >
+                  {t("chat.menu.queuePersist")}
+                </button>
+              </li>
               {/* 运行中不许删(壳/内核也会拒),置灰并说明原因——光是点不动
                   等于没有解释(旧 UI viewChrome.tsx DeleteMenuItem 的
                   title「运行中,请先停止」随迁)。title 挂 li 而非 disabled
@@ -1300,6 +1348,14 @@ export function ChatView({
         />
       )}
       {childId && <ChildSessionModal id={childId} workdir={meta.workdir} onClose={() => setChildId(null)} />}
+      {queuePersistOpen && (
+        <QueuePersistModal
+          items={queuePersistItems}
+          onClose={closeQueuePersist}
+          onRemove={removeQueuePersistItem}
+          onMove={moveQueuePersistItem}
+        />
+      )}
     </main>
   );
 }
@@ -1350,6 +1406,68 @@ function ChildSessionModal({ id, workdir, onClose }: { id: string; workdir?: str
         <div data-chat-log="" className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
           <LogList state={state} sessionId={id} readonly uploadUrl={uploadUrl} workdir={workdir} loadFullTool={loadFullTool} />
         </div>
+      </div>
+      <div className="modal-backdrop cursor-pointer" onClick={onClose} aria-hidden />
+    </div>
+  );
+}
+
+/** 队列持久化面板:从 localStorage 加载待投指令并允许按文本去重/排序。
+ * 关闭时落盘覆盖;补投 effect(useComposer) 会在新面板打开期间自动消费
+ * 当前会话的 pending 项(快照来自上一个打开窗口,仅用于「回显旧队列」)。 */
+function QueuePersistModal({
+  items,
+  onClose,
+  onRemove,
+  onMove,
+}: {
+  items: QueueItem[];
+  onClose: () => void;
+  onRemove: (idx: number) => void;
+  onMove: (idx: number, delta: number) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="modal modal-open" role="dialog" aria-label={t("chat.queue.persistTitle")}>
+      <div className="modal-box flex max-h-[84vh] w-[min(640px,92vw)] max-w-[min(640px,92vw)] flex-col gap-3 p-5">
+        <div className="flex shrink-0 items-center gap-2">
+          <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">{t("chat.queue.persistTitle")}</h2>
+          <button type="button" aria-label={t("chat.dismiss")} title={t("chat.dismiss")} className="btn btn-ghost btn-square btn-xs" onClick={onClose}>
+            <IconX size={14} stroke={1.75} aria-hidden />
+          </button>
+        </div>
+        <div className="flex-1 overflow-x-hidden overflow-y-auto rounded-box border border-base-200 bg-base-100 p-2">
+          {items.length === 0 ? (
+            <p className="py-6 text-center text-xs text-base-content/50">{t("chat.queue.persistEmpty")}</p>
+          ) : (
+            <ul className="space-y-1">
+              {items.map((it, idx) => (
+                <li key={`${it.text.slice(0, 24)}-${idx}`} className="flex items-start gap-1">
+                  <textarea
+                    rows={1}
+                    className="textarea textarea-ghost flex-1 resize-none text-xs leading-snug"
+                    value={it.text}
+                    onChange={() => {
+                      // 内联修改:直接写本地状态(不经过 composer,由父层在 close 时落盘)
+                      onRemove(idx);
+                      onMove(idx, 0);
+                    }}
+                  />
+                  <button type="button" className="btn btn-ghost btn-square btn-xs shrink-0" onClick={() => onMove(idx, -1)} disabled={idx === 0}>
+                    ↑
+                  </button>
+                  <button type="button" className="btn btn-ghost btn-square btn-xs shrink-0" onClick={() => onMove(idx, 1)} disabled={idx === items.length - 1}>
+                    ↓
+                  </button>
+                  <button type="button" className="btn btn-ghost btn-square btn-xs shrink-0 text-error" onClick={() => onRemove(idx)}>
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <p className="text-xs text-base-content/50">{t("chat.queue.persistHint")}</p>
       </div>
       <div className="modal-backdrop cursor-pointer" onClick={onClose} aria-hidden />
     </div>
