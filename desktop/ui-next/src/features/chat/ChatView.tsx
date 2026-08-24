@@ -20,12 +20,17 @@ import {
 } from "react";
 
 import { useApprovalHotkeys } from "@/app/shortcuts";
+import { fmtCompact, showTokenPopover } from "@/features/sidebar/listKit";
 import { useI18n } from "@/lib/i18n";
-import { sessionOutline, type OutlineItem } from "@/lib/ipc/controls";
+import { sessionOutline, sessionSetModel, type OutlineItem } from "@/lib/ipc/controls";
+import { getConfig } from "@/lib/ipc/config";
 import { repoChanges, repoReveal } from "@/lib/ipc/repo";
-import { sessionFrame, sessionPatch, type SessionMeta } from "@/lib/ipc/sessions";
+import { sessionFrame, sessionPatch, sessionSend, type SessionMeta } from "@/lib/ipc/sessions";
+import { b64encode } from "@/lib/protocol/codec";
+import { buildSessionUsageMap, usageStats, type TokenUsage } from "@/lib/ipc/usageStats";
 import { onNativeFileDrop, uploadFileURL } from "@/lib/ipc/uploads";
 import { workspaceRelativePath } from "@/lib/util/markdownPaths";
+import { nextFallbackModel } from "@/lib/util/fallbackModel";
 import {
   consumeProgrammaticScroll,
   markProgrammaticScroll,
@@ -40,6 +45,56 @@ import { OutlineNav, useOutlineEntries } from "./OutlineNav";
 import { TaskPanel } from "./TaskPanel";
 import { FilesDrawer } from "@/features/files/FilesDrawer";
 import { useSessionFeed } from "./useSessionFeed";
+import { stripSourceSuffix, stripTierPrefix } from "@/lib/models/modelMenu";
+
+/** 判断引擎错误消息是否为 key 相关(key 无效/额度/限流):这类错误才触发
+ *  多密钥自动切换。别的错误(网络/业务)不轮换,留给人工处理。 */
+function isKeyError(reason: string): boolean {
+  const r = reason.toLowerCase();
+  if (r.includes("api error ")) {
+    return r.includes("401") || r.includes("403");
+  }
+  return (
+    r.includes("invalid api key") ||
+    r.includes("api key is invalid") ||
+    r.includes("insufficient_quota") ||
+    r.includes("insufficient quota") ||
+    r.includes("quota exceeded") ||
+    r.includes("permission denied") ||
+    r.includes("authentication failed") ||
+    (r.includes("unauthorized") && (r.includes("invalid") || r.includes("api key") || r.includes('{"code"')))
+  );
+}
+
+/** 错误摘要:切换提示只显示关键信息,不刷整段报错。 */
+function shortReason(reason: string): string {
+  const r = reason.toLowerCase();
+  if (r.includes("401") || r.includes("unauthorized") || r.includes("invalid api key") || r.includes("authentication")) {
+    return "401 认证失败";
+  }
+  if (r.includes("403") || r.includes("forbidden") || r.includes("permission denied")) {
+    return "403 无权限";
+  }
+  if (r.includes("insufficient_quota") || r.includes("insufficient quota")) {
+    return "额度不足";
+  }
+  if (r.includes("rate limit") || r.includes("rate_limit") || r.includes("429")) {
+    return "触发限流";
+  }
+  const first = (reason.split("\n")[0] ?? "").trim();
+  if (first) return first.length > 40 ? `${first.slice(0, 40)}…` : first;
+  return "key 错误";
+}
+
+/** 读取会话的备用模型链(与 composer 同一 localStorage 键)。 */
+function readFallbackModels(sid: string): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(`mc.fallbackModels.${sid}`) ?? "[]");
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
 
 const PIN_THRESHOLD = 40; // 距底多少像素内算"贴底"(scroll 只做进入贴底的单向判定)
 const SCROLLBAR_EDGE = 18; // 视口右缘按下算滚动条拖拽意图,解除跟随
@@ -108,6 +163,46 @@ export function ChatView({
   const restoreLoadRef = useRef<string | null>(null);
   const restoreRO = useRef<ResizeObserver | null>(null);
   const saveTimer = useRef(0);
+
+  // 头部 token 用量:会话切换时抓一次(usage 事件由壳记账;子代理已归并进父任务)
+  const [usage, setUsage] = useState<TokenUsage | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void usageStats()
+      .then((data) => {
+        if (!alive) return;
+        console.log("[token-debug] usageStats data:", JSON.stringify(data).slice(0, 200));
+        setUsage(buildSessionUsageMap(data.sessions).get(meta.id) ?? null);
+      })
+      .catch((e) => console.error("[token-debug] usageStats error:", e));
+    return () => {
+      alive = false;
+    };
+  }, [meta.id]);
+
+  // ===== 备用模型链:key 失败 → 切下一个备用模型 → 重发该指令 =====
+  const rotatingRef = useRef(false);
+  // 本轮失败是否已处理(一回合发多个 task-error,只处理一次) + 本轮是否含 key 错误
+  const failHandledRef = useRef(false);
+  // 正在使用的备用模型(一次性:任务结束/耗尽恢复主模型,不永久切换)。
+  // ref 供逻辑用,state 供显示标记 + 主模型选择不变。
+  const fallbackRef = useRef<{ primary: string; current: string } | null>(null);
+  const [fallbackUse, setFallbackUse] = useState<{ primary: string; current: string } | null>(null);
+  // 任务级隔离:ChatView 以 epoch 为 key(不随会话重挂),切会话必须重置备用
+  // 状态(标记条/显示的主模型),并恢复上一个会话的主模型,不能跨任务泄漏。
+  const prevSidRef = useRef(meta.id);
+  useEffect(() => {
+    if (prevSidRef.current !== meta.id) {
+      const prevSid = prevSidRef.current;
+      prevSidRef.current = meta.id;
+      if (fallbackRef.current) {
+        const fb = fallbackRef.current;
+        fallbackRef.current = null;
+        setFallbackUse(null);
+        void sessionSetModel(prevSid, fb.primary);
+      }
+    }
+  }, [meta.id]);
 
   const rowNode = (rowKey: string): HTMLElement | null => {
     const root = scrollRef.current;
@@ -527,6 +622,97 @@ export function ChatView({
     setPlanDismissed(false);
   }, [meta.id]);
 
+  // ===== 备用模型链切换效果 =====
+  // 已处理过的错误 seq:切换成功后历史错误帧还在 items 里,没有这道闸会反复
+  // 触发轮换 + 重发(用户报障:切换成功还一直重发消息)
+  const handledErrSeqRef = useRef(0);
+  useEffect(() => {
+    if (state.running) {
+      failHandledRef.current = false; // 新轮开始,复位"本轮失败已处理"
+      return;
+    }
+    if (failHandledRef.current || rotatingRef.current) return; // 本轮已处理/正在轮换
+    // 失败判定不看 running/turnEnded:壳把 task-error 与 task-ended 几乎同时
+    // 发出,React 批量渲染时 turnEnded 已为 true——原逻辑在 turnEnded 分支
+    // 直接复位返回,轮换永远不触发。这里统一查错误项再决定。
+    const errItem = [...state.items].reverse().find((it) => it.kind === "sys" && it.error);
+    const reason =
+      errItem && errItem.kind === "sys" && errItem.params?.reason ? String(errItem.params.reason) : "";
+    const errSeq = (errItem as { seq?: number } | undefined)?.seq;
+    const isNewKeyError = isKeyError(reason) && errSeq !== undefined && errSeq !== handledErrSeqRef.current;
+    if (!isNewKeyError) {
+      // 任务成功 / 非 key 错误 / 历史错误重放:正在用备用则恢复主模型(一次性语义)
+      if (fallbackRef.current) {
+        const fb = fallbackRef.current;
+        fallbackRef.current = null;
+        setFallbackUse(null);
+        void sessionSetModel(meta.id, fb.primary);
+      }
+      return;
+    }
+    failHandledRef.current = true; // 本轮失败只处理一次(一回合可能多个 task-error)
+    handledErrSeqRef.current = errSeq ?? 0;
+    void (async () => {
+      rotatingRef.current = true;
+      try {
+        const cfg = await getConfig();
+        // meta.model 是显示名(model_name),配置里可能叫 model(ID)或 name(显示名)
+        const model = cfg?.models?.find((m) => m.model === meta.model || m.name === meta.model);
+        if (!model) return;
+        let lastText = "";
+        for (let i = state.items.length - 1; i >= 0; i--) {
+          const it = state.items[i];
+          if (it?.kind === "user") {
+            lastText = it.text;
+            break;
+          }
+        }
+        const resend = async () => {
+          if (lastText) await sessionSend(meta.id, "user-input", { content: b64encode(lastText) });
+        };
+        // 备用模型链(单 key 失败直接切下一个备用模型)。
+        // 备用链存显示名,但 meta.model 可能是引擎返回的模型 ID——直接 indexOf
+        // 匹配不上就永远取第一个备用(无限重试)。这里按"配置项身份"匹配:
+        // 当前模型对应的配置项在备用链中的位置 + 1。
+        const backups = readFallbackModels(meta.id);
+        const resolveModel = (v: string) => cfg?.models?.find((m) => m.model === v || m.name === v)?.model;
+        // 当前实际用的模型:优先取我们自己记的备用(fallbackRef)。会话 meta.model
+        // 切换后可能不刷新(还是主模型名),用它匹配链会永远停在第一个备用。
+        const current = fallbackRef.current?.current ?? meta.model;
+        const nextName = nextFallbackModel(current, backups, resolveModel);
+        const nextCfg = cfg?.models?.find((m) => m.model === nextName || m.name === nextName);
+        // 主模型 = 会话当前模型(壳在 session_set_model 后发 session-model
+        // 事件,meta.model 是新鲜的)。进入备用链后固定用首次认定的主模型,
+        // 任务结束恢复回它。
+        const primary = fallbackRef.current?.primary ?? meta.model;
+        // 无进展判定按"名字是否还是自己"(多个模型可能共用同一 model 字段,
+        // 按 model 比较会把不同备用误判成同一个)。链走完/没进展:恢复主模型。
+        if (!nextName || !nextCfg || nextName === current) {
+          // 没有备用/配置缺失/没进展:恢复主模型,留失败态
+          if (fallbackRef.current) {
+            const fb = fallbackRef.current;
+            fallbackRef.current = null;
+            setFallbackUse(null);
+            void sessionSetModel(meta.id, fb.primary);
+          }
+          return;
+        }
+        fallbackRef.current = { primary, current: nextName };
+        setFallbackUse({ primary, current: nextName });
+        // 切换提示:主模型 + 错误摘要 + 当前改用哪个备用模型(一次性)
+        composerRef.current?.notifyError(
+          t("chat.fallbackSwitched", { model: primary, reason: shortReason(reason), next: nextName }),
+        );
+        await sessionSetModel(meta.id, nextName);
+        await resend();
+      } catch {
+        // 轮换失败:交给失败态人工处理
+      } finally {
+        rotatingRef.current = false;
+      }
+    })();
+  }, [state.running, state.turnEnded, state.items, meta.id, meta.model]);
+
   // ==== 头部 ⋯ 菜单(重命名/归档/删除):受控 dropdown,外点/Esc 即收
   // (pointerdown 判定,不吃 WebKitGTK 按钮不获焦的亏;Esc window capture
   // 截断,不落进全局审批链——手法与 Composer 两个 picker 一致,见
@@ -789,7 +975,7 @@ export function ChatView({
 
   return (
     <main
-      className="relative flex min-w-0 flex-1 flex-col bg-base-100"
+      className="relative flex min-w-0 flex-1 flex-col bg-mask-100"
       onDragEnter={onDragEnter}
       onDragOver={(e) => e.preventDefault()}
       onDragLeave={onDragLeave}
@@ -863,6 +1049,18 @@ export function ChatView({
             </h1>
           )}
         </div>
+        {/* 任务 token 用量:标题右侧,点击弹明细(输入/输出/调用 + 按模型) */}
+        {usage && usage.input + usage.output > 0 && (
+          <button
+            type="button"
+            aria-label={t("stats.title")}
+            title={t("stats.title")}
+            className="shrink-0 rounded bg-base-200/70 px-1.5 font-mono text-[11px] leading-5 text-base-content/55 hover:text-base-content"
+            onClick={(e) => showTokenPopover({ x: e.clientX, y: e.clientY }, usage)}
+          >
+            {fmtCompact(usage.input + usage.output)}
+          </button>
+        )}
         {/* §7:indicator 壳与徽标是头部非交互子节点,必须各自带拖拽属性 */}
         <div data-tauri-drag-region="" className={changesCount > 0 ? "indicator" : undefined}>
           {changesCount > 0 && (
@@ -1039,8 +1237,16 @@ export function ChatView({
         </div>
       </div>
       )}
+      {/* 备用模型使用中:会话区域提示(主模型报错自动切换,任务结束恢复) */}
+      {fallbackUse && (
+        <div className="flex justify-center py-1" role="status">
+          <span className="badge badge-outline badge-sm border-amber-500/60 text-[10px] text-amber-600/90">
+            ⚠️ {t("chat.model.fallbackInUse")}: {stripSourceSuffix(stripTierPrefix(fallbackUse.current))}
+          </span>
+        </div>
+      )}
 
-      <OutlineNav entries={entries} activeSeq={activeSeq ?? undefined} onJump={onJump} />
+      <OutlineNav entries={entries} activeSeq={activeSeq ?? undefined} onJump={onJump} usage={usage} />
       </div>
 
       {/* 无上边线(2026-08-13 用户定案):composer 卡自带边框已是分界,

@@ -8,6 +8,7 @@
 // 旧「浮窗跟随指针高度」不做——dropdown 锚定已确定面板落点。
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 
+import { fmtCompact, showTokenPopover } from "@/features/sidebar/listKit";
 import { useI18n } from "@/lib/i18n";
 import type { OutlineItem } from "@/lib/ipc/controls";
 import { ATT_LINE } from "@/lib/protocol/attLine";
@@ -15,6 +16,7 @@ import type { ChatItem } from "@/lib/protocol/types";
 import type { ChatState } from "@/lib/protocol/types";
 import { timelineDeltaOf } from "@/lib/protocol/reduce";
 import { fmtClock } from "@/lib/util/fmt";
+import type { TokenUsage } from "@/lib/ipc/usageStats";
 
 const MAX_LABEL = 60;
 const MAX_RAIL_DOTS = 12;
@@ -128,11 +130,14 @@ export const OutlineNav = memo(function OutlineNav({
   entries,
   activeSeq,
   onJump,
+  usage,
 }: {
   entries: OutlineEntry[];
   /** 当前视口所在的那次提问(点列加重 + 面板内高亮),ChatView 滚动跟踪。 */
   activeSeq?: number;
   onJump: (seq: number, offset?: number) => void;
+  /** 当前会话 token 用量,传 null 则不展示徽标。 */
+  usage?: TokenUsage | null;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -140,12 +145,13 @@ export const OutlineNav = memo(function OutlineNav({
 
   // 当前项始终可见:提问多到面板要内滚时,打开就已经停在「我现在在哪」上
   // (移植旧 outline.tsx 的居中滚动;jsdom 几何全 0 时是无害空转)
+  // 面板打开且 activeSeq 变化时也要更新位置(用户跳转后不关面板)
   useEffect(() => {
     const box = panelRef.current;
     const target = box?.querySelector<HTMLElement>('[aria-current="true"]');
-    if (!open || !box || !target) return;
+    if (!box || !target) return;
     box.scrollTop = Math.max(0, target.offsetTop - box.clientHeight / 2 + target.offsetHeight / 2);
-  }, [open, activeSeq, entries.length]);
+  }, [open, activeSeq]);
 
   // 一条提问的会话不值得占一条轨道
   if (entries.length < 2) return null;
@@ -167,9 +173,6 @@ export const OutlineNav = memo(function OutlineNav({
       aria-label={t("chat.outline.label")}
       className="pointer-events-none absolute inset-y-0 left-1 z-10 flex w-5 items-center"
     >
-      {/* dropdown 外壳保持 overflow visible，避免裁剪绝对定位面板。外壳明确
-          继承 nav（即消息区域）的高度，因此点列与面板都可用 max-h-full 严格
-          受消息区域约束，不再拿 viewport 高度估算。 */}
       <div
         className={`dropdown dropdown-right dropdown-center pointer-events-auto flex h-full items-center ${open ? "dropdown-open" : ""}`}
         onMouseLeave={() => setOpen(false)}
@@ -179,7 +182,6 @@ export const OutlineNav = memo(function OutlineNav({
           className="mc-no-scrollbar flex max-h-full flex-col items-center gap-1.5 overflow-x-hidden overflow-y-auto px-1.5 py-2"
         >
           {railEntries.map((e) => (
-            // 当前点满不透明度、其余压暗:只用透明度差表达「在哪」,不换色
             <span
               key={e.seq}
               data-outline-dot={e.seq}
@@ -207,6 +209,19 @@ export const OutlineNav = memo(function OutlineNav({
                 >
                   <span className="min-w-0 flex-1 truncate text-left text-xs">{labelOf(e)}</span>
                   {e.time && <span className="shrink-0 text-2xs opacity-50">{e.time}</span>}
+                  {usage && usage.input + usage.output > 0 && (
+                    <span
+                      className="shrink-0 rounded bg-base-200/70 px-1 font-mono text-[10px] leading-4 text-base-content/55 hover:text-base-content cursor-pointer"
+                      onMouseDown={(ev) => ev.preventDefault()}
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        showTokenPopover({ x: ev.clientX, y: ev.clientY }, usage);
+                      }}
+                      title={t("stats.title")}
+                    >
+                      {fmtCompact(usage.input + usage.output)}
+                    </span>
+                  )}
                 </button>
               </li>
             ))}
