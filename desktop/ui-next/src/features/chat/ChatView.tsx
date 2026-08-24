@@ -171,10 +171,9 @@ export function ChatView({
     void usageStats()
       .then((data) => {
         if (!alive) return;
-        console.log("[token-debug] usageStats data:", JSON.stringify(data).slice(0, 200));
         setUsage(buildSessionUsageMap(data.sessions).get(meta.id) ?? null);
       })
-      .catch((e) => console.error("[token-debug] usageStats error:", e));
+      .catch(() => {});
     return () => {
       alive = false;
     };

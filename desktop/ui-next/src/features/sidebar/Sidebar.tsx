@@ -1100,7 +1100,7 @@ export function Sidebar({
         console.log("[sidebar-token] usageStats:", data.sessions?.length, "sessions");
         setUsageMap(buildSessionUsageMap(data.sessions)); // 子代理已归入父任务
       })
-      .catch((e) => console.error("[sidebar-token] error:", e));
+      .catch(() => {});
     return () => {
       alive = false;
     };

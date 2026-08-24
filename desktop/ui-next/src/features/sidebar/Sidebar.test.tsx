@@ -12,6 +12,13 @@ import type { TodoItem } from "@/lib/ipc/todos";
 import type { SidebarActions } from "./Sidebar";
 import { Sidebar } from "./Sidebar";
 
+vi.mock("@/lib/ipc/usageStats", () => {
+  const usageStats = vi.fn(() => Promise.resolve({ totals: { input_tokens: 0, output_tokens: 0, calls: 0 }, days: [], models: [], sessions: [] } as any));
+  const buildSessionUsageMap = vi.fn(() => new Map());
+  const sumUsage = vi.fn(() => null);
+  return { usageStats, buildSessionUsageMap, sumUsage };
+});
+
 afterEach(() => {
   localStorage.clear();
   delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
