@@ -1530,7 +1530,8 @@ fn main() {
             todos::todo_upload_path,
             todos::todo_upload_read,
             todos::todo_upload_delete,
-            todos::todo_uploads_dir
+            todos::todo_uploads_dir,
+            driver::usagestats
         ])
         .setup(|app| {
             // 配置损坏且无有效备份时绝不能按默认值继续并覆写；仍创建错误页

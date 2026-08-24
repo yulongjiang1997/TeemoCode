@@ -40,7 +40,7 @@ export async function usageStats(): Promise<UsageStats> {
   if (!inDesktopShell()) {
     return { totals: { input_tokens: 0, output_tokens: 0, calls: 0 }, days: [], models: [], sessions: [] };
   }
-  return invoke<UsageStats>("usage_stats");
+  return invoke<UsageStats>("usagestats");
 }
 
 /** 行尾/头部展示用的 token 用量(子代理已归并进父任务)。 */

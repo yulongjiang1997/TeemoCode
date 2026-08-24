@@ -10,7 +10,7 @@ afterEach(() => {
 
 function stubShell(data: unknown) {
   (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
-    core: { invoke: (cmd: string) => (cmd === "usage_stats" ? Promise.resolve(data) : Promise.resolve(null)) },
+    core: { invoke: (cmd: string) => (cmd === "usagestats" ? Promise.resolve(data) : Promise.resolve(null)) },
   };
 }
 

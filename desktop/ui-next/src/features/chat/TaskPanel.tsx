@@ -2,7 +2,7 @@
 // 收起 = 一行摘要(进度 + 当前项),展开 = 限高滚动的只读勾选清单 +
 // 并行子代理执行卡;整卡随 plan 全量重发更新(daisyUI collapse 强制开合态)。
 import { IconChevronRight, IconX } from "@tabler/icons-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
 import type { PlanEntry, ToolItem } from "@/lib/protocol/types";
@@ -44,9 +44,18 @@ export function TaskPanel({
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
+  const scrollRef = useRef<HTMLUListElement>(null);
+  const currentRef = useRef<HTMLLIElement>(null);
   const done = entries.filter((e) => e.status === "completed").length;
   const current =
     entries.find((e) => e.status === "in_progress") ?? entries.find((e) => e.status === "pending");
+
+  // 展开时或当前任务变化时,滚动到当前项
+  useEffect(() => {
+    if (open && currentRef.current?.scrollIntoView) {
+      currentRef.current.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [open, current]);
   // 依赖提示(上游 todo_update 携带 id/depends_on 时):id → 序号,blocked
   // 缺省按「有未完成依赖」本地推导(旧 taskPanel.tsx 同款)
   const byId = new Map(entries.map((e, i) => [e.id ?? "", { idx: i + 1, entry: e }]));
@@ -104,12 +113,13 @@ export function TaskPanel({
         </button>
       </div>
       <div className="collapse-content px-3">
-        <ul className="flex max-h-44 flex-col gap-1 overflow-x-hidden overflow-y-auto pb-1 text-xs">
+        <ul ref={scrollRef} className="flex max-h-44 flex-col gap-1 overflow-x-hidden overflow-y-auto pb-1 text-xs">
           {entries.map((e, i) => {
             const blocked = isBlocked(e);
             const hint = depHint(e);
+            const isCurrent = current?.id != null ? e.id === current.id : e === current;
             return (
-              <li key={e.id ?? i} className="flex items-start gap-2">
+              <li key={e.id ?? i} ref={isCurrent ? currentRef : undefined} className="flex items-start gap-2">
                 <input
                   type="checkbox"
                   className="checkbox checkbox-xs mt-px shrink-0"
@@ -144,7 +154,7 @@ export function TaskPanel({
             <div className="mb-1 text-[10px] font-bold text-base-content/50">
               {t("chat.plan.subagents", { n: subagents.length })}
             </div>
-            <ul className="flex max-h-36 flex-col gap-1 overflow-y-auto">
+            <ul className="flex max-h-36 flex-col gap-1 overflow-x-hidden overflow-y-auto">
               {subagents.map((s) => {
                 const preview = feedLastText(s);
                 return (

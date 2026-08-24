@@ -386,7 +386,7 @@ export function UsageStatsView() {
   }
 
   return (
-    <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable] bg-base-100/70 px-6 py-5 backdrop-blur-xs">
+    <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable] bg-mask-100 px-6 py-5">
       <div className="mx-auto flex max-w-3xl flex-col gap-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">

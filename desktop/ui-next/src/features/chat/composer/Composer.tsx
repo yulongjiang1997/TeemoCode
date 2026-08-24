@@ -32,7 +32,9 @@ import { useI18n } from "@/lib/i18n";
 import { useEscLayer } from "@/lib/util/escLayer";
 import { sessionSetMode, sessionSetModel, sessionSetSkills, sessionSetThink } from "@/lib/ipc/controls";
 import { afterEngineReady } from "@/lib/ipc/engine";
+import { gitImport, gitPush } from "@/lib/ipc/git";
 import { modelMenuList, resolveModelName } from "@/lib/models/modelMenu";
+import { readTeamMode, writeTeamMode } from "@/lib/util/prefs";
 import { modelsList, type ModelInfo, type SessionMeta } from "@/lib/ipc/sessions";
 import { defaultEnabledSkills, skillsList, type SkillInfo } from "@/lib/ipc/skills";
 import { pickAttachmentPaths } from "@/lib/ipc/uploads";
@@ -310,6 +312,9 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
   useImperativeHandle(ref, () => ({ focus: () => taRef.current?.focus() }), []);
   const imeRef = useRef(createImeGuard());
   const [models, setModels] = useState<ModelInfo[]>([]);
+  // 团队模式(按会话):开启后发送任务注入团队编排指令
+  const [teamOn, setTeamOn] = useState(() => readTeamMode(sessionId));
+  useEffect(() => setTeamOn(readTeamMode(sessionId)), [sessionId]);
 
   // 切会话后焦点落到输入框:sessionId 处理同实例内切换;focusRequest 处理
   // 设置/新建/云端视图切回时的重挂载。请求消费后由 App 清零,避免引擎
@@ -444,6 +449,42 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
   const effThink = presentation.think || meta.think || modelThink || "low";
   const mode = presentation.permMode || meta.mode || "default";
   const yolo = mode === "yolo";
+
+  // Git 上传/导入:工作目录文件 ↔ 远程仓库
+  const doGitPush = async () => {
+    const dir = meta.workdir;
+    if (!dir) {
+      ctl.notifyError(t("chat.git.noWorkdir"));
+      return;
+    }
+    try {
+      const url = window.prompt(t("chat.git.pushPrompt"))?.trim() || undefined;
+      const r = await gitPush(dir, url);
+      ctl.notifyError(
+        r.pushed
+          ? t("chat.git.pushOk", { remote: r.remote ?? "", branch: r.branch ?? "", commit: r.commit ?? "" })
+          : t("chat.git.pushCommitted"),
+      );
+    } catch (e) {
+      ctl.notifyError(t("chat.git.pushFailed", { reason: errText(e) }));
+    }
+  };
+
+  const doGitImport = async () => {
+    const dir = meta.workdir;
+    if (!dir) {
+      ctl.notifyError(t("chat.git.noWorkdir"));
+      return;
+    }
+    const url = window.prompt(t("chat.git.importPrompt"))?.trim();
+    if (!url) return;
+    try {
+      const r = await gitImport(dir, url);
+      ctl.notifyError(t("chat.git.importOk", { remote: r.remote ?? "", branch: r.branch ?? "" }));
+    } catch (e) {
+      ctl.notifyError(t("chat.git.importFailed", { reason: errText(e) }));
+    }
+  };
 
   const pickModel = (name: string) => {
     if (!name || name === currentModel) return;
@@ -647,6 +688,46 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
             disabled={presentation.running}
             title={presentation.running ? t("chat.switchWhileRunning") : t("chat.model.tip")}
           />
+
+          {/* 团队模式开关:开启后发送任务注入团队编排指令(协调者分派成员) */}
+          <button
+            type="button"
+            className={`badge badge-sm shrink-0 cursor-pointer transition-colors ${
+              teamOn ? "border-primary/60 bg-primary/10 text-primary" : "badge-outline text-base-content/40 hover:text-base-content/60"
+            }`}
+            title={t("chat.team.toggleTip")}
+            onClick={() => setTeamOn((on) => {
+              const next = !on;
+              writeTeamMode(sessionId, next);
+              return next;
+            })}
+          >
+            {t("chat.team.mode")}
+          </button>
+
+          {/* Git 上传/导入:把工作目录文件推到远程 / 从远程拉取到工作目录 */}
+          <div className="dropdown dropdown-end dropdown-top shrink-0">
+            <button
+              type="button"
+              tabIndex={0}
+              className="badge badge-sm cursor-pointer badge-outline text-base-content/40 hover:text-base-content/60"
+              title={t("chat.git.menu")}
+            >
+              {t("chat.git.menu")}
+            </button>
+            <ul tabIndex={0} className="dropdown-content menu flex-nowrap [&>li]:flex-nowrap z-50 mt-1 w-52 rounded-box border border-base-300 bg-base-100 p-1 shadow-lg">
+              <li>
+                <button type="button" className="text-xs" onClick={() => void doGitPush()}>
+                  {t("chat.git.push")}
+                </button>
+              </li>
+              <li>
+                <button type="button" className="text-xs" onClick={() => void doGitImport()}>
+                  {t("chat.git.import")}
+                </button>
+              </li>
+            </ul>
+          </div>
 
           {/* 布局规范:上下文用量是输入侧元信息,归 composer 集群右端
               (形态收口在 composerKit/UsageRing) */}

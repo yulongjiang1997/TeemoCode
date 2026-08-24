@@ -1097,9 +1097,10 @@ export function Sidebar({
     void usageStats()
       .then((data) => {
         if (!alive) return;
+        console.log("[sidebar-token] usageStats:", data.sessions?.length, "sessions");
         setUsageMap(buildSessionUsageMap(data.sessions)); // 子代理已归入父任务
       })
-      .catch(() => {});
+      .catch((e) => console.error("[sidebar-token] error:", e));
     return () => {
       alive = false;
     };

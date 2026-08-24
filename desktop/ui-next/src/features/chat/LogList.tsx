@@ -26,6 +26,7 @@ import { THINK_KEY } from "@/lib/protocol/reduce";
 import type { ChatItem, ChatState, Frame, PermItem } from "@/lib/protocol/types";
 import { presentToolCall } from "@/lib/tools/toolLabels";
 import { thoughtLiveSummary, thoughtMarkdown, thoughtSummary } from "@/lib/util/thoughtMarkdown";
+import { fmtCompact } from "@/features/sidebar/listKit";
 import { AskCard } from "./cards/AskCard";
 import { PermCard } from "./cards/PermCard";
 import { statusDot } from "./cards/statusDot";
@@ -33,6 +34,12 @@ import { ToolCard } from "./cards/ToolCard";
 import { MessageTime } from "./MessageTime";
 import { useTimelineProjection } from "./timeline/useTimelineProjection";
 import { useTimelineWindow } from "./timeline/useTimelineWindow";
+
+/** 剥掉发送时注入的团队编排块([mc-team]…[/mc-team]),消息气泡只显示原文。 */
+function stripTeamPreamble(text: string): string {
+  const m = text.match(/^\[mc-team\][\s\S]*?\[\/mc-team\]\n*\s*/);
+  return m ? text.slice(m[0].length) : text;
+}
 
 /** 用户气泡:正文 + 附件呈现(旧 UI logView 的信息布局)。附件两个来源互斥:
  * 本地会话走正文附件行约定(uploadUrl 回读工作区,点图看大图/点文件下载),
@@ -52,7 +59,7 @@ function UserBubble({
   const [zoomUrl, setZoomUrl] = useState<string | null>(null); // 云端图:直链
   const { body, images, files } = uploadUrl
     ? splitAttachments(item.text)
-    : { body: item.text, images: [] as string[], files: [] as string[] };
+    : { body: stripTeamPreamble(item.text), images: [] as string[], files: [] as string[] };
   // 归约层对缺名附件留空串(不产成品文案),展示名在这儿兜底
   const attName = (a: { filename: string }) => a.filename || t("common.unnamedFile");
   const atts = item.attachments ?? [];
@@ -208,7 +215,9 @@ function renderItem(item: ChatItem, o: RenderOpts) {
   switch (item.kind) {
     case "user":
       return <UserBubble item={item} flash={o.flash} uploadUrl={o.uploadUrl} />;
-    case "agent":
+    case "agent": {
+      const u = item.usage;
+      const hasUsage = !!u && (u.input_tokens ?? 0) + (u.output_tokens ?? 0) > 0;
       // 时间绝对定位在块顶空隙(悬停显影,不占流式高度)
       return (
         <div className="group relative flex flex-col">
@@ -219,8 +228,18 @@ function renderItem(item: ChatItem, o: RenderOpts) {
             onLocalLink={o.onLocalLink}
             deferMermaid={o.streaming}
           />
+          {/* 本条消息的 token 用量(壳侧 usage 事件挂帧;回放/重启后可见) */}
+          {hasUsage && (
+            <div
+              className="mt-1 self-start rounded bg-base-200/70 px-1.5 py-px font-mono text-[10px] leading-4 text-base-content/45"
+              title={`${o.t("stats.input")} ${(u!.input_tokens ?? 0).toLocaleString("en-US")} · ${o.t("stats.output")} ${(u!.output_tokens ?? 0).toLocaleString("en-US")}`}
+            >
+              ↑{fmtCompact(u!.input_tokens ?? 0)} ↓{fmtCompact(u!.output_tokens ?? 0)}
+            </div>
+          )}
         </div>
       );
+    }
     case "thought":
       // 与助手块同构:时间线在块顶空隙
       return (

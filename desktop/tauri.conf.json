@@ -128,7 +128,7 @@
             "allow-upload-file-path",
             "allow-upload-finish",
             "allow-upload-read",
-            "allow-usage-stats",
+            "allow-usagestats",
             "allow-window-system-menu",
             "allow-wsl-workdir-base",
             "core:default",
