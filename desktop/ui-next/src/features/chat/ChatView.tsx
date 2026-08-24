@@ -44,7 +44,7 @@ import { useEscLayer } from "@/lib/util/escLayer";
 import { useDismiss } from "@/lib/util/useDismiss";
 import { LocalComposerHost, type LocalComposerHandle } from "./composer/LocalComposerHost";
 import { LogList, type LogListHandle } from "./LogList";
-import { OutlineNav, useOutlineEntries } from "./OutlineNav";
+import { OutlineNav, outlineEntriesOf } from "./OutlineNav";
 import { TaskPanel } from "./TaskPanel";
 import { FilesDrawer } from "@/features/files/FilesDrawer";
 import { useSessionFeed } from "./useSessionFeed";
@@ -181,28 +181,6 @@ export function ChatView({
       alive = false;
     };
   }, [meta.id]);
-
-  // per-seq 用量:从 state.items 里用户消息对应的 AgentItem 中提取,用于 OutlineNav 条目级展示
-  const seqUsage = useMemo<Map<number, TokenUsage>>(() => {
-    const m = new Map<number, TokenUsage>();
-    for (const item of state.items) {
-      if (item.kind !== "user" || item.seq === undefined) continue;
-      // 找紧随其后的第一条 agent 帧,取其 usage
-      const idx = state.items.indexOf(item);
-      for (let j = idx + 1; j < state.items.length; j++) {
-        const next = state.items[j];
-        if (!next || next.kind !== "agent" || !next.usage) continue;
-        m.set(item.seq!, {
-          input: next.usage.input_tokens ?? 0,
-          output: next.usage.output_tokens ?? 0,
-          calls: 1,
-          models: [],
-        });
-        break;
-      }
-    }
-    return m;
-  }, [state.items]);
 
   // ===== 备用模型链:key 失败 → 切下一个备用模型 → 重发该指令 =====
   const rotatingRef = useRef(false);
@@ -820,7 +798,7 @@ export function ChatView({
       alive = false;
     };
   }, [state.running, meta.id]);
-  const entries = useOutlineEntries(outline, state);
+  const entries = useMemo(() => outlineEntriesOf(outline, state.items), [outline, state.items]);
 
   // 切回一个停在早期历史的任务时,session_open 只给尾部窗口。等尾窗落地后
   // 用记忆里的稳定 user seq 找大纲 offset 并自动补页；补页提交后上方的
@@ -1316,7 +1294,7 @@ export function ChatView({
         </div>
       )}
 
-      <OutlineNav entries={entries} activeSeq={activeSeq ?? undefined} onJump={onJump} seqUsage={seqUsage} />
+      <OutlineNav entries={entries} activeSeq={activeSeq ?? undefined} onJump={onJump} />
       </div>
 
       {/* 无上边线(2026-08-13 用户定案):composer 卡自带边框已是分界,
