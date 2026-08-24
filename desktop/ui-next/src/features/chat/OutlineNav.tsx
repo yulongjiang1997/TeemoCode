@@ -146,12 +146,22 @@ export const OutlineNav = memo(function OutlineNav({
   // 当前项始终可见:提问多到面板要内滚时,打开就已经停在「我现在在哪」上
   // (移植旧 outline.tsx 的居中滚动;jsdom 几何全 0 时是无害空转)
   // 面板打开且 activeSeq 变化时也要更新位置(用户跳转后不关面板)
+  // 注意:activeSeq 初始为 null,此时应滚动到最底部(最新一轮)
   useEffect(() => {
     if (!open) return;
     const box = panelRef.current;
-    const target = box?.querySelector<HTMLElement>('[aria-current="true"]');
-    if (!box || !target) return;
-    box.scrollTop = Math.max(0, target.offsetTop - box.clientHeight / 2 + target.offsetHeight / 2);
+    if (!box) return;
+    // 等待 DOM 更新后再计算位置
+    const updateScroll = () => {
+      const target = box.querySelector<HTMLElement>('[aria-current="true"]');
+      if (target) {
+        box.scrollTop = Math.max(0, target.offsetTop - box.clientHeight / 2 + target.offsetHeight / 2);
+      } else {
+        // activeSeq 为 null 时,滚动到最底部(最新一轮)
+        box.scrollTop = box.scrollHeight;
+      }
+    };
+    updateScroll();
   }, [open, activeSeq]);
 
   // 一条提问的会话不值得占一条轨道
