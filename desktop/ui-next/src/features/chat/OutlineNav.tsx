@@ -130,14 +130,14 @@ export const OutlineNav = memo(function OutlineNav({
   entries,
   activeSeq,
   onJump,
-  usage,
+  seqUsage,
 }: {
   entries: OutlineEntry[];
   /** 当前视口所在的那次提问(点列加重 + 面板内高亮),ChatView 滚动跟踪。 */
   activeSeq?: number;
   onJump: (seq: number, offset?: number) => void;
-  /** 当前会话 token 用量,传 null 则不展示徽标。 */
-  usage?: TokenUsage | null;
+  /** per-seq token 用量,来自 ChatView 从 state.items 聚合;传 null 则不展示徽标。 */
+  seqUsage?: Map<number, TokenUsage> | null;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -147,6 +147,7 @@ export const OutlineNav = memo(function OutlineNav({
   // (移植旧 outline.tsx 的居中滚动;jsdom 几何全 0 时是无害空转)
   // 面板打开且 activeSeq 变化时也要更新位置(用户跳转后不关面板)
   useEffect(() => {
+    if (!open) return;
     const box = panelRef.current;
     const target = box?.querySelector<HTMLElement>('[aria-current="true"]');
     if (!box || !target) return;
@@ -194,7 +195,7 @@ export const OutlineNav = memo(function OutlineNav({
         {open && (
           <ul
             ref={panelRef}
-            className="dropdown-content menu max-h-full w-64 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto rounded-box bg-base-100 p-2 shadow-sm"
+            className="dropdown-content menu max-h-full w-80 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto rounded-box bg-base-100 p-2 shadow-sm"
           >
             {entries.map((e) => (
               <li key={e.seq}>
@@ -208,18 +209,18 @@ export const OutlineNav = memo(function OutlineNav({
                   }}
                 >
                   <span className="min-w-0 flex-1 truncate text-left text-xs">{labelOf(e)}</span>
-                  {e.time && <span className="shrink-0 text-2xs opacity-50">{e.time}</span>}
-                  {usage && usage.input + usage.output > 0 && (
+                  {e.time && <span className="shrink-0 text-[10px] opacity-50">{e.time}</span>}
+                  {seqUsage?.get(e.seq) && (
                     <span
-                      className="shrink-0 rounded bg-base-200/70 px-1 font-mono text-[10px] leading-4 text-base-content/55 hover:text-base-content cursor-pointer"
+                      className="shrink-0 rounded bg-base-200/70 px-1 font-mono text-[9px] leading-4 text-base-content/55 hover:text-base-content cursor-pointer"
                       onMouseDown={(ev) => ev.preventDefault()}
                       onClick={(ev) => {
                         ev.stopPropagation();
-                        showTokenPopover({ x: ev.clientX, y: ev.clientY }, usage);
+                        showTokenPopover({ x: ev.clientX, y: ev.clientY }, seqUsage.get(e.seq)!);
                       }}
                       title={t("stats.title")}
                     >
-                      {fmtCompact(usage.input + usage.output)}
+                      {fmtCompact(seqUsage.get(e.seq)!.input + seqUsage.get(e.seq)!.output)}
                     </span>
                   )}
                 </button>
