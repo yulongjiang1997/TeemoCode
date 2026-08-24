@@ -1,0 +1,192 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "TeemoCode-Debug",
+  "mainBinaryName": "TeemoCode-Debug",
+  "version": "0.1.15",
+  "identifier": "com.teemocode.debug",
+  "build": {
+    "frontendDist": "uidist",
+    "beforeBuildCommand": {
+      "script": "npm ci && npm run build",
+      "cwd": "ui-next"
+    }
+  },
+  "app": {
+    "windows": [],
+    "macOSPrivateApi": true,
+    "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPDATA/sounds/**"
+        ]
+      },
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; media-src 'self' asset: http://asset.localhost; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src 'none'",
+      "dangerousDisableAssetCspModification": [
+        "style-src"
+      ],
+      "capabilities": [
+        {
+          "identifier": "main-app",
+          "description": "主窗口(壳内置 UI + 错误页):会话/引擎/云端全量 IPC、配置读写、原生目录选择",
+          "windows": [
+            "main"
+          ],
+          "permissions": [
+            "allow-baizhi-login",
+            "allow-baizhi-logout",
+            "allow-baizhi-send-code",
+            "allow-baizhi-status",
+            "allow-baizhi-sync",
+            "allow-baizhi-wechat-poll",
+            "allow-baizhi-wechat-start",
+            "allow-browser-repair",
+            "allow-browser-status",
+            "allow-cloud-ws-close",
+            "allow-cloud-ws-open",
+            "allow-cloud-ws-send",
+            "allow-engine-caps",
+            "allow-engine-restart",
+            "allow-engine-status",
+            "allow-export-engine-log",
+            "allow-get-config",
+            "allow-git-import",
+            "allow-git-push",
+            "allow-host-info",
+            "allow-import-mc-apply",
+            "allow-import-mc-scan",
+            "allow-import-mc-scan-dir",
+            "allow-import-sound",
+            "allow-import-task-data",
+            "allow-list-wsl-distros",
+            "allow-mc-checkin",
+            "allow-mc-disconnect",
+            "allow-mc-file-download",
+            "allow-mc-file-download-cancel",
+            "allow-mc-file-upload",
+            "allow-mc-login",
+            "allow-mc-logout",
+            "allow-mc-models-revoke",
+            "allow-mc-models-sync",
+            "allow-mc-password-login",
+            "allow-mc-projects",
+            "allow-mc-status",
+            "allow-mc-task-create",
+            "allow-mc-task-delete",
+            "allow-mc-task-info",
+            "allow-mc-task-options",
+            "allow-mc-task-rounds",
+            "allow-mc-task-stop",
+            "allow-mc-task-user-inputs",
+            "allow-mc-tasks",
+            "allow-mc-terminal-list",
+            "allow-mc-upload",
+            "allow-mc-usage",
+            "allow-models-list",
+            "allow-open-app-dir",
+            "allow-open-devtools",
+            "allow-open-extension-dir",
+            "allow-open-log-dir",
+            "allow-pet-native-render",
+            "allow-probe-log",
+            "allow-read-dropped-file",
+            "allow-relaunch-app",
+            "allow-save-config",
+            "allow-session-call",
+            "allow-session-close",
+            "allow-session-create",
+            "allow-session-delete",
+            "allow-session-frame",
+            "allow-session-history",
+            "allow-session-open",
+            "allow-session-outline",
+            "allow-session-patch",
+            "allow-session-send",
+            "allow-sessions-list",
+            "allow-set-sound-enabled",
+            "allow-show-main",
+            "allow-skills-delete",
+            "allow-skills-list",
+            "allow-skills-save",
+            "allow-skills-set-default",
+            "allow-sound-enabled",
+            "allow-stat-dropped-file",
+            "allow-take-ui-intent",
+            "allow-todo-upload-begin",
+            "allow-todo-upload-delete",
+            "allow-todo-upload-path",
+            "allow-todo-upload-read",
+            "allow-todo-uploads-dir",
+            "allow-todos-load",
+            "allow-todos-save",
+            "allow-update-check",
+            "allow-update-download",
+            "allow-update-install",
+            "allow-upload-abort",
+            "allow-upload-begin",
+            "allow-upload-chunk",
+            "allow-upload-file-path",
+            "allow-upload-finish",
+            "allow-upload-read",
+            "allow-usagestats",
+            "allow-window-system-menu",
+            "allow-wsl-workdir-base",
+            "core:default",
+            "core:webview:allow-set-webview-zoom",
+            "core:window:allow-close",
+            "core:window:allow-cursor-position",
+            "core:window:allow-internal-toggle-maximize",
+            "core:window:allow-is-fullscreen",
+            "core:window:allow-is-maximized",
+            "core:window:allow-minimize",
+            "core:window:allow-outer-position",
+            "core:window:allow-set-fullscreen",
+            "core:window:allow-set-ignore-cursor-events",
+            "core:window:allow-set-position",
+            "core:window:allow-set-title",
+            "core:window:allow-start-dragging",
+            "core:window:allow-start-resize-dragging",
+            "core:window:allow-toggle-maximize",
+            "dialog:allow-open",
+            "dialog:allow-save",
+            "opener:allow-default-urls",
+            "opener:allow-open-url",
+            "opener:allow-reveal-item-in-dir"
+          ]
+        },
+        {
+          "identifier": "pet-page",
+          "description": "桌宠窗口(壳内静态页):会话状态快照与事件、拖动窗口、唤回主窗口",
+          "windows": [
+            "pet",
+            "pet-service"
+          ],
+          "permissions": [
+            "core:default",
+            "core:window:allow-start-dragging",
+            "core:window:allow-cursor-position",
+            "core:window:allow-set-ignore-cursor-events",
+            "core:window:allow-set-position",
+            "core:window:allow-outer-position",
+            "allow-sessions-list",
+            "allow-show-main",
+            "allow-pet-native-render",
+            "allow-sound-enabled"
+          ]
+        }
+      ]
+    },
+    "withGlobalTauri": true
+  },
+  "bundle": {
+    "active": false
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM4ODFGNkQ5QTI2NTk4RjMKUldUem1HV2kyZmFCeUc0blRCTUcyaFUycmF2MXRyQjloOEpJd3pzMEhCUnpRQVNKQWpqdUE5TmgK",
+      "endpoints": [
+        "https://gitee.com/xiaotimor/teemo-code-update/raw/master/latest.json"
+      ]
+    }
+  }
+}
