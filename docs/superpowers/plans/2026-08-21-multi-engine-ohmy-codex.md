@@ -1,12 +1,13 @@
-# 多引擎可切换执行计划（OhMyAgent / Codex）
+# 多引擎可并存执行计划（OhMyAgent / Codex）
 
 > 配套 spec：`specs/2026-08-21-multi-engine-ohmy-codex-design.md`
 > 目标：桌面端在不改动 UI 归约层的前提下，支持 OhMyAgent 与 Codex（**app-server
-> 常驻 JSON-RPC 引擎**）自由切换，复用现有 sid 双写不变量与路径守卫。
+> 常驻 JSON-RPC 引擎**）并存可选；**每个任务绑定单一引擎、无中途切换**，因此
+> 工作任务数据（文件 + 对话 + 元数据）100% 不丢。复用现有 sid 双写不变量与路径守卫。
 >
-> 关键修正：Codex 接入形态为 `codex app-server --listen stdio://`（常驻 JSON-RPC，
-> 与 OhMyAgent `--stdio` 同构），**不是** `exec --experimental-json` 一次性编排。
-> 见 spec 「背景」对比表。
+> 关键修正：① Codex 接入形态为 `codex app-server --listen stdio://`（常驻 JSON-RPC，
+> 与 OhMyAgent `--stdio` 同构），**不是** `exec --experimental-json` 一次性编排；
+> ② 采用**任务绑定引擎**语义，删去中途切换及其 Handoff 摘要层。见 spec。
 
 ## Phase 0 — 调研 Spike（消除 R-1 / R-2，必须先做）
 
@@ -55,16 +56,17 @@
       受控函数，遵守 `valid_session_id` 守卫（`session.rs:130`）。
 - [ ] 若需扩展 Frame 词汇（reasoning / outputSchema），在 `frame.rs` 增补变体。
 
-## Phase 3 — 切换与配置
+## Phase 3 — 引擎选择与路由（任务绑定语义）
 
 - [ ] 桌面设置增加全局默认引擎 `engine: "ohmy" | "codex"`。
-- [ ] `session/create` 入参增加 `engine`；UI 新建会话下拉选择。
+- [ ] `session/create` 入参增加 `engine`（默认取全局值，新建会话可下拉覆盖）；
+      **选定后即绑定，任务生命周期内不可中途更换**。
 - [ ] 扩展 `ohmy-sessions/<sid>/meta.json`：增加 `engine` / `codex_thread_id` /
       `ohmy_session_id` / `cwd` 字段（spec §详细设计 4）。
-- [ ] 切换实现：复用 `ohmy.rs:7` 的「destroy + create{resume}」变通（app-server
-      有真实 RPC 对应，无需虚拟常驻伪装）；挂钩 Handoff 摘要（旧引擎产出结构化
-      摘要 → 作为新引擎首条消息）。
-- [ ] 恢复逻辑：切回旧引擎时按 `meta.json` 的 `engine` 字段 resume 原 `<sid>` 会话。
+- [ ] 路由实现：任务运行时按 `meta.json.engine` 路由到对应引擎；文件产物写入该任务
+      cwd；对话历史写入该引擎私有会话（OhMy → `ohmyagent/sessions/<sid>`，
+      Codex → `codex/sessions/<threadId>`），**不迁移**。
+- [ ] 并存约束：同一时刻仅一个引擎 active 操作其绑定任务的 cwd，避免并发写冲突。
 
 ## Phase 4 — 二进制分发
 
@@ -79,7 +81,7 @@
 - [ ] 单测：`frame.rs` 翻译逻辑、`EngineDriver` trait mock。
 - [ ] 集成测：实跑 `CodexEngine` 完成最小任务（initialize → thread/start →
       turn/run → 收到 Frame → 产出代码文件），与 `OhmyEngine` 对照。
-- [ ] 端到端：桌面内切换两种引擎各跑一遍需求，验证 UI 归约层无改动即可工作。
+- [ ] 端到端：分别用 OhMyAgent 与 Codex 各建一个任务跑需求，验证 UI 归约层无改动即可工作、两引擎并存互不污染。
 - [ ] 路径守卫回归：确认 Codex 侧 threadId 同样经过 `valid_session_id`，
       不触发 `session.rs:120` 警告的 `remove_dir_all` 越界。
 
@@ -98,9 +100,10 @@
 ## 验收标准
 
 1. 默认引擎为 OhMyAgent 时，行为与现状完全一致（回归测试通过）。
-2. 全局切到 Codex 后，新建会话能正常 spawn `codex app-server`、走 JSON-RPC、
-   流式收到 Frame、产出代码文件；实时审批/中断 UI 工作（非预授权降级）。
-3. 同一任务内切换引擎：文件进度因共享 cwd 不丢失；对话经 Handoff 摘要近似续接；
-   切回原引擎可原样 resume。
+2. 新建任务选 Codex 后，能正常 spawn `codex app-server`、走 JSON-RPC、流式收到
+   Frame、产出代码文件；实时审批/中断 UI 工作（非预授权降级）。
+3. **任务数据不丢验证**：任务绑定 Codex 后，其文件产物落在任务 cwd、对话历史落在
+   `codex/sessions/<threadId>`，全程单一归属、不迁移；关闭重开后按 `meta.json`
+   恢复完整上下文。OhMyAgent 任务同理，两种引擎并存互不污染。
 4. `codex` 二进制缺失时，引擎选项灰态禁用并提示，不影响 OhMyAgent 使用。
 5. 不引入 AGPL/Apache 链接合规风险（仅进程调用）。

@@ -1,4 +1,4 @@
-# 多引擎可切换设计（OhMyAgent / Codex）
+# 多引擎可并存设计（OhMyAgent / Codex）
 
 ## 背景
 
@@ -31,7 +31,7 @@ MonkeyCode 桌面端（Tauri + Rust）当前仅驱动一种智能体内核 **OhM
 | 中断 | `turn_processor.turn_interrupt`（`Op::Interrupt`） |
 
 本设计的目标：在 **不改动 UI 归约层** 的前提下，让桌面端支持 **OhMyAgent 与
-Codex（app-server）二进制引擎自由切换**，二者均为常驻 JSON-RPC 引擎。
+Codex（app-server）二进制引擎并存可选**，二者均为常驻 JSON-RPC 引擎。
 
 ### 真实的目录布局（源码权威，来自本仓库）
 
@@ -62,7 +62,8 @@ cwd（项目目录或 `chat-workspaces/chat-xxxx`），两引擎共享同一 cwd
   JSON-RPC client**，UI 归约层零改动。
 - 新增 `CodexEngine`：spawn `codex app-server --listen stdio://`、走 JSON-RPC、
   把事件翻译为 Frame。
-- 引擎可切换：全局默认引擎 + 会话创建时指定引擎。
+- 引擎可选可并存：全局默认引擎 + 新建任务时指定引擎；**每个任务绑定单一引擎，
+  无中途切换**，因此工作任务数据（文件 + 对话 + 元数据）天然不丢。
 - `codex` 二进制（app-server 形态）随桌面应用分发（类比现有 OhMyAgent 落在
   `ohmyagent/` 的方式）。
 - 复用 MonkeyCode 已配置的 OpenAI provider 映射为 Codex 认证参数，避免重复登录。
@@ -74,9 +75,9 @@ cwd（项目目录或 `chat-workspaces/chat-xxxx`），两引擎共享同一 cwd
 |--------|------|------|
 | 接入形态 | spawn `codex app-server --listen stdio://`（常驻 JSON-RPC，同 OhMyAgent） | 与现有 driver 架构同构；规避「exec 一次性编排器」的虚拟常驻伪装成本；保留实时审批/中断能力 |
 | 会话目录结构 | 沿用扁平 sid：`codex/sessions/<threadId>` 与 `ohmyagent/sessions/<sid>` 并列；`meta.json` 维护 sid↔threadId 映射 | 复用现有 `ohmy-sessions/<sid>` 回放/恢复/清理守卫，零破坏 |
-| 工作目录 | 两引擎共享同一 cwd（项目目录或 chat-workspaces） | 切换引擎不丢文件进度；代码改动是「地面真相」，与对话历史解耦 |
-| 切换语义 | 空闲时 `destroy` 旧引擎会话 + `create` 新引擎会话（`app-server` 有真实 RPC 对应） | 直接复用 `ohmy.rs:7` 已有的「destroy + create{resume}」变通模式 |
-| 上下文连续性 | Handoff 摘要层（旧引擎产出结构化摘要喂给新引擎） | 跨引擎对话历史无法互解析，摘要近似续接，文件进度由共享 cwd 保证 |
+| 工作目录 | 两引擎各自任务共享同一 cwd（项目目录或 chat-workspaces） | 文件产物是「地面真相」，与引擎解耦，任务绑定语义下天然不丢 |
+| 引擎绑定语义 | **每个任务绑定单一引擎，无中途切换**；切换 = 新建任务选引擎 | 对话历史自始至终归属单一引擎私有格式，杜绝跨引擎迁移导致的「思路丢失」；文件进度由共享 cwd 保证 |
+| 上下文连续性 | 无需 Handoff 摘要层（因无跨引擎迁移） | 数据单一归属，天然完整；删去为中途切换设计的摘要续接复杂度 |
 | 实时审批 | 复用 `app-server` 的 `apply_patch_approval` / `exec_command_approval` / `turn_interrupt` RPC | 保住 MonkeyCode 现有审批/打断 UI，无需降级为预授权 |
 | 路由中枢 | 在现有 `ohmy-sessions/<sid>/meta.json` 增加 `engine` 与 `codex_thread_id` 字段 | `meta.json` 是桌面版会话权威索引（`session.rs:3`），改动局部 |
 | 合规 | 仅作为独立进程调用 Codex 二进制（Apache-2.0），保留其 NOTICE | 不静态链接 `codex-rs/core`，规避 copyleft 传染 |
@@ -138,11 +139,12 @@ pub(super) codex_engine_dir: PathBuf,      // <app_config>/codex/sessions
   driver 层维护 `shell_sid ↔ codex_thread_id`（类比现有 `shell_sid_of` 反查），
   路径拼接走受控函数，遵守 `valid_session_id` 守卫（`session.rs:130`）。
 
-### 4. 切换与配置
+### 4. 引擎选择与路由（任务绑定语义）
 
 - 全局默认引擎：桌面设置项 `engine: "ohmy" | "codex"`，落配置文件。
-- 会话级引擎选择：`session/create` 入参增加 `engine`；UI 新建会话可下拉。
-- `meta.json` 字段扩展：
+- 新建任务时选择引擎：`session/create` 入参增加 `engine`（默认取全局值）；UI 新建
+  会话可下拉覆盖。**选定后即绑定，任务生命周期内不可中途更换。**
+- `meta.json` 字段扩展（作为「引擎路由」权威索引）：
   ```json
   {
     "sid": "06b3e207",
@@ -152,6 +154,9 @@ pub(super) codex_engine_dir: PathBuf,      // <app_config>/codex/sessions
     "cwd": "D:\\works\\MonkeyCodeAi\\..."
   }
   ```
+- **数据不丢保证**：任务内对话历史始终写入 `engine` 字段指向的那一份引擎会话
+  （OhMy 写 `ohmyagent/sessions/<sid>`，Codex 写 `codex/sessions/<threadId>`），
+  从不迁移，故完整不丢；文件产物共享 cwd，亦不丢。
 
 ### 5. 二进制分发与降级
 
@@ -164,15 +169,16 @@ pub(super) codex_engine_dir: PathBuf,      // <app_config>/codex/sessions
 - 在 `NOTICE` / 关于页追加 Codex（Apache-2.0）许可证与版权声明。
 - 不静态链接 `codex-rs`，仅以独立进程调用。
 
-## 会话隔离与上下文连续性（关键澄清）
+## 会话隔离与数据不丢（任务绑定语义）
 
 - **会话缓存隔离**：`ohmyagent/sessions/<sid>` 与 `codex/sessions/<threadId>` 物理
   分离，互不读对方格式，不污染。
-- **工作目录共享**：两引擎指向同一 cwd，切换时磁盘代码改动全部保留。
-- **对话上下文跨引擎不保证完整**：两者对话历史格式互不可解析。切换时通过
-  Handoff 摘要层近似续接（旧引擎产出结构化摘要 → 作为新引擎首条消息）。
-- **切回旧引擎可原样恢复**：因旧引擎的 `<sid>` 会话缓存原样保留，
-  仅需在 `meta.json` 切回 `engine` 字段并 resume。
+- **工作目录共享**：两引擎各自任务的代码改动落在**各自的共享 cwd**（项目目录或
+  chat-workspaces），文件产物与引擎解耦，故不丢。
+- **对话历史单一归属、天然不丢**：因任务绑定引擎、无中途切换，对话历史自始至终
+  写入唯一引擎的私有会话格式，**从不跨引擎迁移**，故完整保留。
+- **引擎并存 ≠ 引擎并行**：同一时刻仅一个引擎 active 操作其绑定任务的工作目录，
+  避免两引擎同时写同一 cwd 冲突（`meta.json` 的 `engine` 字段即路由依据）。
 
 ## 风险与约束
 

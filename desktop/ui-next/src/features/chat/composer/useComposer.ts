@@ -439,9 +439,14 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
     flushBlockedRef.current = false;
     setQueue((cur) => cur.filter((x) => x.state === "failed" || x.state === "executing")); // 只清待发送,执行中/失败项留给用户处置
   }, []);
-  /** 从 localStorage 恢复持久化队列:按文本去重后追加到队尾(补投 effect 会自动投)。 */
+  /** 从 localStorage 恢复持久化队列:按文本去重后追加到队尾(补投 effect 会自动投)。
+   * 空数组 = 清空当前队列(面板场景:打开时把当前未投项清除,只保留本地存档用于编辑)。 */
   const restorePersisted = useCallback((items: QueueItem[]) => {
-    if (!items.length) return;
+    if (!items.length) {
+      // 清空当前队列:把 pending 和 executing 项都移除,只保留 failed 项供用户处置
+      setQueue((cur) => cur.filter((x) => x.state === "failed"));
+      return;
+    }
     setQueue((cur) => {
       const have = new Set(cur.map((x) => x.text));
       const add = items.filter((x) => !have.has(x.text) && x.text.trim());
