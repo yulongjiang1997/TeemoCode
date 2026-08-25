@@ -734,6 +734,7 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
           <UsageRing
             pct={usagePct}
             label={t("chat.contextUsage")}
+            onCompact={ctl.compactNow}
             tip={
               usagePct !== null && presentation.usage
                 ? t("chat.usageTip", {

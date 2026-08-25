@@ -664,4 +664,21 @@ describe("切会话焦点", () => {
     rerender(<ChatView meta={{ ...META, id: "s2", title: "部署" }} />);
     expect(document.activeElement).not.toBe(box);
   });
+
+  it("上下文用量悬浮窗含「压缩上下文」按钮,点击直达 session_compact", async () => {
+    const { ops, emit } = stubShell();
+    render(<ChatView meta={META} />);
+    await ready();
+    // 喂 usage_update 帧让圆环有数据(pct>0 压缩按钮才可点)
+    emit("frames:s1", [
+      { type: "task-running", kind: "acp_event", timestamp: 5, seq: 5, data: { update: { sessionUpdate: "usage_update", used: 500, size: 200000 } } },
+    ]);
+    // 悬停圆环弹悬浮窗(pct 为 null 时圆环是 img role,aria-label = 上下文用量)
+    const ring = await screen.findByRole("img", { name: "上下文用量" });
+    await userEvent.hover(ring);
+    const btn = await screen.findByRole("button", { name: "压缩上下文" });
+    await userEvent.click(btn);
+    await waitFor(() => expect(calls(ops, "session_compact")).toHaveLength(1));
+    expect(calls(ops, "session_compact")[0]?.args?.id).toBe("s1");
+  });
 });

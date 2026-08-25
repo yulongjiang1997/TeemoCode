@@ -85,6 +85,8 @@ export interface ComposerCtl {
   notifyError(message: string): void;
   /** 发送草稿+附件;运行中自动追加进指令队列。返回是否已接受(发送或入队)。 */
   send(): boolean;
+  /** 手动压缩上下文(上下文用量悬浮窗按钮);与 /compact 同语义,直达壳。 */
+  compactNow(): void;
   stop(): void;
   /** 粘贴/拖拽的 File 上传为附件(path-backed 占位走路径直拷)。 */
   addFiles(files: File[]): Promise<void>;
@@ -257,6 +259,19 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
     setError(null);
   }, []);
 
+  // 手动压缩上下文(上下文用量悬浮窗内的按钮;与 send 的 /compact 分支同
+  // 语义):直达壳 session_call,不进排队槽。忙时外显错误;成功后不乐观落帧
+  // ——压缩生命周期由壳外显(task_started + compact_status → task_ended)。
+  const compactNow = useCallback((): void => {
+    if (running || sendingRef.current || queue.length > 0) {
+      notifyError(t("chat.compact.busy"));
+      return;
+    }
+    void sessionCompact(sessionId).catch((e: unknown) => {
+      notifyError(t("chat.compact.failed", { reason: e instanceof Error ? e.message : String(e) }));
+    });
+  }, [running, sendingRef, queue, sessionId, notifyError, t]);
+
   const send = useCallback((): boolean => {
     const text = [draft.trim(), ...atts.map(attLine)].filter(Boolean).join("\n");
     if (!text) return false;
@@ -275,9 +290,7 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
       }
       setDraft("");
       setAtts([]);
-      void sessionCompact(sessionId).catch((e: unknown) => {
-        notifyError(t("chat.compact.failed", { reason: e instanceof Error ? e.message : String(e) }));
-      });
+      compactNow();
       return true;
     }
     // 忙/在途/还有队列 → 追加进指令队列(连同附件以附件行并入正文),
@@ -585,6 +598,7 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
       notifyError,
       send,
       stop,
+      compactNow,
       addFiles,
       addPaths,
     }),
@@ -609,6 +623,7 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
       notifyError,
       send,
       stop,
+      compactNow,
       addFiles,
       addPaths,
     ],
