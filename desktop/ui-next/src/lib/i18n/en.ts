@@ -479,6 +479,8 @@ export const en: Record<MessageKey, string> = {
   "downloads.canceled": "Canceled",
 
   "md.copy": "Copy",
+  "md.reveal": "Open",
+  "md.revealed": "Opened",
   "md.copied": "Copied",
   "md.copyImage": "Copy image",
   "md.copySvg": "Copy SVG source",

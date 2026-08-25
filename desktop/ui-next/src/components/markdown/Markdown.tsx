@@ -10,12 +10,28 @@ import { memo, startTransition, useEffect, useMemo, useRef, useState, type Mouse
 
 import { t, useI18n } from "@/lib/i18n";
 import { openMenu } from "@/lib/contextMenu";
-import { openExternal } from "@/lib/ipc/host";
+import { openExternal, revealPath } from "@/lib/ipc/host";
 import { copyText } from "@/lib/util/clipboard";
 import { resolveMarkdownResource } from "@/lib/util/markdownPaths";
 
 const escapeHtml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/** 代码块文本是否"像文件系统路径"(值得给「打开文件夹」按钮):
+ *  单行、含 / 或 \ 分隔、无空格或仅扩展名前一点空格、不像命令/句子。
+ *  判定从宽——误判的代价只是多点一个打不开的按钮,壳侧会报错外显;
+ *  漏判的代价是用户少一个入口。 */
+function looksLikeFilePath(text: string): boolean {
+  const s = text.trim();
+  if (!s || s.length > 260 || /[\n\r]/.test(s)) return false;
+  if (!/[\\/]/.test(s)) return false;
+  // 命令行特征:以常见 shell 提示符/动词开头的不当路径
+  if (/^(\$|>|npm |npx |node |git |cargo |python|pip |cd |ls |dir )/.test(s)) return false;
+  // 含空格的算式/代码片段不是路径(Windows 路径允许空格,但模型输出里
+  // 带空格的多半是代码;真要开带空格的目录还有复制兜底)
+  if (/\s/.test(s)) return false;
+  return true;
+}
 
 /** 超过这个体量的代码块不做语法高亮(hljs 是同步 CPU 活,兆级文本一块就是
  *  秒级主线程冻结;2026-08-10 切会话/跳转的卡顿分析里它是单点最大嫌疑)。
@@ -250,10 +266,16 @@ function makeMarked(): Marked {
         }
         const language = name && text.length <= HLJS_MAX_CHARS && hljs.getLanguage(name) ? name : null;
         const body = language ? hljs.highlight(text, { language }).value : escapeHtml(text);
+        // 路径样式判定:单行、含 / 或 \、像文件系统路径(排除自然语言句子与
+        // 命令行)。命中才出「打开」按钮,普通代码块不添乱。
+        const looksLikePath = looksLikeFilePath(text);
         // data-md-copy 携带原文(escape 过),复制走它而不是回读高亮 DOM
         return (
           `<div class="md-code">` +
           `<button type="button" class="btn btn-xs absolute top-1.5 right-1.5 z-1 opacity-0" data-md-copy="${escapeHtml(text)}">${escapeHtml(t("md.copy"))}</button>` +
+          (looksLikePath
+            ? `<button type="button" class="btn btn-xs absolute top-1.5 right-16 z-1 opacity-0" data-md-reveal="${escapeHtml(text)}">${escapeHtml(t("md.reveal"))}</button>`
+            : "") +
           `<pre><code class="hljs${language ? ` language-${language}` : ""}">${body}</code></pre>` +
           `</div>`
         );
@@ -335,6 +357,31 @@ export function renderMarkdown(source: string): string {
 
 function onContainerClick(e: MouseEvent<HTMLElement>, onLocalLink?: (path: string) => void) {
   const target = e.target as HTMLElement;
+  const revealBtn = target.closest<HTMLElement>("[data-md-reveal]");
+  if (revealBtn) {
+    e.preventDefault();
+    const p = revealBtn.getAttribute("data-md-reveal") ?? "";
+    // 壳侧 reveal_path:文件→父目录高亮,目录→直开,不存在→错误外显。
+    // 失败反馈走按钮自身文案(与复制按钮同款 1.5s 回显),不弹窗打断阅读
+    revealPath(p)
+      .then(() => {
+        const original = revealBtn.textContent;
+        revealBtn.textContent = t("md.revealed");
+        window.setTimeout(() => {
+          revealBtn.textContent = original;
+        }, 1500);
+      })
+      .catch((err: unknown) => {
+        const original = revealBtn.textContent;
+        revealBtn.textContent = err instanceof Error ? err.message : String(err);
+        revealBtn.classList.add("text-error");
+        window.setTimeout(() => {
+          revealBtn.textContent = original;
+          revealBtn.classList.remove("text-error");
+        }, 2500);
+      });
+    return;
+  }
   const copyBtn = target.closest<HTMLElement>("[data-md-copy]");
   if (copyBtn) {
     e.preventDefault();

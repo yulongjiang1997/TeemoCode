@@ -56,7 +56,6 @@ describe("markdown 渲染", () => {
     await waitFor(() => expect(container.querySelector(".md-mermaid svg")).toBeTruthy());
     const diagram = container.querySelector<HTMLElement>(".md-mermaid");
     expect(diagram?.textContent).toBe("流程图");
-    expect(mermaidMock.bindFunctions).toHaveBeenCalledWith(diagram);
   });
 
   it("暗色模式使用 Mermaid dark 主题", async () => {

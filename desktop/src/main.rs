@@ -224,6 +224,36 @@ fn open_log_dir(app: AppHandle) -> Result<String, String> {
     Ok(dir.to_string_lossy().into_owned())
 }
 
+/// 在文件管理器中打开/定位任意本地路径(消息里路径旁的「打开文件夹」按钮)。
+/// - 路径是文件:在父目录中高亮该文件(reveal 语义);
+/// - 路径是目录(或文件本身已不在,但某级祖先还在):打开该目录;
+/// - 全链路都不存在:报错外显。
+/// 安全边界:仅壳进程内执行 opener,无 shell 注入面;路径来自模型输出,
+/// 打不开就报错,不做任何猜测性展开。
+#[tauri::command]
+fn reveal_path(path: String) -> Result<String, String> {
+    let p = std::path::PathBuf::from(path.trim());
+    if p.as_os_str().is_empty() {
+        return Err("路径为空".into());
+    }
+    if p.is_file() {
+        tauri_plugin_opener::reveal_item_in_dir(&p).map_err(|e| format!("定位文件失败: {e}"))?;
+        return Ok(p.to_string_lossy().into_owned());
+    }
+    // 目录直开;不存在的路径向上找最近的现存祖先目录打开
+    let dir = if p.is_dir() {
+        p.clone()
+    } else {
+        p.ancestors()
+            .skip(1)
+            .find(|a| a.is_dir())
+            .ok_or_else(|| format!("路径不存在: {}", p.display()))?
+            .to_path_buf()
+    };
+    tauri_plugin_opener::open_path(&dir, None::<&str>).map_err(|e| format!("打开目录失败: {e}"))?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
 /// 导出引擎最新日志:保存对话框另存一份 ohmyagent.log(引擎 stderr 全量)。
 /// 横幅/侧栏卡里的 15 行 tail 不够排查时,用户从设置页一键拿到完整现场当
 /// 报障附件。async:blocking_save_file 不能占主线程。用户取消返回 None。
@@ -1573,6 +1603,7 @@ fn main() {
             save_config,
             models_fetch,
             model_test,
+            reveal_path,
             take_ui_intent,
             host_info,
             show_main,

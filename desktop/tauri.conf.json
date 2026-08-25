@@ -93,6 +93,7 @@
             "allow-relaunch-app",
             "allow-models-fetch",
             "allow-model-test",
+            "allow-reveal-path",
             "allow-save-config",
             "allow-session-call",
             "allow-session-close",

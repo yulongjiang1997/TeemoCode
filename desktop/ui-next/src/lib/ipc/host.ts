@@ -89,6 +89,12 @@ export async function importMcApply(sids: string[], sourceDir?: string): Promise
 
 /* ---- 窗口控制(不带 label 即作用于调用方窗口;close 由壳拦截转托盘) ---- */
 
+/** 在系统文件管理器中打开/定位本地路径(消息里路径旁的「打开」按钮):
+ *  文件→父目录高亮;目录→直开;不存在→reject 中文错误。浏览器模式不可用。 */
+export function revealPath(path: string): Promise<string> {
+  return invoke<string>("reveal_path", { path });
+}
+
 const quiet = (p: Promise<unknown>): void => {
   void p.catch(() => {});
 };

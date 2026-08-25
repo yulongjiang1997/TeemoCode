@@ -494,6 +494,8 @@ export const zh = {
   "downloads.canceled": "已取消",
 
   "md.copy": "复制",
+  "md.reveal": "打开",
+  "md.revealed": "已打开",
   "md.copied": "已复制",
   "md.copyImage": "复制图片",
   "md.copySvg": "复制 SVG 源码",
