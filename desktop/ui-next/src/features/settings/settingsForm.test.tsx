@@ -159,6 +159,7 @@ describe("草稿 ⇄ 载荷(全量写回)", () => {
         model: "claude",
         default: true,
         context_window: undefined,
+        auto_compact_ratio: undefined,
         max_output: undefined,
         think: undefined,
         vision: undefined,
@@ -174,7 +175,7 @@ describe("草稿 ⇄ 载荷(全量写回)", () => {
 
   it("锁定/同步标记(source/locked/owner)与高级字段随保存透传", () => {
     const base = cfg({
-      models: [model({ source: "monkeycode", locked: true, owner: "team", context_window: 128000, think: "high" })],
+      models: [model({ source: "monkeycode", locked: true, owner: "team", context_window: 128000, auto_compact_ratio: 80, think: "high" })],
     });
     const payload = buildPayload(base, draftFromConfig(base));
     expect(payload.models[0]).toMatchObject({
@@ -182,6 +183,7 @@ describe("草稿 ⇄ 载荷(全量写回)", () => {
       locked: true,
       owner: "team",
       context_window: 128000,
+      auto_compact_ratio: 80,
       think: "high",
     });
   });

@@ -29,6 +29,7 @@ export interface BaizhiSyncedModel {
   api_key: string;
   model: string;
   context_window?: number;
+  auto_compact_ratio?: number;
   max_output?: number;
   think?: string;
   vision?: boolean;
