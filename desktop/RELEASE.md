@@ -161,3 +161,56 @@ git push fork v<版本>
 - `.sig` 文件是**单行** base64；`latest.json` 的 `signature` 字段填其完整内容（不要手动换行）。
 - 发布后**必须**端到端验证（见 3.3 第 6 步）：latest.json 可读 + exe 下载 200 + signature 与本地一致，三者缺一不可，否则用户自动更新会失败。
 - 打包依赖：`binaries/` 下需有 `ohmyagent-x86_64-pc-windows-msvc.exe`（engine sidecar）、`browser-extension/dist`（前端扩展）、NSIS 已安装。缺资源时 `make windows` 会报错，可参考 `Makefile` 的 `check-bundle-configs` / `engine-windows` / `browser-extension` 目标补齐全。
+
+## 6. 更新源仓库清理(仓库爆仓时)
+
+Gitee `teemo-code-update` 每次发版都把约 56MB 安装包 commit 进历史，几个版本就逼近 819MB 配额。**只保留最近 N 个版本**的清理流程（2026-08-25 发 v0.1.16 时实战，保留最后 3 个）。
+
+关键是分辨"删文件"和"删历史"：**普通 commit 删旧 exe 不缩仓库**（对象还在历史里），必须重写主分支历史。
+
+1. **备份**：`tar -czf mc-update-backup-$(date +%Y%m%d).tar.gz mc-update`（约 1.7GB，删错可复原）
+2. **新建干净仓库**：单独目录 `git init`，只拷入**要保留版本**的 exe+sig+latest.json，单提交。这个新提交的 hash 记为 `NEW`（下文示例记为 `4e24a5c`）。
+3. **删除要清理的旧 release（逐个）**：用 Gitee API `DELETE /repos/xiaotimor/teemo-code-update/releases/{id}?access_token=...`。删除会连附件一起删，释放 Gitee 空间。先记下保留版本 release 的 id 和附件，万一误删可重建。
+4. **删除旧 tag**：`git push :refs/tags/v0.1.X`。**Gitee 删 tag 不会连带删 release**（实测确认，附件保留），先删 tag 最安全。
+5. **force push 新 master 覆盖**：`git push --force https://gitee.com/xiaotimor/teemo-code-update.git master`，覆盖旧的多提交历史，旧提交变悬空（dangling）。
+6. **重定向保留版本的 tag 到 `NEW`**：本地 `git tag -a v0.1.N -m "TeemoCode v0.1.N" $NEW`，然后 `git push -f ... v0.1.N` 覆盖旧 tag；这样 tag 不再指向旧历史，Gitee 才能 GC 旧对象。
+7. **验证**（必做）：
+   - 浅克隆 `git clone --depth 1` 检查只有 ~325MB（workdir 含几个 exe + git 对象）
+   - `https://gitee.com/xiaotimor/teemo-code-update/releases/download/v保留/<保留文件名>` 仍要返回 200
+
+⚠️ 2026-08-25 踩坑记录（行为确认）：
+- **删 tag 不影响 release 附件**；force push tag 覆盖时附件也不受影响（附件是独立存储的）
+- Gitee 的 `releases/download/` URL 只认 Release 附件，不认仓库文件——所以 exe 必须上传成 asset
+- `releases/{id}/assets` 端点被 WAF 拦（404 HTML 页），要用 `releases/{id}/attach_files`
+
+**参考命令**：
+
+```bash
+# === 1/2: 备份 + 新建干净仓库
+cd C:/Users/12090/sdk
+tar -czf mc-update-backup-$(date +%Y%m%d).tar.gz mc-update
+rm -rf mc-update-clean && mkdir mc-update-clean && cd mc-update-clean && git init
+cp ../mc-update/TeemoCode_0.1.1{4,5,6}_x64-setup.exe ../mc-update/TeemoCode_0.1.1{5,6}_x64-setup.exe.sig ../mc-update/latest.json .
+# 0.1.14 无 sig(0.1.15 起才有),按实际保留版本调整
+git add -A && git -c user.name=xiaotimor -c user.email=xiaotimor@users.noreply.gitee.com commit -m "release: 精简更新源,仅保留 v0.1.14/15/16"
+NEW=$(git rev-parse HEAD)
+
+# === 3/4: 删旧 release + 旧 tag（保留最新 3 个）
+TOKEN=6413249386ee049a45469c7957b5d336
+curl -s -X DELETE "https://gitee.com/api/v5/repos/xiaotimor/teemo-code-update/releases/<id>?access_token=$TOKEN"
+git push https://gitee.com/xiaotimor/teemo-code-update.git :refs/tags/v0.1.X
+
+# === 5: force push master
+git push --force https://gitee.com/xiaotimor/teemo-code-update.git master
+
+# === 6: 重建保留版本 tag 指向 NEW
+git tag -a v0.1.14 -m "TeemoCode v0.1.14" $NEW
+git tag -a v0.1.15 -m "TeemoCode v0.1.15" $NEW
+git tag -a v0.1.16 -m "TeemoCode v0.1.16" $NEW
+git push -f https://gitee.com/xiaotimor/teemo-code-update.git v0.1.14 v0.1.15 v0.1.16
+
+# === 7: 验证
+git clone --depth 1 https://gitee.com/xiaotimor/teemo-code-update.git size-check
+du -sh size-check
+curl -sI "https://gitee.com/xiaotimor/teemo-code-update/releases/download/v0.1.16/TeemoCode_0.1.16_x64-setup.exe"
+```
