@@ -144,6 +144,8 @@ export function ModelMenu({
   // 灰态禁选 + 行尾「未解锁」徽标(设置页同形态)——解锁路径的详情 title
   // 必须挂 li:disabled 按钮在多数 webview 不弹 tooltip(2026-08-06 用户
   // 报障「提示没了」的根因);onPick 必须用原始 name(引擎寻址键)
+  // 行形态对齐文件夹下拉:btn-ghost btn-sm 载体(py-1.5 宽松行高)+
+  // 应用基准字号(text-sm),选中行 primary 淡底(menu-active)
   const itemOf = (m: ModelInfo, noTier = false) => {
     const d = modelDisplay(m);
     return (
@@ -157,13 +159,14 @@ export function ModelMenu({
           disabled={m.locked}
           title={m.locked ? undefined : stripSourceSuffix(m.name)}
           aria-current={m.name === current ? "true" : undefined}
-          className={`flex items-center gap-2 ${m.name === current ? "menu-active" : ""}`}
+          className={`btn btn-ghost btn-sm h-auto w-full justify-start gap-2 px-2 py-1.5 font-normal ${m.name === current ? "btn-active" : ""}`}
           onClick={() => pick(m.name)}
         >
-          <span className="min-w-0 flex-1 truncate text-xs">{d.label}</span>
+          <span className="min-w-0 flex-1 truncate text-start text-xs">{d.label}</span>
           {!noTier && d.tier && <span className="badge badge-ghost badge-xs shrink-0">{d.tier}</span>}
           {m.locked && <span className="badge badge-warning badge-soft badge-xs shrink-0">{t("settings.models.lockedBadge")}</span>}
           {m.default && <span className="shrink-0 text-2xs opacity-50">{t("chat.model.default")}</span>}
+          {m.name === current && <IconCheck size={12} stroke={2} aria-hidden className="shrink-0 text-primary" />}
         </button>
       </li>
     );
@@ -187,10 +190,12 @@ export function ModelMenu({
       </Trigger>
       {open && (
         // dropdown-content 换 div 外壳:过滤框/来源 tab 固定在顶,
-        // 条目列表单独内滚(菜单长了不能把导航滚出视野)
+        // 条目列表单独内滚(菜单长了不能把导航滚出视野)。
+        // 视觉对齐新建任务的文件夹下拉:btn-sm 级行高、宽松内边距,
+        // 条目文字用应用基准 14px(text-xs→text-[13px] 折中,避免菜单过高)
         <div
           style={{ maxHeight: menuMax }}
-          className="dropdown-content flex w-64 flex-col overflow-hidden rounded-box border border-base-300 bg-base-100 p-2 shadow-lg"
+          className="dropdown-content flex w-64 flex-col overflow-hidden rounded-box border border-base-300 bg-base-100 p-1.5 shadow-lg"
         >
           {/* 不 autoFocus:打开菜单是「点选」意图,焦点跳进过滤框
               反而抢走键盘上下文(用户定案) */}
@@ -221,7 +226,7 @@ export function ModelMenu({
           )}
           <ul
             aria-label={t("chat.model.label")}
-            className="menu w-full h-40 shrink-0 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto p-0"
+            className="menu menu-md w-full h-40 shrink-0 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto p-0"
           >
             {tabItems.length === 0 && (
               <li className="menu-disabled">
