@@ -2758,6 +2758,20 @@ impl Inner {
         }
     }
 
+    /// 每轮 token 用量 → session-usage 事件。供 UI 大纲面板显示单轮
+    /// input/output tokens。与 push_usage 不同：这里传的是本轮实际累加
+    /// input/output_tokens，而非 context 占用估算。
+    pub(super) fn emit_session_usage(&self, sid: &str, input: u64, output: u64) {
+        if input == 0 && output == 0 {
+            return;
+        }
+        let title = self.sess.sessions.lock_ok().get(sid).map(|s| s.title.clone()).unwrap_or_default();
+        self.app.emit_json(
+            "session-event",
+            json!({ "type": "session-usage", "id": sid, "title": title, "input": input, "output": output }),
+        );
+    }
+
     /// 入站事件的壳会话反查(引擎 session_id → 壳 sid)。通常同名;
     /// 守卫路径换绑过则不同。未命中原样返回(供子代理未知 id 认领)。
     pub(super) fn shell_sid_of(&self, engine: &str) -> String {
