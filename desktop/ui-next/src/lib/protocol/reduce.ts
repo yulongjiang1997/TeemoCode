@@ -746,12 +746,12 @@ export function reduceBatch(s: ChatState, batch: readonly Frame[]): ChatState {
   const seenInBatch = new Set<number>();
   // 壳约 30ms 推一批，常含多个连续文本碎片。逐帧 appendStream 会为每片
   // slice 整个历史数组；先合并同类连续碎片后，一批流式文本只复制一次。
-  let stream: { kind: "agent" | "thought"; parts: string[]; timestamp?: number } | null = null;
+  let stream: { kind: "agent" | "thought"; parts: string[]; timestamp?: number; usage?: { input_tokens?: number; output_tokens?: number } } | null = null;
   let streamOnly = true;
   let sawStream = false;
   const flushStream = () => {
     if (!stream) return;
-    next = appendStream(next, stream.kind, stream.parts.join(""), stream.timestamp);
+    next = appendStream(next, stream.kind, stream.parts.join(""), stream.timestamp, stream.usage);
     stream = null;
   };
   for (const f of batch) {
@@ -773,11 +773,14 @@ export function reduceBatch(s: ChatState, batch: readonly Frame[]): ChatState {
       if (kind) {
         sawStream = true;
         const text = toolContentText(update!.content);
-        const pending = stream as { kind: "agent" | "thought"; parts: string[]; timestamp?: number } | null;
-        if (pending?.kind === kind) pending.parts.push(text);
-        else {
+        const pending = stream as { kind: "agent" | "thought"; parts: string[]; timestamp?: number; usage?: { input_tokens?: number; output_tokens?: number } } | null;
+        if (pending?.kind === kind) {
+          pending.parts.push(text);
+          // usage 出现在收尾分片上,后到覆盖前值(provider 头尾各发一次,取最终计数)
+          if (update!.usage) pending.usage = update!.usage;
+        } else {
           flushStream();
-          stream = { kind, parts: [text], ...(f.timestamp !== undefined ? { timestamp: f.timestamp } : {}) };
+          stream = { kind, parts: [text], ...(f.timestamp !== undefined ? { timestamp: f.timestamp } : {}), ...(update!.usage ? { usage: update!.usage } : {}) };
         }
         continue;
       }
