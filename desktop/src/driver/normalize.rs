@@ -478,6 +478,15 @@ impl Inner {
                         if let Some(s) = sessions.get_mut(&sid) {
                             s.fold.attach_usage(input, output);
                         }
+                        drop(sessions);
+                    }
+                    if input > 0 || output > 0 {
+                        // 发送 session-usage 事件供 UI 实时显示 per-turn tokens
+                        let title = self.sess.sessions.lock_ok().get(&sid).map(|s| s.title.clone()).unwrap_or_default();
+                        self.app.emit_json(
+                            "session-event",
+                            json!({ "type": "session-usage", "id": sid, "title": title, "input": input, "output": output }),
+                        );
                     }
                 }
                 // applyCompaction 的 wire 顺序是 final compaction → usage →
