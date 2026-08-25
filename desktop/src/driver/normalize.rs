@@ -488,6 +488,33 @@ impl Inner {
                             json!({ "type": "session-usage", "id": sid, "title": title, "input": input, "output": output }),
                         );
                     }
+                    // 用量统计记账(按天/会话/模型聚合,usage-stats.json)。
+                    // 子代理会话经 subagents 路由表归并到父任务,UI 侧按
+                    // parent 字段折叠展示。记账失败(无配置目录)仅忽略——
+                    // 统计是尽力而为的旁路,不能影响主事件流。
+                    if input > 0 || output > 0 {
+                        if let Ok(cfg_dir) = self.app.config_dir() {
+                            let (title, model, parent) = {
+                                let sessions = self.sess.sessions.lock_ok();
+                                let subs = self.sub.subagents.lock_ok();
+                                let (title, model) = sessions
+                                    .get(&sid)
+                                    .map(|s| (s.title.clone(), s.model_name.clone()))
+                                    .unwrap_or_default();
+                                let parent = subs.get(&sid).map(|r| r.parent_sid.clone());
+                                (title, model, parent)
+                            };
+                            crate::stats::UsageStats::shared(&cfg_dir).record(
+                                &crate::stats::today(),
+                                &sid,
+                                &title,
+                                &model,
+                                parent.as_deref(),
+                                input,
+                                output,
+                            );
+                        }
+                    }
                 }
                 // applyCompaction 的 wire 顺序是 final compaction → usage →
                 // session/compact RPC 应答。手动操作以 usage 作为事件通路的

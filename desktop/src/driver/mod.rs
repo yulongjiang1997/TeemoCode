@@ -399,10 +399,10 @@ pub async fn models_list(host: State<'_, DriverHost>) -> Result<Value, String> {
 /// 本地会话 token 用量统计(按天/会话/模型聚合,usage 事件记账)。
 #[tauri::command]
 pub async fn usagestats(app: AppHandle) -> Result<Value, String> {
-    // 本地会话 token 用量统计(按天/会话/模型聚合)。壳在 config 目录持久化
-    // 用量快照,这里直接读盘聚合返回,不依赖运行中的 Driver 实例。
+    // 与 usage 事件记账(normalize.rs)共用同一进程级实例:查询走内存,
+    // 不重读磁盘;若每次 new() 各开一份,记账实例的未落盘增量会查不到。
     let cfg_dir = crate::config::config_dir(&app)?;
-    Ok(crate::stats::UsageStats::new(&cfg_dir).snapshot())
+    Ok(crate::stats::UsageStats::shared(&cfg_dir).snapshot())
 }
 
 /// 打开会话:返回尾部回放窗口 `{frames, cursor, has_more}`。历史走返回值

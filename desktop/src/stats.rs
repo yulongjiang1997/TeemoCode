@@ -55,6 +55,14 @@ impl UsageStats {
         store
     }
 
+    /// 进程级共享实例(usage 事件记账入口)。首次调用时从 config_dir 读盘,
+    /// 之后常驻内存、record 时落盘;usagestats IPC 命令也走同一实例,避免
+    /// 每次查询都重读磁盘、以及与记账路径各持一份内存副本互不见。
+    pub(super) fn shared(config_dir: &Path) -> &'static Self {
+        static SHARED: std::sync::OnceLock<UsageStats> = std::sync::OnceLock::new();
+        SHARED.get_or_init(|| UsageStats::new(config_dir))
+    }
+
     /// 记一条模型调用的 token 消耗(usage 事件里的 input/output 全量累加)。
     pub(super) fn record(
         &self,
