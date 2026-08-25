@@ -40,6 +40,21 @@ python -c "import base64,json; p=open(r'C:\Users\12090\sdk\mc-release-keys-new.p
 
 ## 3. 发布步骤（v0.1.x 体系，推荐）
 
+### 3.0 一键发布脚本（推荐）
+
+以下 3.1~3.4 的全部步骤已固化为脚本（v0.1.17 实战流程）：
+
+```bat
+cd desktop
+set TAURI_SIGNING_PRIVATE_KEY_PASSWORD=R3l3ase!K3y#2026x
+set GITEE_UPDATE_TOKEN=6413249386ee049a45469c7957b5d336
+python scripts\release_v0_1_x.py --version 0.1.18 --notes "更新说明"
+```
+
+脚本自动完成：版本号升级 → 提交 → UI 构建 → Tauri 打包 → 签名（cmd.exe 内）
+→ Gitee master 推送 → Release 创建 + assets 上传 → 端到端验证 → 主仓库打 tag。
+常用参数：`--skip-build` 复用已有产物；`--notes` 自定义更新说明。
+
 ### 3.1 打包安装包
 ```bat
 cd desktop
@@ -59,8 +74,14 @@ npx --yes @tauri-apps/cli@2 signer sign ^
 
 > ⚠️ **必须在 cmd.exe 里签名（Cmd 工具），不要在 bash/msys 里跑！**
 > 私钥密码含 `!`（bash 历史扩展）和 `#`（bash 注释符），在 bash 里即使加了双引号也可能被破坏，
-> 表现为"密码错误/私钥解密失败"（2026-08-25 发 v0.1.16 踩过：同样的密码在 bash 里失败、cmd 里成功）。
+> 表现为"密码错误/私钥解密失败"（2026-08-25 发 v0.1.16 踩过：同样的密码在 bash 里失败、cmd 里成功；
+> v0.1.17 再次踩坑确认）。一键脚本已内置此处理。
 > 验证签名后 .sig 第一行 base64 解码应含 `signature from tauri secret key`。
+
+> 💡 **Gitee API 注意**（v0.1.17 实战）：创建 release 时 `target_commitish` 现在是
+> **必填项且需完整 commit hash**（缺了报 `body is missing`，短 hash 报「创建标签失败」）；
+> tag 必须先推送到 Gitee 再建 release；curl 在部分 Windows 环境下不稳定（exit 3/6），
+> 脚本统一用 Python requests。
 
 ### 3.3 更新 Gitee 更新源
 
