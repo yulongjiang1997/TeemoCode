@@ -96,6 +96,12 @@ export function fetchModelIds(provider: string, baseUrl: string, apiKey: string)
   return invoke<string[]>("models_fetch", { provider, baseUrl, apiKey });
 }
 
+/** 模型连通性测试(设置页「测试」):发一次最小对话请求,返回耗时 ms;
+ *  失败抛壳侧中文错误(HTTP 状态/网关 message)。 */
+export function testModel(provider: string, baseUrl: string, apiKey: string, model: string): Promise<number> {
+  return invoke<number>("model_test", { provider, baseUrl, apiKey, model });
+}
+
 /** 导入自定义音效文件:壳复制到应用数据目录 sounds/,返回存储路径(asset 协议播放)。 */
 export async function importSound(event: string, src: string): Promise<string> {
   if (!inDesktopShell()) throw new Error("not in desktop");

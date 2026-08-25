@@ -59,6 +59,10 @@ function stubShell(opts?: {
             const extra = opts?.extra?.["models_fetch"] as (() => Promise<string[]> | string[]) | undefined;
             return Promise.resolve(extra ? extra() : ["gpt-5", "gpt-5-mini"]);
           }
+          case "model_test": {
+            const extra = opts?.extra?.["model_test"] as (() => Promise<number> | number) | undefined;
+            return Promise.resolve(extra ? extra() : 800);
+          }
           case "save_config":
             return (opts?.save ?? (() => Promise.resolve(null)))();
           default:
@@ -855,5 +859,34 @@ describe("获取模型列表", () => {
       const models = (save!.args as { config: DesktopConfig }).config.models;
       expect(models.find((m) => m.name === "主力")?.model).toBe("gpt-5");
     });
+  });
+});
+
+describe("模型连通性测试", () => {
+  it("通过显示耗时徽标;清空模型标识后按钮禁用", async () => {
+    stubShell();
+    render(<SettingsView onClose={() => {}} />);
+    await openModels();
+    await userEvent.click(screen.getByRole("button", { name: /主力/ }));
+
+    // 测试 → 行头出现 ✓ 徽标(带耗时)
+    const testBtn = screen.getByRole("button", { name: /测试/ });
+    await userEvent.click(testBtn);
+    expect(await screen.findByText(/✓/)).toBeTruthy();
+
+    // 清空模型标识 → 测试按钮禁用(没有模型测什么)
+    const combo = screen.getByRole("combobox", { name: "模型标识" }) as HTMLInputElement;
+    await userEvent.clear(combo);
+    expect((screen.getByRole("button", { name: /测试/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("失败显示 ✕ 徽标与原因详情", async () => {
+    stubShell({ extra: { model_test: () => Promise.reject(new Error("HTTP 401: invalid api key")) } });
+    render(<SettingsView onClose={() => {}} />);
+    await openModels();
+    await userEvent.click(screen.getByRole("button", { name: /主力/ }));
+    await userEvent.click(screen.getByRole("button", { name: /测试/ }));
+    expect(await screen.findByText(/✕/)).toBeTruthy();
+    expect(await screen.findByText(/HTTP 401/)).toBeTruthy();
   });
 });

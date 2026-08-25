@@ -555,6 +555,71 @@ async fn models_fetch(provider: String, base_url: String, api_key: String) -> Re
     Ok(ids)
 }
 
+/// 模型连通性测试(设置页「测试」按钮):用给定的地址/Key/模型发一次最小
+/// 对话请求,按响应判定可达性。与 models_fetch 的「列表可拉」互补——列表
+/// 通不代表该模型 id 有效/有额度,这里以真实推理请求为准。
+/// - openai:POST {base}/v1/chat/completions,max_tokens 压到最小;
+/// - anthropic:POST {base}/v1/messages,同上 + version 头。
+/// 返回耗时毫秒;失败时错误信息带 HTTP 状态或网关的 message 字段。
+#[tauri::command]
+async fn model_test(provider: String, base_url: String, api_key: String, model: String) -> Result<u64, String> {
+    let base = base_url.trim().trim_end_matches('/');
+    if base.is_empty() {
+        return Err("请先填写接口地址".into());
+    }
+    let key = api_key.trim().to_string();
+    if key.is_empty() {
+        return Err("请先填写 API Key".into());
+    }
+    let model = model.trim().to_string();
+    if model.is_empty() {
+        return Err("请先填写模型标识".into());
+    }
+    // 与 models_fetch 同口径剥 /v1,防 /v1/v1/chat/completions
+    let base = base.trim_end_matches("/v1").trim_end_matches('/').to_string();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+    let started = std::time::Instant::now();
+    let (url, req) = match provider.as_str() {
+        "anthropic" => (
+            format!("{base}/v1/messages"),
+            client
+                .post(format!("{base}/v1/messages"))
+                .header("x-api-key", &key)
+                .header("anthropic-version", "2023-06-01")
+                .json(&serde_json::json!({
+                    "model": model,
+                    "max_tokens": 1,
+                    "messages": [{ "role": "user", "content": "ping" }]
+                })),
+        ),
+        _ => (
+            format!("{base}/v1/chat/completions"),
+            client
+                .post(format!("{base}/v1/chat/completions"))
+                .bearer_auth(&key)
+                .json(&serde_json::json!({
+                    "model": model,
+                    "max_tokens": 1,
+                    "messages": [{ "role": "user", "content": "ping" }]
+                })),
+        ),
+    };
+    let resp = req.send().await.map_err(|e| {
+        // 请求层失败(域名解析/连接拒绝/TLS):给一句人话而不是裸 reqwest 错误
+        if e.is_timeout() { "请求超时(60s)".to_string() } else { format!("无法连接: {e}") }
+    })?;
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.map_err(|_| format!("响应不是有效 JSON (HTTP {status})"))?;
+    if !status.is_success() {
+        let msg = body.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()).unwrap_or("");
+        return Err(format!("HTTP {status}{}", if msg.is_empty() { String::new() } else { format!(": {msg}") }));
+    }
+    Ok(started.elapsed().as_millis() as u64)
+}
+
 /// 保存配置并重启引擎。内容不做业务校验(壳零字段知识):表单校验在设置
 /// 视图,权威校验在内核。返回后 UI 自行整页刷新(不再有壳侧导航,原
 /// WebKitGTK IPC 重放竞态随之消失)。
@@ -1507,6 +1572,7 @@ fn main() {
             get_config,
             save_config,
             models_fetch,
+            model_test,
             take_ui_intent,
             host_info,
             show_main,

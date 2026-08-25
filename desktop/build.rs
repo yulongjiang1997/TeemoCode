@@ -26,6 +26,7 @@ fn main() {
                 "get_config",
                 "save_config",
                 "models_fetch",
+                "model_test",
                 "take_ui_intent",
                 "host_info",
                 "show_main",

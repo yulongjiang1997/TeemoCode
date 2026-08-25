@@ -92,6 +92,7 @@
             "allow-read-dropped-file",
             "allow-relaunch-app",
             "allow-models-fetch",
+            "allow-model-test",
             "allow-save-config",
             "allow-session-call",
             "allow-session-close",

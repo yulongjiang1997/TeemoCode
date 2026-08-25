@@ -11,9 +11,9 @@
 // 与自定义组恒在(空了也出组头 + 引导卡):组是"模型从哪来"的说明位,按现有
 // 条目派生的话,一个模型都没有的新装用户恰恰看不到该去哪里同步。会员组仍
 // 只在有条目时出现(引导在账号页卡片,不在这里堆空态)。
-import { IconChevronDown, IconEye, IconEyeOff, IconPlus, IconRefresh } from "@tabler/icons-react";
+import { IconChevronDown, IconEye, IconEyeOff, IconPlus, IconRefresh, IconPlugConnected } from "@tabler/icons-react";
 import { useState } from "react";
-import { fetchModelIds } from "@/lib/ipc/config";
+import { fetchModelIds, testModel } from "@/lib/ipc/config";
 import { readSyncedExcluded, writeSyncedExcluded } from "@/lib/util/prefs";
 
 import { useI18n } from "@/lib/i18n";
@@ -80,8 +80,11 @@ export function ModelsSection({
       return next;
     });
 
-  const patch = (i: number, p: Partial<HostModel>) =>
+  const patch = (i: number, p: Partial<HostModel>) => {
+    // 地址/Key/协议/模型任一变化,旧连通性结论即失效
+    if ("base_url" in p || "api_key" in p || "provider" in p || "model" in p) invalidateTest(i);
     onDraft((d) => ({ ...d, models: d.models.map((m, j) => (j === i ? { ...m, ...p } : m)) }));
+  };
 
   // 远端模型列表探测(「获取」按钮):按 行下标 缓存各行的拉取状态与结果,
   // 供 model 输入框的 datalist 下拉选择。只读探测,失败信息行内显示。
@@ -104,6 +107,26 @@ export function ModelsSection({
       setFetching(rest);
     }
   };
+
+  // 模型连通性测试(「测试」按钮):发一次最小对话请求。结果按 行下标 缓存
+  // (ok 带耗时 / fail 带原因),折叠行的状态徽标同源展示;编辑地址/Key/模型
+  // 后结果作废(旧结论对新配置没有意义)。
+  type TestResult = { ok: true; ms: number } | { ok: false; error: string };
+  const [testState, setTestState] = useState<Record<number, { running?: boolean; result?: TestResult }>>({});
+  const runTest = async (i: number) => {
+    const m = draft.models[i];
+    if (!m || testState[i]?.running) return;
+    setTestState((prev) => ({ ...prev, [i]: { ...prev[i], running: true } }));
+    try {
+      const ms = await testModel(m.provider, m.base_url, m.api_key, m.model);
+      setTestState((prev) => ({ ...prev, [i]: { result: { ok: true, ms } } }));
+    } catch (e) {
+      setTestState((prev) => ({ ...prev, [i]: { result: { ok: false, error: e instanceof Error ? e.message : String(e) } } }));
+    }
+  };
+  // 行配置变化即清该行测试结论(探测的是"当前这份配置",不是这个行号)
+  const invalidateTest = (i: number) =>
+    setTestState((prev) => (prev[i] ? { ...prev, [i]: {} } : prev));
 
   const remove = (i: number) => {
     onDraft((d) => ({
@@ -188,6 +211,27 @@ export function ModelsSection({
             展开时不出——下面的表单里逐项都在,重复一遍是噪音 */}
         {!open && advSummary(m, t) && (
           <span className="min-w-0 shrink truncate text-xs text-base-content/45">{advSummary(m, t)}</span>
+        )}
+        {/* 连通性测试结果徽标:测试中转圈 / 通过带耗时 / 失败红叉(hover 看
+            原因);行配置一变即作废消失,不展示过期结论 */}
+        {testState[i]?.running && (
+          <span className="loading loading-spinner loading-xs shrink-0 text-info" aria-label={t("settings.models.test.running")} />
+        )}
+        {!testState[i]?.running && testState[i]?.result?.ok === true && (
+          <span
+            className="badge badge-success badge-soft badge-sm shrink-0"
+            title={t("settings.models.test.passHint", { ms: (testState[i]!.result as { ms: number }).ms })}
+          >
+            ✓ {t("settings.models.test.pass", { ms: (testState[i]!.result as { ms: number }).ms })}
+          </span>
+        )}
+        {!testState[i]?.running && testState[i]?.result?.ok === false && (
+          <span
+            className="badge badge-error badge-soft badge-sm shrink-0 cursor-help"
+            title={(testState[i]!.result as { error: string }).error}
+          >
+            ✕ {t("settings.models.test.fail")}
+          </span>
         )}
       </>
     );
@@ -365,19 +409,39 @@ export function ModelsSection({
                     </datalist>
                     {/* 会员条目随同步整组更新,不提供探测入口 */}
                     {m.source !== SOURCE_MONKEYCODE && (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm shrink-0"
-                        title={t("settings.models.fetch.hint")}
-                        disabled={fetching.has(i) || !m.base_url.trim() || !m.api_key.trim()}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          void fetchList(i);
-                        }}
-                      >
-                        {fetching.has(i) ? <span className="loading loading-spinner loading-xs" aria-hidden /> : <IconRefresh size={14} stroke={1.75} aria-hidden />}
-                        {t("settings.models.fetch")}
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm shrink-0"
+                          title={t("settings.models.fetch.hint")}
+                          disabled={fetching.has(i) || !m.base_url.trim() || !m.api_key.trim()}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            void fetchList(i);
+                          }}
+                        >
+                          {fetching.has(i) ? <span className="loading loading-spinner loading-xs" aria-hidden /> : <IconRefresh size={14} stroke={1.75} aria-hidden />}
+                          {t("settings.models.fetch")}
+                        </button>
+                        {/* 连通性测试:真实发一次最小对话请求(列表通 ≠ 模型可用) */}
+                        <button
+                          type="button"
+                          className={`btn btn-ghost btn-sm shrink-0 ${testState[i]?.result?.ok === true ? "text-success" : testState[i]?.result?.ok === false ? "text-error" : ""}`}
+                          title={t("settings.models.test.hint")}
+                          disabled={testState[i]?.running || !m.base_url.trim() || !m.api_key.trim() || !m.model.trim()}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            void runTest(i);
+                          }}
+                        >
+                          {testState[i]?.running ? (
+                            <span className="loading loading-spinner loading-xs" aria-hidden />
+                          ) : (
+                            <IconPlugConnected size={14} stroke={1.75} aria-hidden />
+                          )}
+                          {t("settings.models.test")}
+                        </button>
+                      </>
                     )}
                   </div>
                   {fetched[i] && (fetched[i].ids.length > 0 || fetched[i].error) && (
@@ -385,6 +449,10 @@ export function ModelsSection({
                       {fetched[i].error ??
                         t("settings.models.fetch.found", { n: fetched[i].ids.length })}
                     </p>
+                  )}
+                  {/* 连通性测试失败原因(成功走行头徽标,失败这里展开说清) */}
+                  {testState[i]?.result?.ok === false && (
+                    <p className="text-xs text-error">{(testState[i]!.result as { error: string }).error}</p>
                   )}
                 </fieldset>
                 <fieldset className="fieldset gap-1.5">
