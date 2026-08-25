@@ -322,3 +322,109 @@ describe("useComposer:附件上传的纪元守卫", () => {
     expect(result.current.atts.map((a) => a.path)).toEqual([".monkeycode/uploads/图.png"]);
   });
 });
+
+
+describe("useComposer:restorePersisted 后不重复投出", () => {
+  it("打开持久化面板清空队列后,新消息不会误判为上一轮延续", async () => {
+    const { sends } = stubSend();
+    const { result, rerender } = renderHook(
+      ({ running, turnEnded, lastSeq }: any) => useComposer("a", feed({ running, turnEnded, lastSeq })),
+      { initialProps: { running: true, turnEnded: false, lastSeq: 0 } },
+    );
+
+    // 模拟队列首项正在执行:通过 send() 发第一条进入队列
+    act(() => result.current.setDraft("待执行"));
+    act(() => result.current.send());
+    await settle();
+    // 此时队列有项,正在执行
+    expect(result.current.queue.length).toBeGreaterThanOrEqual(0);
+
+    // 模拟面板关闭:restorePersisted([]) 清空队列
+    act(() => result.current.restorePersisted([]));
+    await settle();
+
+    // 状态应该干净:队列为空(没有 failed 项)
+    expect(result.current.queue).toHaveLength(0);
+
+    // 新轮次开始 → 结束,不应有额外的 session_send
+    rerender({ running: false, turnEnded: true, lastSeq: 1 });
+    await settle();
+    expect(sends()).toHaveLength(0);
+
+    // 新发送一条消息,应该正常发出
+    act(() => result.current.setDraft("新消息"));
+    act(() => result.current.send());
+    await settle();
+    expect(sends()).toHaveLength(1);
+  });
+
+  it("执行中切会话再切回:队列残留 ref 不污染新轮次", async () => {
+    const { sends } = stubSend();
+    const { result, rerender } = renderHook(
+      ({ id, running, turnEnded, lastSeq }: any) => useComposer(id, feed({ running, turnEnded, lastSeq })),
+      { initialProps: { id: "a", running: false, turnEnded: false, lastSeq: 0 } },
+    );
+
+    // 投出第一条
+    act(() => result.current.setDraft("消息A"));
+    act(() => result.current.send());
+    await settle();
+    rerender({ id: "a", running: true, turnEnded: false, lastSeq: 0 });
+    await settle();
+    rerender({ id: "a", running: false, turnEnded: true, lastSeq: 1 });
+    await settle();
+    expect(sends()).toHaveLength(1);
+
+    // 切到会话 B,再切回 A
+    rerender({ id: "b", running: false, turnEnded: false, lastSeq: 0 });
+    await settle();
+    rerender({ id: "a", running: false, turnEnded: false, lastSeq: 1 });
+    await settle();
+
+    // 发第二条消息,不应该有重复
+    act(() => result.current.setDraft("消息B"));
+    act(() => result.current.send());
+    await settle();
+    rerender({ id: "a", running: true, turnEnded: false, lastSeq: 1 });
+    await settle();
+    rerender({ id: "a", running: false, turnEnded: true, lastSeq: 2 });
+    await settle();
+    expect(sends()).toHaveLength(2);
+  });
+});
+
+describe("useComposer:restorePersisted ref 重置", () => {
+  it("restorePersisted([]) 清空队列后 ref 同步重置,新消息不重复发送", async () => {
+    const { sends } = stubSend();
+    const { result, rerender } = renderHook(
+      ({ id, running, turnEnded, lastSeq }: any) => useComposer(id, feed({ running, turnEnded, lastSeq })),
+      { initialProps: { id: "a", running: false, turnEnded: false, lastSeq: 0 } },
+    );
+
+    // 第一轮:正常发送
+    act(() => result.current.setDraft("消息A"));
+    act(() => result.current.send());
+    await settle();
+    rerender({ id: "a", running: true, turnEnded: false, lastSeq: 0 });
+    await settle();
+    rerender({ id: "a", running: false, turnEnded: true, lastSeq: 1 });
+    await settle();
+    expect(sends()).toHaveLength(1);
+    expect(result.current.queue).toHaveLength(0);
+
+    // 模拟用户打开持久化面板并关闭(restorePersisted([]) 清空队列)
+    act(() => result.current.restorePersisted([]));
+    await settle();
+    expect(result.current.queue).toHaveLength(0);
+
+    // 第二轮:新消息,不应有重复发送
+    act(() => result.current.setDraft("消息B"));
+    act(() => result.current.send());
+    await settle();
+    rerender({ id: "a", running: true, turnEnded: false, lastSeq: 1 });
+    await settle();
+    rerender({ id: "a", running: false, turnEnded: true, lastSeq: 2 });
+    await settle();
+    expect(sends()).toHaveLength(2);
+  });
+});

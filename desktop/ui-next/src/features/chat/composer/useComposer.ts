@@ -459,6 +459,14 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
     if (!items.length) {
       // 清空当前队列:把 pending 和 executing 项都移除,只保留 failed 项供用户处置
       setQueue((cur) => cur.filter((x) => x.state === "failed"));
+      // 关键:队列清空时必须同步重置 inFlightRef/deliveredTurnRef/turnStartedRef,
+      // 否则这三条 ref 仍指向已消失的旧指令,新轮次结束时会把下一条消息误判为
+      // "上一轮的延续",导致状态与实际运行不一致(见 queue 状态机三 ref 头注)
+      inFlightRef.current = null;
+      deliveredTurnRef.current = false;
+      turnStartedRef.current = false;
+      sendingRef.current = false;
+      flushBlockedRef.current = false;
       return;
     }
     setQueue((cur) => {
