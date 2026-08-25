@@ -307,6 +307,7 @@ export const en: Record<MessageKey, string> = {
   "settings.models.duplicate": "Duplicate model (name + copy)",
   "settings.models.delete": "Delete",
   "settings.models.deleteSyncedTip": "Delete this synced model; it won't be pulled back on the next sync",
+  "settings.models.deleteLockedTip": "Remove from local config (won't auto-reappear after unlocking)",
   "settings.models.excludedBar": "{n} synced models deleted (skipped on next sync)",
   "settings.models.excludedRestore": "Restore all",
   "settings.mcp.add": "Add MCP",
