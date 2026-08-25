@@ -770,3 +770,47 @@ describe("布局契约", () => {
     expect(menu.className).toContain("[&_li]:flex-nowrap");
   });
 });
+
+describe("自动压缩阈值", () => {
+  it("修改阈值触发保存条,保存载荷含 auto_compact_ratio(2026-08-25 用户报障)", async () => {
+    const { calls } = stubShell();
+    const onClose = vi.fn();
+    render(<SettingsView onClose={onClose} />);
+    await openModels();
+    await userEvent.click(screen.getByRole("button", { name: /主力/ }));
+
+    // 输入前无保存条(载入不置脏)
+    expect(screen.queryByRole("button", { name: "保存" })).toBeNull();
+
+    // 修改自动压缩阈值 → 保存条出现
+    const compact = screen.getByRole("spinbutton", { name: "自动压缩阈值(%)" });
+    await userEvent.clear(compact);
+    await userEvent.type(compact, "80");
+    expect(screen.getByRole("button", { name: "保存" })).toBeDefined();
+
+    // 保存:载荷里 auto_compact_ratio = 80(而非 undefined/丢失)
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => {
+      const save = calls.find((c) => c.cmd === "save_config");
+      expect(save).toBeDefined();
+      const models = (save!.args as { config: DesktopConfig }).config.models;
+      const edited = models.find((m) => m.name === "主力")!;
+      expect(edited.auto_compact_ratio).toBe(80);
+    });
+  });
+
+  it("输入非法值(空/0/超界)落 undefined,不置脏", async () => {
+    stubShell();
+    render(<SettingsView onClose={() => {}} />);
+    await openModels();
+    await userEvent.click(screen.getByRole("button", { name: /主力/ }));
+    const compact = screen.getByRole("spinbutton", { name: "自动压缩阈值(%)" });
+
+    await userEvent.type(compact, "0");
+    expect(screen.queryByRole("button", { name: "保存" })).toBeNull();
+
+    await userEvent.clear(compact);
+    await userEvent.type(compact, "150"); // 超界被 clamp 到 100 → 仍置脏
+    expect(screen.getByRole("button", { name: "保存" })).toBeDefined();
+  });
+});

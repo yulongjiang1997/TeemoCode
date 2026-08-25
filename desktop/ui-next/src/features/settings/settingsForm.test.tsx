@@ -210,6 +210,15 @@ describe("草稿 ⇄ 载荷(全量写回)", () => {
     d3.mcps = [...d3.mcps, mcp({ name: "extra" })];
     expect(payloadEquals(buildPayload(base, d3), baseline)).toBe(false);
 
+    // 自动压缩阈值:从无到有 / 改值 都算脏(2026-08-25 用户报障"改了不显保存条")
+    const d4 = draftFromConfig(base);
+    d4.models = d4.models.map((m, i) => (i === 0 ? { ...m, auto_compact_ratio: 80 } : m));
+    expect(payloadEquals(buildPayload(base, d4), baseline)).toBe(false);
+
+    const d5 = draftFromConfig(base);
+    d5.models = d5.models.map((m, i) => (i === 0 ? { ...m, auto_compact_ratio: 20 } : m));
+    expect(payloadEquals(buildPayload(base, d5), baseline)).toBe(false);
+
     expect(payloadEquals(buildPayload(base, draftFromConfig(base)), baseline)).toBe(true);
   });
 });
