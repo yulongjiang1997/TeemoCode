@@ -316,6 +316,7 @@ export const zh = {
   "settings.models.delete": "删除",
   "settings.models.deleteSyncedTip": "删除该同步模型,下次同步不重新拉回",
   "settings.models.deleteLockedTip": "从本地配置移除(解锁后不会自动恢复)",
+  "settings.models.deleteMemberTip": "从本地配置移除(会员到期后不会自动恢复)",
   "settings.models.excludedBar": "已删除 {n} 个同步模型(下次同步跳过)",
   "settings.models.excludedRestore": "全部恢复",
   "settings.mcp.add": "添加 MCP",

@@ -306,11 +306,17 @@ export function ModelsSection({
                   {t("settings.models.delete")}
                 </button>
               )}
-              {m.source && !managed && (
+              {m.source && (
                 <button
                   type="button"
                   className="btn btn-ghost btn-xs shrink-0 text-base-content/40 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:text-error"
-                  title={m.locked ? t("settings.models.deleteLockedTip") : t("settings.models.deleteSyncedTip")}
+                  title={
+                    m.source === SOURCE_MONKEYCODE
+                      ? t("settings.models.deleteMemberTip")
+                      : m.locked
+                      ? t("settings.models.deleteLockedTip")
+                      : t("settings.models.deleteSyncedTip")
+                  }
                   onClick={(e) => {
                     e.stopPropagation();
                     removeSynced(i);
