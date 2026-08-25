@@ -38,7 +38,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 # ---------- 固定配置(变更频率低;密码不入库,见 RELEASE.md 安全提醒) ----------
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent  # scripts/ → desktop/ → 仓库根
 DESKTOP = REPO / "desktop"
 BUNDLE_DIR = DESKTOP / "target" / "release" / "bundle" / "nsis"
 UI_DIR = DESKTOP / "ui-next"
