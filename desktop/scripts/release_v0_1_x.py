@@ -115,13 +115,16 @@ def main():
 
     cargo = DESKTOP / "Cargo.toml"
     tauri_conf = DESKTOP / "tauri.conf.json"
+    # newline="" 保留原文件的 LF 行尾(默认写模式会把 \n 翻译成 CRLF,
+    # 造成整文件 diff 噪音)
     cargo.write_text(
         re.sub(r'^version = "[^"]+"', f'version = "{ver}"', cargo.read_text(encoding="utf-8"), count=1, flags=re.M),
         encoding="utf-8",
+        newline="",
     )
     conf = json.loads(tauri_conf.read_text(encoding="utf-8"))
     conf["version"] = ver
-    tauri_conf.write_text(json.dumps(conf, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tauri_conf.write_text(json.dumps(conf, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="")
     run(["cargo", "update", "--workspace"], cwd=str(DESKTOP), check=False)  # 刷 Cargo.lock
     print(f"OK (Cargo.toml / tauri.conf.json / Cargo.lock → {ver})")
 
