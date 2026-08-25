@@ -619,3 +619,35 @@ describe("嵌套折叠互不串扰", () => {
     expect(screen.queryByText("旧任务")).toBeNull();
   });
 });
+
+describe("自定义分组内的项目行", () => {
+  const groupOf = (proj: string, gid: string) => {
+    localStorage.setItem("mc.customGroups", JSON.stringify([{ id: gid, name: "工作组", pinned: false }]));
+    localStorage.setItem("mc.projectGroups", JSON.stringify({ [proj]: gid }));
+  };
+
+  it("hover 加号:在此项目新建任务(任务移进分组后仍有新建入口)", async () => {
+    groupOf("alpha", "g1");
+    const acts = actions();
+    render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={acts} />);
+    // 组内项目行(alpha)默认折叠,直接以 DOM 方式展开(details.open)
+    const projDetails = screen.getByText("alpha").closest("details") as HTMLDetailsElement;
+    projDetails.open = true;
+    // 任务行显示摘要(摘要优先,id 回落)
+    expect(screen.getByText("修复了闪退,补了用例")).toBeTruthy();
+    // 加号按钮存在且点击触发 onNewTaskIn("/p/alpha")(限定组内项目行的 details,避免匹配到顶层分组同款按钮)
+    const plus = within(projDetails).getByRole("button", { name: "在此项目新建任务" });
+    await userEvent.click(plus);
+    expect(acts.onNewTaskIn).toHaveBeenCalledWith("/p/alpha");
+  });
+
+  it("右键菜单含「在此新建任务」", async () => {
+    groupOf("alpha", "g1");
+    const acts = actions();
+    render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={acts} />);
+    fireEvent.contextMenu(screen.getByText("alpha"));
+    const menu = document.body.lastElementChild as HTMLElement;
+    const item = Array.from(menu.querySelectorAll("*")).find((el) => el.textContent === "在此新建任务");
+    expect(item).toBeTruthy();
+  });
+});

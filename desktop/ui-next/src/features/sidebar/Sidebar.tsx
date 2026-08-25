@@ -603,6 +603,7 @@ function GroupProjectRow({
   const menuItems: MenuItem[] = [
     ...(p.space === "local"
       ? [
+          { label: t("sidebar.project.newTaskIn"), run: () => p.actions.onNewTaskIn(proj.key) },
           {
             label: pinnedProjects.has(proj.key) ? t("sidebar.group.unpin") : t("sidebar.group.pinProject"),
             run: () => toggleProjectPin(proj.key),
@@ -666,6 +667,21 @@ function GroupProjectRow({
               {fmtCompact(usage.input + usage.output)}
             </button>
           )}
+          {/* hover 加号:在此项目新建任务(与顶层项目分组同款;组内项目行
+              此前没有这个入口,任务移进自定义分组后无法就地新建) */}
+          <button
+            type="button"
+            aria-label={t("sidebar.project.newTask")}
+            title={t("sidebar.project.newTask")}
+            className="btn btn-ghost btn-square btn-xs invisible group-hover:visible group-focus-within:visible"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              p.actions.onNewTaskIn(proj.key);
+            }}
+          >
+            <IconPlus size={12} stroke={1.75} aria-hidden />
+          </button>
         </summary>
         <ul className={`ms-0 min-w-0 ps-0 pb-1 ${NEST_NO_GUIDE}`}>
           {rows(proj.sessions, p, 2)}
