@@ -25,6 +25,7 @@ fn main() {
             tauri_build::AppManifest::new().commands(&[
                 "get_config",
                 "save_config",
+                "models_fetch",
                 "take_ui_intent",
                 "host_info",
                 "show_main",

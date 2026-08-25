@@ -55,6 +55,10 @@ function stubShell(opts?: {
             return Promise.resolve(opts?.distros ?? []);
           case "host_info":
             return Promise.resolve({ version: "26080101", engine_version: "0.9.0" });
+          case "models_fetch": {
+            const extra = opts?.extra?.["models_fetch"] as (() => Promise<string[]> | string[]) | undefined;
+            return Promise.resolve(extra ? extra() : ["gpt-5", "gpt-5-mini"]);
+          }
           case "save_config":
             return (opts?.save ?? (() => Promise.resolve(null)))();
           default:
@@ -413,7 +417,8 @@ describe("模型增删改与设默认", () => {
     // 四项必填(见下一条用例):只填名称的半成品现在拦在保存之前
     await userEvent.type(screen.getByRole("textbox", { name: "接口地址" }), "https://api.example.com");
     await userEvent.type(screen.getByLabelText("API Key"), "sk-test"); // type=password 无 textbox role
-    await userEvent.type(screen.getByRole("textbox", { name: "模型标识" }), "gpt-5");
+    // input[list] 的 ARIA 隐式 role 是 combobox(带 datalist 下拉),不再是 textbox
+    await userEvent.type(screen.getByRole("combobox", { name: "模型标识" }), "gpt-5");
     await userEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(calls.some((c) => c.cmd === "save_config")).toBe(true));
     const models = (calls.find((c) => c.cmd === "save_config")?.args?.config as DesktopConfig).models;
@@ -812,5 +817,43 @@ describe("自动压缩阈值", () => {
     await userEvent.clear(compact);
     await userEvent.type(compact, "150"); // 超界被 clamp 到 100 → 仍置脏
     expect(screen.getByRole("button", { name: "保存" })).toBeDefined();
+  });
+});
+
+describe("获取模型列表", () => {
+  it("填地址和 Key 后点「获取」:下拉出现网关模型,选择回填 model 字段", async () => {
+    const { calls } = stubShell();
+    render(<SettingsView onClose={() => {}} />);
+    await openModels();
+    await userEvent.click(screen.getByRole("button", { name: /主力/ }));
+
+    // 已有条目(主力)自带地址与 Key,按钮可用;地址清空则禁用
+    const fetchBtn = screen.getByRole("button", { name: /获取/ });
+    expect((fetchBtn as HTMLButtonElement).disabled).toBe(false);
+    const urlInput = screen.getByRole("textbox", { name: "接口地址" });
+    await userEvent.clear(urlInput);
+    expect((fetchBtn as HTMLButtonElement).disabled).toBe(true);
+
+    // 重新填接口地址与 Key,恢复可点
+    await userEvent.type(urlInput, "https://api.openai.com");
+    await userEvent.type(screen.getByLabelText("API Key"), "sk-test");
+    expect((fetchBtn as HTMLButtonElement).disabled).toBe(false);
+
+    // 点「获取」→ 提示已获取 2 个;datalist 里出现候选
+    await userEvent.click(fetchBtn);
+    expect(await screen.findByText(/已获取 2 个模型/)).toBeTruthy();
+    const combo = screen.getByRole("combobox", { name: "模型标识" }) as HTMLInputElement;
+    expect(combo.getAttribute("list")).toBe("model-ids-0");
+
+    // 从下拉候选中选一个回填(datalist 选择的最终效果就是 input.value 变化)
+    await userEvent.clear(combo);
+    await userEvent.type(combo, "gpt-5");
+    expect(screen.getByRole("button", { name: "保存" })).toBeDefined();
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => {
+      const save = calls.find((c) => c.cmd === "save_config");
+      const models = (save!.args as { config: DesktopConfig }).config.models;
+      expect(models.find((m) => m.name === "主力")?.model).toBe("gpt-5");
+    });
   });
 });

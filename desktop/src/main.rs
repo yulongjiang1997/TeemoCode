@@ -494,6 +494,67 @@ fn schedule_browser_mcp_refresh(app: &AppHandle) {
     });
 }
 
+/// 探测远端模型列表(设置页「获取模型列表」按钮):给定接口地址 + API Key +
+/// 协议,请求该网关的 models 端点,返回模型 id 列表供表单回填。
+/// - openai / openai_responses:GET {base}/models,Bearer 认证;
+/// - anthropic:GET {base}/v1/models,x-api-key + anthropic-version 头。
+/// base_url 允许用户带或不带 /v1 后缀:统一剥掉再按协议拼标准路径,
+/// 避免拼出 /v1/v1/models。只读探测,不落盘、不碰引擎。
+#[tauri::command]
+async fn models_fetch(provider: String, base_url: String, api_key: String) -> Result<Vec<String>, String> {
+    let base = base_url.trim().trim_end_matches('/');
+    if base.is_empty() {
+        return Err("请先填写接口地址".into());
+    }
+    // 剥掉用户习惯性带的 /v1、/v2 后缀(openai 系标准路径自带 /v1)
+    let base = base.trim_end_matches("/v1").trim_end_matches('/').to_string();
+    let key = api_key.trim().to_string();
+    if key.is_empty() {
+        return Err("请先填写 API Key".into());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+    let (url, req) = match provider.as_str() {
+        "anthropic" => (
+            format!("{base}/v1/models"),
+            client
+                .get(format!("{base}/v1/models"))
+                .header("x-api-key", &key)
+                .header("anthropic-version", "2023-06-01"),
+        ),
+        // openai 与 openai_responses 同一 models 端点
+        _ => (
+            format!("{base}/v1/models"),
+            client.get(format!("{base}/v1/models")).bearer_auth(&key),
+        ),
+    };
+    let resp = req.send().await.map_err(|e| format!("请求失败: {e}"))?;
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.map_err(|_| format!("响应不是有效 JSON (HTTP {status})"))?;
+    if !status.is_success() {
+        let msg = body.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()).unwrap_or("");
+        return Err(format!("HTTP {status}{}", if msg.is_empty() { String::new() } else { format!(": {msg}") }));
+    }
+    // OpenAI/兼容网关:{ data: [{id}, …] };Anthropic:{ data: [{id/display_name}] }。
+    // 部分网关直接返回数组;再兜一层 { models: [...] }(ollama 风格)。
+    let items = body
+        .get("data")
+        .or_else(|| body.get("models"))
+        .and_then(|v| v.as_array())
+        .or_else(|| body.as_array())
+        .ok_or_else(|| "响应里找不到模型列表(data/models 字段)".to_string())?;
+    let mut ids: Vec<String> = items
+        .iter()
+        .filter_map(|m| m.get("id").and_then(|v| v.as_str()))
+        .map(str::to_string)
+        .collect();
+    ids.sort();
+    ids.dedup();
+    Ok(ids)
+}
+
 /// 保存配置并重启引擎。内容不做业务校验(壳零字段知识):表单校验在设置
 /// 视图,权威校验在内核。返回后 UI 自行整页刷新(不再有壳侧导航,原
 /// WebKitGTK IPC 重放竞态随之消失)。
@@ -1445,6 +1506,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_config,
             save_config,
+            models_fetch,
             take_ui_intent,
             host_info,
             show_main,

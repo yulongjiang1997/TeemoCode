@@ -11,8 +11,9 @@
 // 与自定义组恒在(空了也出组头 + 引导卡):组是"模型从哪来"的说明位,按现有
 // 条目派生的话,一个模型都没有的新装用户恰恰看不到该去哪里同步。会员组仍
 // 只在有条目时出现(引导在账号页卡片,不在这里堆空态)。
-import { IconChevronDown, IconEye, IconEyeOff, IconPlus } from "@tabler/icons-react";
+import { IconChevronDown, IconEye, IconEyeOff, IconPlus, IconRefresh } from "@tabler/icons-react";
 import { useState } from "react";
+import { fetchModelIds } from "@/lib/ipc/config";
 import { readSyncedExcluded, writeSyncedExcluded } from "@/lib/util/prefs";
 
 import { useI18n } from "@/lib/i18n";
@@ -81,6 +82,28 @@ export function ModelsSection({
 
   const patch = (i: number, p: Partial<HostModel>) =>
     onDraft((d) => ({ ...d, models: d.models.map((m, j) => (j === i ? { ...m, ...p } : m)) }));
+
+  // 远端模型列表探测(「获取」按钮):按 行下标 缓存各行的拉取状态与结果,
+  // 供 model 输入框的 datalist 下拉选择。只读探测,失败信息行内显示。
+  const [fetched, setFetched] = useState<Record<number, { ids: string[]; error?: string }>>({});
+  const [fetching, setFetching] = useState<ReadonlySet<number>>(new Set());
+  const fetchList = async (i: number) => {
+    const m = draft.models[i];
+    if (!m || fetching.has(i)) return;
+    const next = new Set(fetching);
+    next.add(i);
+    setFetching(next);
+    try {
+      const ids = await fetchModelIds(m.provider, m.base_url, m.api_key);
+      setFetched((prev) => ({ ...prev, [i]: ids.length ? { ids } : { ids: [], error: t("settings.models.fetch.empty") } }));
+    } catch (e) {
+      setFetched((prev) => ({ ...prev, [i]: { ids: [], error: e instanceof Error ? e.message : String(e) } }));
+    } finally {
+      const rest = new Set(fetching);
+      rest.delete(i);
+      setFetching(rest);
+    }
+  };
 
   const remove = (i: number) => {
     onDraft((d) => ({
@@ -325,12 +348,44 @@ export function ModelsSection({
                 </fieldset>
                 <fieldset className="fieldset gap-1.5">
                   <legend className="fieldset-legend">{t("settings.models.model")}</legend>
-                  <input
-                    className="input input-sm w-full font-mono text-xs"
-                    aria-label={t("settings.models.model")}
-                    value={m.model}
-                    onChange={(e) => patch(i, { model: e.target.value })}
-                  />
+                  {/* 手输 + 「获取」拉远端列表(datalist 下拉,可输可选);
+                      探测失败行内提示,不弹窗打断 */}
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      className="input input-sm min-w-0 flex-1 font-mono text-xs"
+                      aria-label={t("settings.models.model")}
+                      list={`model-ids-${i}`}
+                      value={m.model}
+                      onChange={(e) => patch(i, { model: e.target.value })}
+                    />
+                    <datalist id={`model-ids-${i}`}>
+                      {fetched[i]?.ids.map((id) => (
+                        <option key={id} value={id} />
+                      ))}
+                    </datalist>
+                    {/* 会员条目随同步整组更新,不提供探测入口 */}
+                    {m.source !== SOURCE_MONKEYCODE && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm shrink-0"
+                        title={t("settings.models.fetch.hint")}
+                        disabled={fetching.has(i) || !m.base_url.trim() || !m.api_key.trim()}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          void fetchList(i);
+                        }}
+                      >
+                        {fetching.has(i) ? <span className="loading loading-spinner loading-xs" aria-hidden /> : <IconRefresh size={14} stroke={1.75} aria-hidden />}
+                        {t("settings.models.fetch")}
+                      </button>
+                    )}
+                  </div>
+                  {fetched[i] && (fetched[i].ids.length > 0 || fetched[i].error) && (
+                    <p className={`text-xs ${fetched[i].error ? "text-error" : "text-base-content/50"}`}>
+                      {fetched[i].error ??
+                        t("settings.models.fetch.found", { n: fetched[i].ids.length })}
+                    </p>
+                  )}
                 </fieldset>
                 <fieldset className="fieldset gap-1.5">
                   <legend className="fieldset-legend">{t("settings.models.contextWindow")}</legend>

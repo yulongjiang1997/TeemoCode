@@ -90,6 +90,12 @@ export async function setSoundEnabled(enabled: boolean): Promise<void> {
   await invoke("set_sound_enabled", { enabled });
 }
 
+/** 探测远端模型列表(设置页「获取模型列表」):壳直连网关 models 端点,
+ *  只读不落盘。provider: anthropic | openai | openai_responses。 */
+export function fetchModelIds(provider: string, baseUrl: string, apiKey: string): Promise<string[]> {
+  return invoke<string[]>("models_fetch", { provider, baseUrl, apiKey });
+}
+
 /** 导入自定义音效文件:壳复制到应用数据目录 sounds/,返回存储路径(asset 协议播放)。 */
 export async function importSound(event: string, src: string): Promise<string> {
   if (!inDesktopShell()) throw new Error("not in desktop");
