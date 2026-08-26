@@ -1120,7 +1120,7 @@ function ModelPickModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="border-b border-base-300 px-4 py-3 text-sm font-bold">{t("account.mc.syncPickTitle")}</div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-2">
+        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-2">
           {error ? (
             <p className="p-2 text-xs text-error">{error}</p>
           ) : !items ? (
@@ -1128,7 +1128,7 @@ function ModelPickModal({
               <span className="loading loading-spinner loading-sm" aria-hidden />
             </div>
           ) : (
-            <ul className="menu w-full p-0">
+            <ul className="menu w-full flex-nowrap [&_li]:flex-nowrap p-0">
               {items.map((m) => (
                 <li key={m.id}>
                   <label className="flex cursor-pointer items-center gap-2 py-1.5">

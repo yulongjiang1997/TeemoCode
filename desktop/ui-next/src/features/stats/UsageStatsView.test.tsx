@@ -41,17 +41,23 @@ describe("UsageStatsView 按天热力图", () => {
     expect(screen.getByText("少")).toBeDefined();
     expect(screen.getByText("多")).toBeDefined();
 
-    // 单元格带 title(以年份开头),数量 = 7 行 × 周数,落在一年窗口内(52~54 周)
-    const cells = document.querySelectorAll<HTMLSpanElement>('span[title^="202"]');
+    // 单元格是 button(点击切单日明细),带 title(以年份开头),数量 =
+    // 7 行 × 周数,落在一年窗口内(52~54 周)
+    const cells = document.querySelectorAll<HTMLButtonElement>('button[title^="202"]');
     expect(cells.length).toBeGreaterThanOrEqual(7 * 52);
     expect(cells.length).toBeLessThanOrEqual(7 * 54);
     expect(cells.length % 7).toBe(0);
 
-    // 有 usage 的天映射到带色阶的格子(最活跃的天应为最深档 bg-success)
+    // 有 usage 的天映射到带色阶的格子(色阶=token 四分位,不是线性最大值;
+    // 稀疏样本下最活跃天至少应落在次高档及以上:bg-success/75 或纯 bg-success)
     const hottest = [...cells].find((c) => c.title.includes("调用次数 12"));
     expect(hottest).toBeDefined();
     expect(hottest!.className).toContain("bg-success");
-    expect(hottest!.className).not.toContain("/");
+    expect(/bg-success(?!\/)".*$|bg-success\/75/.test(hottest!.className)).toBe(true);
+
+    // 点击最活跃的天 → 切到单日明细:汇总卡标签变成该天日期
+    hottest!.click();
+    expect(await screen.findByText("按模型")).toBeDefined();
   });
 
   it("无数据的格子为灰底(空态不渲染热力图)", async () => {

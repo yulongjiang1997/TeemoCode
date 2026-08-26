@@ -339,6 +339,8 @@ describe("CloudTaskView", () => {
     // 悬停到点上浮出条目面板(7e86e9e9 起面板只在点上展开,不再整列悬停):
     // 全量目录(含未加载的更早提问)与回放窗口合并去重
     fireEvent.mouseEnter(nav.querySelector("[data-outline-dot]")!);
+    // 面板默认折叠为最近 2 条:先铺开再断言全量目录
+    fireEvent.click(screen.getByText(/显示更早/));
     const panelEntries = screen.getAllByText(/第[一二].*问/).filter((el) => el.closest("nav"));
     expect(panelEntries.map((el) => el.textContent)).toEqual(["第一问", "第一点五问", "第二问"]);
 

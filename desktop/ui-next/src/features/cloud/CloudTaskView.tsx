@@ -694,7 +694,7 @@ export function CloudTaskView({
                 onClick={() => void onLoadEarlier()}
               >
                 {h.loadingEarlier && <span className="loading loading-spinner loading-xs" aria-hidden />}
-                {t("chat.loadEarlier")}
+                {t("chat.loadEarlierCloud")}
               </button>
             )}
             {/* 审批/提问答复经 stream WS 上行(h.sendFrame),不走本地 session_send;

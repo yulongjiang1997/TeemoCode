@@ -628,6 +628,7 @@ describe("同步自动保存(旧 UI autoSaveDecision 随迁)", () => {
         mc_status: () => ({ logged_in: true, user: { name: "李四" } }),
         baizhi_status: () => ({ logged_in: false, host: "baizhi.cloud" }),
         // 第二次同步多回一条:草稿在保存在途期发生变化
+        mc_models_list: () => [{ id: "cfg-a", name: "mem-a", model: "mem-a", owner: "public" }],
         mc_models_sync: () => ({ models: round++ === 0 ? [model("mem-a")] : [model("mem-a"), model("mem-b")] }),
       },
       save: () => new Promise<null>((res) => pending.push(() => res(null))),
@@ -637,13 +638,15 @@ describe("同步自动保存(旧 UI autoSaveDecision 随迁)", () => {
     await userEvent.click(screen.getByRole("button", { name: "账号" }));
     const syncBtn = await screen.findByRole("button", { name: "同步会员模型" });
     await userEvent.click(syncBtn);
-    // 新 UI:同步后直接显示结果,无面板选择
+    // 两段式:先弹多选清单(默认全勾),确认后才开始同步
+    await userEvent.click(await screen.findByRole("button", { name: /同步选中/ }));
     await waitFor(() =>
       expect(screen.queryByText(/已获取.*个会员模型|没有可同步/)).not.toBeNull(),
     );
     await waitFor(() => expect(pending).toHaveLength(1)); // 第一路保存在途
 
     await userEvent.click(await screen.findByRole("button", { name: "同步会员模型" }));
+    await userEvent.click(await screen.findByRole("button", { name: /同步选中/ }));
     await waitFor(() =>
       expect(screen.queryByText(/已获取.*个会员模型|没有可同步/)).not.toBeNull(),
     );
