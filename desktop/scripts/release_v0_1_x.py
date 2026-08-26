@@ -157,11 +157,15 @@ def main():
 
     # ---------- 5. 签名(必须 cmd.exe)----------
     step(5, total, "签名(cmd.exe 内执行,bash 会转义坏密码)")
+    # 正斜杠路径(Path 的反斜杠形式经 subprocess 传给 cmd 后偶发
+    # InvalidFilename;正斜杠 Windows API 全程接受)
+    key_str = str(PRIVATE_KEY).replace("\\", "/")
+    exe_str = str(exe_path).replace("\\", "/")
     sign_cmd = (
         f'npx --yes @tauri-apps/cli@2 signer sign '
-        f'-f "{PRIVATE_KEY}" '
+        f'-f "{key_str}" '
         f'-p "{SIGN_PASSWORD}" '
-        f'"{exe_path}"'
+        f'"{exe_str}"'
     )
     r = subprocess.run(["cmd.exe", "/c", sign_cmd], cwd=str(DESKTOP), capture_output=True, text=True, encoding="utf-8", errors="replace")
     if r.returncode != 0 or not sig_path.exists():
