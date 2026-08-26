@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.20",
+    notes: "关于页版本历史改为本地内置(不再依赖云端清单,永不断档);最新版更新内容仍从云端获取",
+  },
+  {
     version: "0.1.19",
     notes: "修复 0.1.17/0.1.18 点「更新」报 Command update_download not found 导致无法应用内更新的问题",
   },
