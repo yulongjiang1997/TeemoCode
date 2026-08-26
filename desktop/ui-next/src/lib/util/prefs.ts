@@ -105,6 +105,18 @@ export function writeTaskExpandLimit(n: number): void {
   }
 }
 
+/** 提问大纲面板默认直接列出的提问数:超出折叠为「显示更多」。与任务
+ *  展开数同一默认值/范围,但独立存储——一个是侧栏会话粒度,一个是对话区
+ *  提问大纲粒度,用户可能想分开调。 */
+export function readOutlineExpandLimit(): number {
+  try {
+    const v = Number(localStorage.getItem("mc.outlineExpandLimit"));
+    return Number.isFinite(v) && v >= 1 ? Math.min(Math.round(v), 20) : 2;
+  } catch {
+    return 2;
+  }
+}
+
 /** 自定义背景图(data URL;空 = 未自定义,用默认纯色背景)。 */
 export function readBgImage(): string {
   try {

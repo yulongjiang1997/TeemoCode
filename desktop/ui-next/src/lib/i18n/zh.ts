@@ -739,6 +739,7 @@ export const zh = {
   "chat.outline.label": "提问大纲",
   "chat.outline.attachments": "📎 {count} 个附件",
   "chat.outline.emptyMsg": "(空消息)",
+  "chat.outline.showMore": "显示更早 · {count} 条提问",
 
   "files.label": "会话文件",
   "files.tab.files": "文件",

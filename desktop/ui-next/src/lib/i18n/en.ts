@@ -721,6 +721,7 @@ export const en: Record<MessageKey, string> = {
   "chat.outline.label": "Question outline",
   "chat.outline.attachments": "📎 {count} {count|attachment|attachments}",
   "chat.outline.emptyMsg": "(empty message)",
+  "chat.outline.showMore": "Show earlier · {count} questions",
 
   "files.label": "Session files",
   "files.tab.files": "Files",

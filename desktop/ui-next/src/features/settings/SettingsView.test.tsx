@@ -582,20 +582,23 @@ describe("模型分区的空组引导(旧 UI 随迁)", () => {
 });
 
 describe("同步自动保存(旧 UI autoSaveDecision 随迁)", () => {
-  // 账号分区已登录 + 会员同步返回一条模型
+  // 账号分区已登录 + 会员同步返回一条模型(mc_models_list 是选择弹窗的
+  // 清单源,缺了会走"拉不到→回退全量"分支,选择 UI 就不出现了)
   const syncExtra = () => ({
     mc_status: () => ({ logged_in: true, user: { name: "李四" } }),
     baizhi_status: () => ({ logged_in: false, host: "baizhi.cloud" }),
-    mc_models_sync: () => ({
+    mc_models_list: () => [{ id: "cfg-1", name: "member-m", model: "mm", owner: "public" }],
+    mc_models_sync: (_args?: { onlyIds?: string[] }) => ({
       models: [{ name: "member-m", base_url: "https://m", api_key: "k", model: "mm", source: "monkeycode" }],
     }),
   });
   const syncMemberModels = async () => {
     await userEvent.click(screen.getByRole("button", { name: "账号" }));
-    // 新 UI:同步会员模型按钮文字为"同步会员模型"
+    // 两段式:点「同步会员模型」先弹多选清单(默认全勾),确认后才同步
     const syncBtn = await screen.findByRole("button", { name: /同步会员模型/ });
     await userEvent.click(syncBtn);
-    // 新 UI:同步后直接显示结果,无面板选择
+    const confirm = await screen.findByRole("button", { name: /同步选中/ });
+    await userEvent.click(confirm);
     await waitFor(() =>
       expect(screen.queryByText(/已获取.*个会员模型|没有可同步/)).not.toBeNull(),
     );

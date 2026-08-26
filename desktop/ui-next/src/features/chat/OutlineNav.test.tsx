@@ -136,7 +136,7 @@ describe("长对话点列压缩", () => {
     [],
   );
 
-  it("常驻点列最多显示 12 条；无当前项时展示最新条目，展开面板仍保留全部", () => {
+  it("常驻点列最多显示 12 条；无当前项时展示最新条目，展开面板默认折叠为最近 2 条+「显示更多」", () => {
     const { container } = render(<OutlineNav entries={many} onJump={() => {}} />);
     const dots = [...container.querySelectorAll("[data-outline-dot]")];
     expect(dots).toHaveLength(12);
@@ -145,6 +145,11 @@ describe("长对话点列压缩", () => {
     );
 
     fireEvent.mouseEnter(container.querySelector("[data-outline-dot]")!);
+    // 面板折叠:只直接列出最近 2 条 + 一条「显示更早」入口
+    expect(container.querySelectorAll(".dropdown-content li")).toHaveLength(3);
+    expect(screen.getByText(/显示更早 · 38 条提问/)).toBeTruthy();
+    fireEvent.click(screen.getByText(/显示更早/));
+    // 铺开后全量可见
     expect(container.querySelectorAll(".dropdown-content li")).toHaveLength(40);
   });
 
