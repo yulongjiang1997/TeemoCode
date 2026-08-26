@@ -863,6 +863,26 @@ async fn update_check(app: AppHandle) -> Result<serde_json::Value, String> {
 /// UI 内下载安装更新并重启(update_check 确认有新版后调用)。
 #[tauri::command]
 async fn update_install(app: AppHandle) -> Result<(), String> {
+    // 优先安装 update_download 暂存的字节(下载/安装分离:用户在进度条走完后
+    // 才点「立即安装」,不能重新拉一遍 57MB);没有暂存(旧路径/直接调 install)
+    // 则现场 check + download_and_install,行为与旧版一致。
+    if let Some(bytes) = PENDING_UPDATE
+        .get()
+        .and_then(|p| p.lock().ok().and_then(|mut g| g.take()))
+    {
+        let updater = build_updater(&app)?;
+        let update = match updater.check().await {
+            Ok(Some(u)) => u,
+            Ok(None) => return Err("当前已是最新版本".into()),
+            Err(e) => return Err(format!("检查更新失败: {e}")),
+        };
+        eprintln!("[desktop] 更新: 安装已暂存的 {}", update.version);
+        update
+            .install(bytes)
+            .map_err(|e| format!("更新失败: {e}"))?;
+        eprintln!("[desktop] 更新: 安装完成,重启应用");
+        app.restart();
+    }
     let updater = build_updater(&app)?;
     let update = match updater.check().await {
         Ok(Some(u)) => u,
@@ -877,6 +897,69 @@ async fn update_install(app: AppHandle) -> Result<(), String> {
     eprintln!("[desktop] 更新: 安装完成,重启应用");
     app.restart();
 }
+
+/// update_download 下载完成的安装包字节(签名已校验)。update_install 取走即清。
+/// OnceLock+Mutex 而非 OnceCell<Option<Vec<u8>>>:安装失败重试时 take 后还能再下。
+static PENDING_UPDATE: std::sync::OnceLock<std::sync::Mutex<Option<Vec<u8>>>> =
+    std::sync::OnceLock::new();
+
+fn pending_slot() -> &'static std::sync::Mutex<Option<Vec<u8>>> {
+    PENDING_UPDATE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// UI 内只下载不安装(update.ts 的 download() → 进度经「update-download」事件;
+/// 用户确认后再 update_install 安装暂存字节)。0.1.17 及之前壳漏注册了本命令,
+/// UI 点「更新」直接报 Command update_download not found——下载/安装分离的
+/// 前端契约早就定了,壳侧一直没跟上。
+#[tauri::command]
+async fn update_download(app: AppHandle) -> Result<(), String> {
+    use driver::ohmy::ShellCtx;
+    let updater = build_updater(&app)?;
+    let update = match updater.check().await {
+        Ok(Some(u)) => u,
+        Ok(None) => return Err("当前已是最新版本".into()),
+        Err(e) => return Err(format!("检查更新失败: {e}")),
+    };
+    eprintln!("[desktop] 更新: 开始下载 {}", update.version);
+    // 进度经「update-download」事件下发(UI onDownloadProgress 订阅渲染进度条)。
+    // 节流到整百分点:57MB / 4KB 分片 ≈ 1.4 万次回调,逐次 emit 会淹掉 IPC。
+    // 回调在多线程上跑,累计量用原子量;闭包要 Send,不能拿 Cell。
+    let app2 = app.clone();
+    let received = AtomicU64::new(0);
+    let bytes = update
+        .download(
+            |chunk, total| {
+                let done = received.fetch_add(chunk as u64, Ordering::Relaxed) + chunk as u64;
+                let pct = match total {
+                    Some(t) if t > 0 => (done * 100 / t).min(100),
+                    _ => 0,
+                };
+                let last = LAST_PCT.load(Ordering::Relaxed);
+                if pct >= last + 5 || pct == 100 {
+                    LAST_PCT.store(pct, Ordering::Relaxed);
+                    app2.emit_json(
+                        "update-download",
+                        serde_json::json!({ "progress": pct, "state": "downloading" }),
+                    );
+                }
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| format!("下载更新失败: {e}"))?;
+    LAST_PCT.store(0, Ordering::Relaxed);
+    app.emit_json(
+        "update-download",
+        serde_json::json!({ "progress": 100, "state": "downloaded" }),
+    );
+    *pending_slot().lock().map_err(|e| e.to_string())? = Some(bytes);
+    eprintln!("[desktop] 更新: 下载完成,等待安装确认");
+    Ok(())
+}
+
+/// 下载进度节流水位(整百分点)。进程内只有一条下载路径,静态即可;
+/// 下载完成/失败后归零。
+static LAST_PCT: AtomicU64 = AtomicU64::new(0);
 
 // ==================== 自动更新 ====================
 //
@@ -1613,6 +1696,7 @@ fn main() {
             sound_enabled,
             set_sound_enabled,
             update_check,
+            update_download,
             update_install,
             open_extension_dir,
             open_app_dir,
