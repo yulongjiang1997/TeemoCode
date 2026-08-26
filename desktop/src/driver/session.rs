@@ -404,6 +404,10 @@ pub(super) struct SessionState {
     /// 最近一次已下发的上下文占用；provider 常在同一次模型调用的头尾各发
     /// usage，context_* 相同，壳侧据此去重，避免 journal/UI 空转。
     pub(super) context_usage: Option<(i64, i64)>,
+    /// 最近一次已入账用量统计的 (input,output)。同一次模型调用的头尾两个
+    /// usage 事件数值几乎相同,逐事件累加会把统计记成两份;与上次入账值
+    /// 完全相同视为重复上报跳过(见 normalize.rs usage 分支注释)。
+    pub(super) last_billed_usage: Option<(u64, u64)>,
     pub(super) workdir: String,
     pub(super) model_name: String,
     pub(super) mode: String,
@@ -763,6 +767,7 @@ impl OhmyDriver {
                 model_text: String::new(),
                 last_event_seq: 0,
                 context_usage: None,
+                last_billed_usage: None,
                 workdir: workdir.to_string(),
                 model_name: model_name.to_string(),
                 mode: "default".into(),
@@ -839,6 +844,7 @@ impl OhmyDriver {
                     model_text: String::new(),
                     last_event_seq: 0,
                     context_usage: None,
+                    last_billed_usage: None,
                     workdir: meta.get("workdir").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                     model_name: meta.get("model_name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                     mode: meta.get("mode").and_then(|v| v.as_str()).unwrap_or("default").to_string(),

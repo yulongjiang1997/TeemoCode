@@ -20,7 +20,7 @@ import {
 import { isWindowsShell } from "@/lib/ipc/host";
 import { inDesktopShell } from "@/lib/ipc/ipc";
 import { readCustomTheme, readTheme, setCustomTheme, setTheme, THEMES, CUSTOM_THEME, type CustomTheme, type Theme } from "@/lib/theme";
-import { readBgBlur, readBgImage, readBgOpacity, readMaskOpacity, writeBgBlur, writeBgImage, writeBgOpacity, writeMaskOpacity } from "@/lib/util/prefs";
+import { readBgBlur, readBgImage, readBgOpacity, readMaskOpacity, readTaskExpandLimit, writeBgBlur, writeBgImage, writeBgOpacity, writeMaskOpacity, writeTaskExpandLimit } from "@/lib/util/prefs";
 import { customThemeVars, randomTheme, roleHex, COLOR_ROLES, DEFAULT_CUSTOM, BORDER_RANGE, RADIUS_RANGE, SIZE_RANGE, type ColorRole } from "@/lib/customTheme";
 import { useDismiss } from "@/lib/util/useDismiss";
 import { useEscLayer } from "@/lib/util/escLayer";
@@ -435,6 +435,7 @@ function GeneralSection() {
   const [bgOpacity, setBgOpacityState] = useState(readBgOpacity);
   const [maskOpacity, setMaskOpacityState] = useState(readMaskOpacity);
   const [bgBlur, setBgBlurState] = useState(readBgBlur);
+  const [taskExpandLimit, setTaskExpandLimit] = useState(readTaskExpandLimit);
   const bgFileRef = useRef<HTMLInputElement | null>(null);
   const pickBg = (file: File | null | undefined) => {
     if (!file || !file.type.startsWith("image/")) return;
@@ -599,6 +600,25 @@ function GeneralSection() {
             <span className="text-xs text-base-content/50">{t("settings.sound.moved")}</span>
           </SettingRow>
         )}
+        <SettingRow label={t("settings.general.taskExpandLimit")} hint={t("settings.general.taskExpandLimitHint")}>
+          <div className="flex items-center gap-2">
+            <input
+              type="range"
+              min={1}
+              max={20}
+              className="range range-xs w-40"
+              aria-label={t("settings.general.taskExpandLimit")}
+              value={taskExpandLimit}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setTaskExpandLimit(v);
+                writeTaskExpandLimit(v);
+                window.dispatchEvent(new Event("mc-task-expand-changed"));
+              }}
+            />
+            <span className="w-8 text-right text-xs tabular-nums text-base-content/60">{taskExpandLimit}</span>
+          </div>
+        </SettingRow>
       </div>
       <p className="text-xs text-base-content/50">{t("settings.appearance.hint")}</p>
     </section>

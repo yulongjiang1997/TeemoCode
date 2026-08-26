@@ -10,7 +10,7 @@
 //   btn、右键菜单走 lib/contextMenu(menu 皮相)。
 // 行交互:右键 = 行菜单(重命名/归档/删除二段确认)。
 // 行/组头/小节折叠的呈现件收口在 listKit(三列表统一,不做两套)。
-import { IconArchive, IconChevronLeft, IconChevronRight, IconDownload, IconFolder, IconFolderOpen, IconInbox, IconMessages, IconPin, IconPlus, IconRefresh, IconX } from "@tabler/icons-react";
+import { IconArchive, IconChevronDown, IconChevronLeft, IconChevronRight, IconChevronUp, IconDownload, IconFolder, IconFolderOpen, IconInbox, IconMessages, IconPin, IconPlus, IconRefresh, IconX } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
@@ -54,7 +54,7 @@ import {
   sortCustomGroups,
 } from "@/lib/util/projects";
 import type { Space } from "@/lib/util/prefs";
-import { readSidebarCollapsed, writeSidebarCollapsed } from "@/lib/util/prefs";
+import { readSidebarCollapsed, writeSidebarCollapsed, readTaskExpandLimit } from "@/lib/util/prefs";
 import { renameIsNoop } from "@/lib/util/rename";
 import { importMcApply, importMcScan, importMcScanDir, pickDirectory, type ImportMcSession } from "@/lib/ipc/host";
 
@@ -354,13 +354,13 @@ function ProjectDetails({
             </button>
           )}
         </summary>
-        {/* 缩进阶梯进行内(行底满宽,旧 UI 同款):嵌套 ul 一律拉平
+        {/* 缩进阶梯行内(行底满宽,旧 UI 同款):嵌套 ul 一律拉平
             (ms-0 ps-0,margin 缩进会把行底压窄错位);L1 行 ps-6、L2 行
             ps-9(基准 item padding 12px,每级恰 = 图标宽 12px),行首标记
             统一 12px 定宽槽 → 同级文字对齐、跨级阶梯均匀 */}
-        <ul className={`ms-0 min-w-0 ps-0 pb-1.5 ${NEST_NO_GUIDE}`}>
-          {rows(group.sessions, p, archivedProject ? 2 : 1)}
-          {group.archivedSessions.length > 0 && (
+        <TaskListWithMore group={group} p={p} level={archivedProject ? 2 : 1} />
+        {group.archivedSessions.length > 0 && (
+          <ul className={`ms-0 min-w-0 ps-0 pb-1.5 ${NEST_NO_GUIDE}`}>
             <li>
               <details open={archOpen} onToggle={(e) => {
                 if (e.target !== e.currentTarget) return; // toggle 合成冒泡守卫
@@ -384,10 +384,70 @@ function ProjectDetails({
                 )}
               </details>
             </li>
-          )}
-        </ul>
+          </ul>
+        )}
       </details>
     </li>
+  );
+}
+
+/** 项目组任务列表 + 折叠:默认只直接展开最后 N 个任务(prefs
+ *  taskExpandLimit,设置页可改),更早的折叠成一行「显示更多 · M」,
+ *  点击整组铺开。当前选中/等待提问的任务始终直接可见——正在交互的
+ *  任务被折起来会让人以为列表丢了。 */
+function TaskListWithMore({
+  group,
+  p,
+  level,
+}: {
+  group: ProjectGroup;
+  p: RowPlumbing;
+  level: number;
+}) {
+  const { t } = useI18n();
+  // 展开态按项目组记忆(切走再切回不重置)
+  const [expanded, setExpanded] = useState(false);
+  const limit = readTaskExpandLimit();
+  const sessions = group.sessions;
+  // 尾部 limit 个直接展示;当前选中/等待提问的交互任务始终可见——正在用的
+  // 任务被折起来会让人以为列表丢了。overflow 只数真正被藏起来的。
+  const visible = expanded
+    ? sessions
+    : sessions.filter(
+        (s, i) =>
+          i >= sessions.length - limit ||
+          s.id === p.currentId ||
+          (s.waiting_ask ?? false),
+      );
+  const hiddenCount = sessions.length - visible.length;
+  return (
+    <>
+      {hiddenCount > 0 && !expanded && (
+        <button
+          type="button"
+          className={`ms-0 flex w-full items-center gap-1.5 rounded-md px-6 py-1 text-start text-xs text-base-content/40 hover:bg-base-200/60 hover:text-base-content/70`}
+          onClick={() => setExpanded(true)}
+        >
+          <IconChevronDown size={12} stroke={1.75} aria-hidden />
+          {t("sidebar.project.showMore", { count: hiddenCount })}
+        </button>
+      )}
+      <ul className={`ms-0 min-w-0 ps-0 pb-1.5 ${NEST_NO_GUIDE}`}>
+        {visible.map((meta) => (
+          <SessionRow key={meta.id} meta={meta} p={p} level={level} />
+        ))}
+        {expanded && hiddenCount >= 0 && sessions.length > limit && (
+          <button
+            type="button"
+            className="ms-0 flex w-full items-center gap-1.5 rounded-md px-6 py-1 text-start text-xs text-base-content/40 hover:bg-base-200/60 hover:text-base-content/70"
+            onClick={() => setExpanded(false)}
+          >
+            <IconChevronUp size={12} stroke={1.75} aria-hidden />
+            {t("sidebar.project.showLess")}
+          </button>
+        )}
+      </ul>
+    </>
   );
 }
 

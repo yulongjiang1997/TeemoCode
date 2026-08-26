@@ -958,7 +958,10 @@ fn local_model_entries(items: &[Value], plan: &str) -> (Vec<Value>, Vec<String>)
 /// 内置模型标 locked 展示禁选;订阅读取失败可容忍,进阶档全部锁定并出
 /// note,重新同步可恢复)。返回 {models, notes}(与 baizhi_sync 返回形状
 /// 平行;不碰 config.json)。
-pub async fn mc_member_models_sync(svc: &Service) -> BzResult<Value> {
+///
+/// only_ids:非空时只返回服务端 id 命中的条目(UI 先拉清单弹多选,确认后
+/// 只同步勾选的——全量同步会把用户不想要的条目也灌进配置)。
+pub async fn mc_member_models_sync(svc: &Service, only_ids: &[String]) -> BzResult<Value> {
     // 服务端是游标分页,limit 缺省只给 100(backend handler List);显式要 200,
     // 还有下一页就出 note——宁可说清楚,也不让用户对着少掉的条目猜
     let out = mc_call(svc, reqwest::Method::GET, "/api/v1/users/models?limit=200", None).await?;
@@ -978,6 +981,16 @@ pub async fn mc_member_models_sync(svc: &Service) -> BzResult<Value> {
     if out.pointer("/page/has_next_page").and_then(Value::as_bool) == Some(true) {
         notes.push("服务端模型超过 200 条,本次只同步了前 200 条".to_string());
     }
+    // 多选过滤在映射**之前**:被过滤掉的条目连 locked/占位检查都不用做,
+    // 也不进任何 note 计数(用户主动不选的,不是"同步丢了")
+    let items = if only_ids.is_empty() {
+        items
+    } else {
+        items
+            .into_iter()
+            .filter(|it| it.get("id").and_then(Value::as_str).is_some_and(|id| only_ids.contains(&id.to_string())))
+            .collect::<Vec<_>>()
+    };
     let plan = match mc_call(svc, reqwest::Method::GET, "/api/v1/users/subscription", None).await {
         Ok(v) => v.get("plan").and_then(Value::as_str).unwrap_or("").to_string(),
         Err(e) => {
@@ -988,6 +1001,38 @@ pub async fn mc_member_models_sync(svc: &Service) -> BzResult<Value> {
     let (models, mut map_notes) = local_model_entries(&items, &plan);
     notes.append(&mut map_notes);
     Ok(json!({ "models": models, "notes": notes }))
+}
+
+/// 会员模型清单(选择弹窗用):只取服务端原始字段投影,不做订阅映射。
+/// 返回 [{id, name(remark 或 model), model, owner, hidden}]。与
+/// mc_member_models_sync 同一接口同一分页口径,但这是**读**,不落盘。
+pub async fn mc_member_models_catalog(svc: &Service) -> BzResult<Value> {
+    let out = mc_call(svc, reqwest::Method::GET, "/api/v1/users/models?limit=200", None).await?;
+    if out.is_null() {
+        return Err(BzErr::Unauthorized("MonkeyCode 会话已失效,请在设置中重新连接".into()));
+    }
+    let items = out
+        .get("models")
+        .and_then(Value::as_array)
+        .cloned()
+        .ok_or_else(|| other(format!("模型列表响应格式异常: {}", super::snippet(&out.to_string(), 120))))?;
+    let list: Vec<Value> = items
+        .iter()
+        .filter(|it| !it.get("is_hidden").and_then(Value::as_bool).unwrap_or(false))
+        .map(|it| {
+            let s = |k: &str| it.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let (id, model) = (s("id"), s("model"));
+            let remark = s("remark");
+            json!({
+                "id": id,
+                "name": if remark.is_empty() { model.clone() } else { remark },
+                "model": model,
+                "owner": it.pointer("/owner/type").and_then(Value::as_str).unwrap_or("public"),
+            })
+        })
+        .filter(|e| !e.get("id").and_then(Value::as_str).unwrap_or("").is_empty())
+        .collect();
+    Ok(Value::Array(list))
 }
 
 /// MonkeyCode 云端包壳 {code,message,data}。401 不看响应体直接判会话失效:

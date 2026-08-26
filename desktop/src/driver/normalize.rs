@@ -492,27 +492,52 @@ impl Inner {
                     // 子代理会话经 subagents 路由表归并到父任务,UI 侧按
                     // parent 字段折叠展示。记账失败(无配置目录)仅忽略——
                     // 统计是尽力而为的旁路,不能影响主事件流。
+                    //
+                    // ⚠️ 去重:provider 在同一次模型调用的头(message_start,
+                    // input 已定)尾(message_delta,output 定稿)各发一次
+                    // usage,input_tokens 几乎必然相同(头尾差只在缓存命中
+                    // 计数)。逐事件累加会把每次调用记成两份——统计翻倍的
+                    // 根因(fold.attach_usage 靠"后到覆盖前值"幂等,这里没
+                    // 有覆盖语义,必须显式去重)。按 (sid,model) 记上次已
+                    // 入账的 (input,output),与上次完全相同才视为同一调用
+                    // 的重复上报而跳过;不同则正常入账(连续两次调用恰好同
+                    // 量的概率可忽略,且最坏也只是少记一次,不会放大)。
                     if input > 0 || output > 0 {
-                        if let Ok(cfg_dir) = self.app.config_dir() {
-                            let (title, model, parent) = {
-                                let sessions = self.sess.sessions.lock_ok();
-                                let subs = self.sub.subagents.lock_ok();
-                                let (title, model) = sessions
-                                    .get(&sid)
-                                    .map(|s| (s.title.clone(), s.model_name.clone()))
-                                    .unwrap_or_default();
-                                let parent = subs.get(&sid).map(|r| r.parent_sid.clone());
-                                (title, model, parent)
-                            };
-                            crate::stats::UsageStats::shared(&cfg_dir).record(
-                                &crate::stats::today(),
-                                &sid,
-                                &title,
-                                &model,
-                                parent.as_deref(),
-                                input,
-                                output,
-                            );
+                        let dup = {
+                            let mut sessions = self.sess.sessions.lock_ok();
+                            match sessions.get_mut(&sid) {
+                                Some(s) => {
+                                    let dup = s.last_billed_usage == Some((input, output));
+                                    if !dup {
+                                        s.last_billed_usage = Some((input, output));
+                                    }
+                                    dup
+                                }
+                                None => false,
+                            }
+                        };
+                        if !dup {
+                            if let Ok(cfg_dir) = self.app.config_dir() {
+                                let (title, model, parent) = {
+                                    let sessions = self.sess.sessions.lock_ok();
+                                    let subs = self.sub.subagents.lock_ok();
+                                    let (title, model) = sessions
+                                        .get(&sid)
+                                        .map(|s| (s.title.clone(), s.model_name.clone()))
+                                        .unwrap_or_default();
+                                    let parent = subs.get(&sid).map(|r| r.parent_sid.clone());
+                                    (title, model, parent)
+                                };
+                                crate::stats::UsageStats::shared(&cfg_dir).record(
+                                    &crate::stats::today(),
+                                    &sid,
+                                    &title,
+                                    &model,
+                                    parent.as_deref(),
+                                    input,
+                                    output,
+                                );
+                            }
                         }
                     }
                 }

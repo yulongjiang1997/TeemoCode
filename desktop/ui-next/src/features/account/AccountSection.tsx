@@ -35,9 +35,11 @@ import {
   baizhiSync,
   disconnectMc,
   mcLogin,
+  mcModelsList,
   mcStatus,
   type BaizhiStatus,
   type BaizhiSyncResult,
+  type McModelCatalogItem,
   type McModelsSyncResult,
   type McStatus,
   mcModelsSync,
@@ -305,11 +307,11 @@ function ServiceCard({
     onSelectEdition(next);
   };
 
-  const sync = async () => {
+  const sync = async (onlyIds?: string[]) => {
     setBusy("sync");
     setMsg(null);
     try {
-      const r: McModelsSyncResult = await mcModelsSync(serviceGeneration);
+      const r: McModelsSyncResult = await mcModelsSync(serviceGeneration, onlyIds);
       if (!isCurrentService()) return;
       const notes = r.notes?.length ? ` ${r.notes.join(t("common.semiSep"))}` : "";
       // 空结果按失败说(旧 UI 同款):没有会员权益时「已获取 0 个会员模型…
@@ -324,6 +326,29 @@ function ServiceCard({
       setMsg({ text: t("account.mc.syncDone", { models: r.models.length }) + syncOutcome(t, applied) + notes + skipped });
     } catch (e) {
       if (isCurrentService()) setMsg({ text: errMsg(e), error: true });
+    } finally {
+      if (isCurrentService()) setBusy(null);
+    }
+  };
+
+  /** 「同步会员模型」两段式:先拉服务端清单弹多选(默认全勾),确认后只
+   *  同步勾选的。清单拉取失败回退全量直同步——选择是增强,不能把同步
+   *  本身堵死。 */
+  const [pickOpen, setPickOpen] = useState(false);
+  const startSync = async () => {
+    setBusy("sync");
+    setMsg(null);
+    try {
+      const list = await mcModelsList(serviceGeneration);
+      if (!isCurrentService()) return;
+      if (!list.length) {
+        setMsg({ text: t("account.mc.syncEmpty"), error: true });
+        return;
+      }
+      setPickOpen(true);
+    } catch {
+      // 清单拉不到(旧服务/接口变更):回退旧行为全量同步
+      void sync();
     } finally {
       if (isCurrentService()) setBusy(null);
     }
@@ -570,7 +595,7 @@ function ServiceCard({
           <div className="flex shrink-0 items-center gap-1.5">
             {rowConnected ? (
               <>
-                <button type="button" className="btn btn-sm" disabled={busy !== null} onClick={() => void sync()}>
+                <button type="button" className="btn btn-sm" disabled={busy !== null} onClick={() => void startSync()}>
                   {busy === "sync" && <span className="loading loading-spinner loading-xs" aria-hidden />}
                   {busy === "sync" ? t("account.syncing") : t("account.mc.sync")}
                 </button>
@@ -650,6 +675,16 @@ function ServiceCard({
       <div className="divide-y divide-base-300 overflow-x-hidden overflow-y-auto px-3 py-2">
         {rows.map(renderRow)}
       </div>
+      {pickOpen && (
+        <ModelPickModal
+          generation={serviceGeneration}
+          onCancel={() => setPickOpen(false)}
+          onConfirm={(ids) => {
+            setPickOpen(false);
+            void sync(ids);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1044,5 +1079,91 @@ export function AccountSection({
         </>
       )}
     </section>
+  );
+}
+
+/** 会员模型多选弹窗:全选默认,确认后只同步勾选的。清单在打开时拉取
+ *  (startSync 已预检过非空,这里失败直接关窗报错——不回退全量,避免用户
+ *  以为勾选生效了实际灌进来一堆没选的)。 */
+function ModelPickModal({
+  generation,
+  onCancel,
+  onConfirm,
+}: {
+  generation: number | undefined;
+  onCancel: () => void;
+  onConfirm: (ids: string[]) => void;
+}) {
+  const { t } = useI18n();
+  const [items, setItems] = useState<McModelCatalogItem[] | null>(null);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [error, setError] = useState("");
+  useEffect(() => {
+    mcModelsList(generation)
+      .then((list) => {
+        setItems(list);
+        setChecked(new Set(list.map((m) => m.id)));
+      })
+      .catch((e) => setError(errMsg(e)));
+  }, [generation]);
+  const toggle = (id: string) =>
+    setChecked((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onCancel}>
+      <div
+        className="flex max-h-[70vh] w-96 flex-col rounded-box border border-base-300 bg-base-100 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="border-b border-base-300 px-4 py-3 text-sm font-bold">{t("account.mc.syncPickTitle")}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-2">
+          {error ? (
+            <p className="p-2 text-xs text-error">{error}</p>
+          ) : !items ? (
+            <div className="flex justify-center p-6">
+              <span className="loading loading-spinner loading-sm" aria-hidden />
+            </div>
+          ) : (
+            <ul className="menu w-full p-0">
+              {items.map((m) => (
+                <li key={m.id}>
+                  <label className="flex cursor-pointer items-center gap-2 py-1.5">
+                    <input
+                      type="checkbox"
+                      className="checkbox checkbox-xs"
+                      checked={checked.has(m.id)}
+                      onChange={() => toggle(m.id)}
+                    />
+                    <span className="min-w-0 flex-1 truncate text-xs">{m.name}</span>
+                    <span className="shrink-0 font-mono text-2xs text-base-content/40">{m.model}</span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div className="flex items-center justify-between gap-2 border-t border-base-300 px-4 py-3">
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs"
+            onClick={() => setChecked((cur) => (cur.size === (items?.length ?? 0) ? new Set() : new Set(items?.map((m) => m.id))))}
+          >
+            {checked.size === (items?.length ?? 0) ? t("account.mc.pickNone") : t("account.mc.selectAll")}
+          </button>
+          <div className="flex gap-1.5">
+            <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel}>
+              {t("settings.skills.cancel")}
+            </button>
+            <button type="button" className="btn btn-primary btn-sm" disabled={checked.size === 0} title={checked.size === 0 ? t("account.mc.syncSelectNone") : undefined} onClick={() => onConfirm([...checked])}>
+              {t("account.mc.syncSelected", { n: checked.size })}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

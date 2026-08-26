@@ -496,7 +496,7 @@ async fn expired_session_reports_relogin_not_format_error() {
             _ => Resp::json(404, json!({})),
         }
     }));
-    let err = super::monkeycode::mc_member_models_sync(&Service::test_service(endpoints(&url)))
+    let err = super::monkeycode::mc_member_models_sync(&Service::test_service(endpoints(&url)), &[])
         .await
         .err()
         .expect("应失败")

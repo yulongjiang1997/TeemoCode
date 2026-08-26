@@ -160,13 +160,15 @@ describe("侧栏(local 空间)", () => {
   // 静默态根本不给 trailing —— zh.ts 里的 status.interrupted/idle/notStarted
   // 成了没人读的孤儿键。配合"interrupted 不出提醒"那个 bug,被引擎崩溃打断的
   // 后台任务在界面上处处隐身
-  it("静默状态词进 tooltip 且不上行:已停止 / 可继续 / 尚未开始", () => {
+  it("静默状态词进 tooltip 且不上行:已停止 / 可继续 / 尚未开始", async () => {
     const sessions = [
       meta({ id: "被打断的", workdir: "/p/alpha", status: "interrupted", turns: 2 }),
       meta({ id: "可以接着来", workdir: "/p/alpha", status: "idle", turns: 1 }),
       meta({ id: "还没开始", workdir: "/p/alpha", status: "created", turns: 0 }),
     ];
     render(<Sidebar space="local" sessions={sessions} currentId={null} actions={actions()} />);
+    // 3 个同组任务超出默认展开数(2):先点「显示更多」全部铺开再逐行断言
+    await userEvent.click(screen.getByText(/显示更多/));
     for (const [id, word] of [
       ["被打断的", "已停止"],
       ["可以接着来", "可继续"],
@@ -184,6 +186,28 @@ describe("侧栏(local 空间)", () => {
     expect(rowOf("重构侧栏").title).toContain("等待确认");
   });
 
+  // 任务工作区折叠:项目内超过 taskExpandLimit(默认 2)的任务收进「显示
+  // 更多」,点击铺开/收起;当前选中与等待确认的任务豁免折叠。
+  it("项目内超出默认展开数的任务折叠为「显示更多」,交互中任务豁免", async () => {
+    const sessions = [
+      meta({ id: "最早一", workdir: "/p/gamma", turns: 1 }),
+      meta({ id: "第二早", workdir: "/p/gamma", turns: 1 }),
+      meta({ id: "第三早", workdir: "/p/gamma", turns: 1 }),
+      meta({ id: "最新一", workdir: "/p/gamma", turns: 1 }),
+    ];
+    render(<Sidebar space="local" sessions={sessions} currentId="第三早" actions={actions()} />);
+    // 4 个任务、limit=2:尾部两个(第三早/最新一)直接可见;「第三早」
+    // 同时是当前选中(豁免但不加名额);更早的「最早一/第二早」被折
+    expect(screen.getByText(/显示更多 · 2 个任务/)).toBeTruthy();
+    expect(within(detailsOf("gamma")).getByText("最新一")).toBeTruthy();
+    expect(within(detailsOf("gamma")).getByText("第三早")).toBeTruthy();
+    expect(within(detailsOf("gamma")).queryByText("最早一")).toBeNull();
+    await userEvent.click(screen.getByText(/显示更多/));
+    expect(within(detailsOf("gamma")).getByText("最早一")).toBeTruthy();
+    await userEvent.click(screen.getByText("收起"));
+    expect(within(detailsOf("gamma")).queryByText("最早一")).toBeNull();
+  });
+
   it("归档任务收进项目内「已归档任务 · N」小节(默认收起,点开并落契约键);chat 会话不出现", async () => {
     render(<Sidebar space="local" sessions={SESSIONS} currentId={null} actions={actions()} />);
     expect(screen.queryByText("问了个问题")).toBeNull();
@@ -194,13 +218,14 @@ describe("侧栏(local 空间)", () => {
     expect(JSON.parse(localStorage.getItem("mc.sessionArchivesOpen") ?? "[]")).toContain("/p/beta");
   });
 
-  it("活态点 = 实心点 + 扩散环(运行中/等待确认);终态只给静点", () => {
+  it("活态点 = 实心点 + 扩散环(运行中/等待确认);终态只给静点", async () => {
     const sessions = [
       meta({ id: "跑着的", workdir: "/p/alpha", status: "running" }),
       meta({ id: "等确认", workdir: "/p/alpha", waiting_ask: true }),
       meta({ id: "挂了的", workdir: "/p/alpha", status: "error" }),
     ];
     render(<Sidebar space="local" sessions={sessions} currentId={null} actions={actions()} />);
+    await userEvent.click(screen.getByText(/显示更多/));
     // 环是**额外**一层,实心点照旧常驻——用户反馈 animate-pulse 靠淡化制造
     // 动效、点本身反而看不清(2026-08-07);换 ping 后任何相位状态都可读
     const live = within(rowOf("跑着的")).getByRole("img", { name: "运行中" });

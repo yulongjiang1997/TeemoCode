@@ -173,10 +173,11 @@ export function ModelMenu({
   };
 
   return (
-    <div
-      ref={boxRef}
-      className={`dropdown dropdown-top min-w-0 shrink ${align === "end" ? "dropdown-end" : ""} ${open ? "dropdown-open" : ""}`}
-    >
+    // relative + 菜单 absolute top-full:不用 daisyUI dropdown 的
+    // dropdown-content(它挂全局焦点态,与 useDismiss 抢关闭权;且
+    // dropdown-top 的定位偏移会把菜单压到触发器上遮住输入行)。
+    // 对齐新建任务页文件夹下拉:锚定按钮下方 4px、右对齐、主题底色。
+    <div ref={boxRef} className="relative min-w-0 shrink">
       <Trigger
         open={open}
         disabled={disabled}
@@ -189,13 +190,9 @@ export function ModelMenu({
         <span className="min-w-0 truncate">{modelDisplayByName(models, current).label || t("chat.model.label")}</span>
       </Trigger>
       {open && (
-        // dropdown-content 换 div 外壳:过滤框/来源 tab 固定在顶,
-        // 条目列表单独内滚(菜单长了不能把导航滚出视野)。
-        // 视觉对齐新建任务的文件夹下拉:btn-sm 级行高、宽松内边距,
-        // 条目文字用应用基准 14px(text-xs→text-[13px] 折中,避免菜单过高)
         <div
           style={{ maxHeight: menuMax }}
-          className="dropdown-content flex w-64 flex-col overflow-hidden rounded-box border border-base-300 bg-base-100 p-1.5 shadow-lg"
+          className={`absolute end-0 top-full z-30 mt-1 flex w-64 flex-col overflow-hidden rounded-box border border-base-300 bg-base-100 p-1.5 shadow-lg ${align === "end" ? "" : "start-0 end-auto"}`}
         >
           {/* 不 autoFocus:打开菜单是「点选」意图,焦点跳进过滤框
               反而抢走键盘上下文(用户定案) */}
@@ -203,7 +200,7 @@ export function ModelMenu({
             <input
               aria-label={t("chat.model.filter")}
               placeholder={t("chat.model.filter")}
-              className="input input-xs mb-1 w-full shrink-0"
+              className="input input-xs mb-1 w-full shrink-0 bg-base-200/50"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
             />
@@ -226,7 +223,7 @@ export function ModelMenu({
           )}
           <ul
             aria-label={t("chat.model.label")}
-            className="menu menu-md w-full h-40 shrink-0 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto p-0"
+            className="menu w-full min-h-0 shrink flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto p-0"
           >
             {tabItems.length === 0 && (
               <li className="menu-disabled">

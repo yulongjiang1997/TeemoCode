@@ -1128,6 +1128,7 @@ fn bare_session(sid: &str) -> SessionState {
         model_text: String::new(),
         last_event_seq: 0,
         context_usage: None,
+        last_billed_usage: None,
         workdir: String::new(),
         model_name: String::new(),
         mode: "default".into(),

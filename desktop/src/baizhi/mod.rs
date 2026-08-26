@@ -1103,7 +1103,7 @@ async fn ensure_ohmyagent_key_current(
 #[cfg(test)]
 pub(crate) async fn sync_member_models(svc: &Service, cfg_dir: &std::path::Path) -> BzResult<Value> {
     ensure_ohmyagent_key(svc, cfg_dir).await?;
-    monkeycode::mc_member_models_sync(svc).await
+    monkeycode::mc_member_models_sync(svc, &[]).await
 }
 
 /// 删成功才移除本地记录;删失败(如断网)保留记录,下次断开重试即收敛。
@@ -1142,11 +1142,15 @@ async fn revoke_member_models_current(
 
 /// 同步 MonkeyCode 会员内置模型为本地条目(source="monkeycode")。与
 /// baizhi_sync 同款语义:不碰 config.json,纯返回 {models, notes}。
+///
+/// only_ids:非空时只同步这些服务端模型 id(UI 先 mc_models_list 拉清单弹
+/// 多选,用户确认后把勾选的 id 传回来——全量灌入会塞进用户不想要的条目)。
 #[tauri::command]
 pub async fn mc_models_sync(
     app: tauri::AppHandle,
     bz: State<'_, BaizhiState>,
     expected_generation: Option<u64>,
+    only_ids: Option<Vec<String>>,
 ) -> Result<Value, String> {
     let cfg_dir = crate::config::config_dir(&app)?;
     let _op = bz.member_ops.lock().await;
@@ -1154,11 +1158,29 @@ pub async fn mc_models_sync(
         return Err("服务配置已切换,本次会员模型同步已取消,请重试".into());
     };
     ensure_ohmyagent_key_current(&bz, &svc, transport_generation, &cfg_dir).await.map_err(BzErr::msg)?;
-    let models = monkeycode::mc_member_models_sync(&svc).await.map_err(BzErr::msg)?;
+    let models = monkeycode::mc_member_models_sync(&svc, only_ids.as_deref().unwrap_or(&[]))
+        .await
+        .map_err(BzErr::msg)?;
     if !bz.is_current(transport_generation) {
         return Err("服务配置已切换,旧服务的模型结果已丢弃,请重试".into());
     }
     Ok(models)
+}
+
+/// 拉取会员模型清单(供「同步会员模型」的选择弹窗;不落盘、不改配置)。
+/// 与 mc_models_sync 同一数据源,只是不做订阅档位映射——弹窗只需要
+/// 展示名/底层串/档位,locked 态在确认同步后由 sync 结果决定。
+#[tauri::command]
+pub async fn mc_models_list(bz: State<'_, BaizhiState>, expected_generation: Option<u64>) -> Result<Value, String> {
+    let _op = bz.member_ops.lock().await;
+    let Some((svc, transport_generation)) = bz.service_snapshot_if_current(expected_generation) else {
+        return Err("服务配置已切换,本次读取已取消,请重试".into());
+    };
+    let list = monkeycode::mc_member_models_catalog(&svc).await.map_err(BzErr::msg)?;
+    if !bz.is_current(transport_generation) {
+        return Err("服务配置已切换,旧服务的清单已丢弃,请重试".into());
+    }
+    Ok(list)
 }
 
 /// 断开 MonkeyCode 账号时调用(从未同步过直接成功)。须在清除 mc 会话

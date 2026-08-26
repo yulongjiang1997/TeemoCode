@@ -143,6 +143,16 @@ export interface McModelsSyncResult {
   notes?: string[];
 }
 
+/** mc_models_list 返回条目:服务端原始投影(选择弹窗展示用)。 */
+export interface McModelCatalogItem {
+  id: string;
+  /** 展示名(remark,空则回落 model 串) */
+  name: string;
+  /** 底层模型串(monkeycode-pro/… 可判档位) */
+  model: string;
+  owner: string;
+}
+
 /** MonkeyCode 会话状态;浏览器模式 null。 */
 export async function mcStatus(): Promise<McStatus | null> {
   if (!inDesktopShell()) return null;
@@ -168,11 +178,17 @@ export async function mcUsage(): Promise<McUsage | null> {
 /** 每日签到(壳内自动 PoW)。成功后调用方重拉 mcUsage 刷新余额。 */
 export const mcCheckin = () => invoke<{ ok: boolean }>("mc_checkin");
 
+/** 拉取会员模型清单(同步选择弹窗;纯读取,不落盘)。 */
+export const mcModelsList = (expectedGeneration?: number) =>
+  invoke<McModelCatalogItem[]>("mc_models_list", { expectedGeneration });
+
 /** 同步会员内置模型(不落盘,纯返回)。
  *  expectedGeneration:壳 transport 代次;若保存期间切了服务地址则取消,
- *  避免把旧服务结果落到新会话(向后兼容:不传 = 不校验)。 */
-export const mcModelsSync = (expectedGeneration?: number) =>
-  invoke<McModelsSyncResult>("mc_models_sync", { expectedGeneration });
+ *  避免把旧服务结果落到新会话(向后兼容:不传 = 不校验)。
+ *  onlyIds:非空只同步这些服务端模型 id(选择弹窗确认后传入);
+ *  空/缺省 = 全量(旧行为)。 */
+export const mcModelsSync = (expectedGeneration?: number, onlyIds?: string[]) =>
+  invoke<McModelsSyncResult>("mc_models_sync", { expectedGeneration, onlyIds });
 
 /** 吊销会员模型密钥。须在 mcLogout **之前**调用——请求走 mc 会话认证,
  *  会话一清就没法删了(壳会保留本地记录待重连后收敛)。

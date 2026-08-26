@@ -85,6 +85,26 @@ export function writeSidebarCollapsed(c: boolean): void {
   }
 }
 
+/** 任务工作区(项目组)默认展开的任务数:超出部分折叠为「显示更多」。
+ *  默认 2 = 只保留最后 2 个任务的对话内容直接可见,更早的收进折叠。
+ *  设置页可改(1-20)。 */
+export function readTaskExpandLimit(): number {
+  try {
+    const v = Number(localStorage.getItem("mc.taskExpandLimit"));
+    return Number.isFinite(v) && v >= 1 ? Math.min(Math.round(v), 20) : 2;
+  } catch {
+    return 2;
+  }
+}
+
+export function writeTaskExpandLimit(n: number): void {
+  try {
+    localStorage.setItem("mc.taskExpandLimit", String(Math.min(Math.max(Math.round(n), 1), 20)));
+  } catch {
+    // 只丢持久化
+  }
+}
+
 /** 自定义背景图(data URL;空 = 未自定义,用默认纯色背景)。 */
 export function readBgImage(): string {
   try {
