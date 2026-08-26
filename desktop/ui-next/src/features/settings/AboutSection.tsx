@@ -155,7 +155,9 @@ export function AboutSection() {
           <span>{t("update.failed", { reason: updateErr })}</span>
         </div>
       )}
-      {/* 更新内容 + 版本历史(来自 Gitee 清单):检查到结果后展示 */}
+      {/* 更新内容(云端清单 notes)+ 版本历史(本地内置 releaseHistory.ts):
+          历史记录是静态事实,内置文件随应用走、永不断档;云端只给最新版说明。
+          只展示比当前安装版本旧的条目——升级完成后旧条目自然消失。 */}
       {update && (update.notes || (update.history?.length ?? 0) > 0) && (
         <div className="flex flex-col gap-3 rounded-box border border-base-300 p-3">
           {update.notes && (

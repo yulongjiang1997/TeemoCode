@@ -851,6 +851,10 @@ async fn update_check(app: AppHandle) -> Result<serde_json::Value, String> {
             "available": true,
             "current": display_version(&u.current_version),
             "latest": display_version(&u.version),
+            // 最新一版的更新内容(清单 latest.json 的 notes,经插件 body 透传)。
+            // 历史版本记录不在这里:静态事实由 UI 本地文件内置(releaseHistory.ts),
+            // 云端只承担动态的最新版说明。
+            "notes": u.body,
         })),
         Ok(None) => Ok(serde_json::json!({
             "available": false,

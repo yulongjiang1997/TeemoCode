@@ -13,6 +13,7 @@
 // 组件里。
 import { useEffect, useSyncExternalStore } from "react";
 
+import { RELEASE_HISTORY } from "@/lib/ipc/releaseHistory";
 import { recordUpdateCheck, takeUpdateCheck, updateCheck, updateDownload, updateInstall, type UpdateInfo } from "@/lib/ipc/update";
 
 /** 兜底复查间隔:窗口一直开着、从没失去过焦点(挂着跑长任务正是如此)就
@@ -26,8 +27,24 @@ const listeners = new Set<() => void>();
 function publish(info: UpdateInfo | null): void {
   // null = 检查失败/浏览器模式(update.ts 收口),不覆盖已知结果
   if (!info) return;
+  // 版本历史来自本地内置文件(releaseHistory.ts):历史记录是静态事实,
+  // 内置随应用走、永不断档;云端清单只承担最新一版的 notes。只展示比当前
+  // 安装版本旧的条目——升级完成后旧条目自然消失。版本比较按 0.1.x 数值段。
+  const curVer = parseVersion(info.current);
+  if (curVer) {
+    info.history = RELEASE_HISTORY.filter((h) => {
+      const v = parseVersion(h.version);
+      return v && v < curVer;
+    }).map((h) => ({ version: h.version, notes: h.notes }));
+  }
   current = info;
   for (const cb of listeners) cb();
+}
+
+/** "0.1.19" → [0,1,19];解析失败返回 null(比较时跳过)。 */
+function parseVersion(v: string): number[] | null {
+  const m = v.trim().match(/^(\d+)\.(\d+)\.(\d+)$/);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
 }
 
 function subscribe(cb: () => void): () => void {
