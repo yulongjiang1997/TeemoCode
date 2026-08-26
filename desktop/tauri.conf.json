@@ -66,6 +66,7 @@
             "allow-mc-file-upload",
             "allow-mc-login",
             "allow-mc-logout",
+            "allow-mc-models-list",
             "allow-mc-models-revoke",
             "allow-mc-models-sync",
             "allow-mc-password-login",

@@ -103,6 +103,7 @@ fn main() {
                 "mc_logout",
                 "mc_usage",
                 "mc_checkin",
+                "mc_models_list",
                 "mc_models_sync",
                 "mc_models_revoke",
                 "mc_disconnect",
