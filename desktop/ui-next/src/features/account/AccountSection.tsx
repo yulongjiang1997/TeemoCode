@@ -332,8 +332,9 @@ function ServiceCard({
   };
 
   /** 「同步会员模型」两段式:先拉服务端清单弹多选(默认全勾),确认后只
-   *  同步勾选的。清单拉取失败回退全量直同步——选择是增强,不能把同步
-   *  本身堵死。 */
+   *  同步勾选的。清单拉取失败**显式报错**(不静默回退全量):回退会让
+   *  「选择同步」形同虚设,用户以为勾选生效了实际灌进来一堆没选的——
+   *  0.1.20 debug 验证时就因为旧进程没注册 mc_models_list 走了这条路。 */
   const [pickOpen, setPickOpen] = useState(false);
   const startSync = async () => {
     setBusy("sync");
@@ -346,9 +347,8 @@ function ServiceCard({
         return;
       }
       setPickOpen(true);
-    } catch {
-      // 清单拉不到(旧服务/接口变更):回退旧行为全量同步
-      void sync();
+    } catch (e) {
+      if (isCurrentService()) setMsg({ text: errMsg(e), error: true });
     } finally {
       if (isCurrentService()) setBusy(null);
     }

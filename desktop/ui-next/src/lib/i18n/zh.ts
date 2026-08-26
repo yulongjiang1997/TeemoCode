@@ -569,7 +569,7 @@ export const zh = {
   "chat.findings.skipped": "已跳过",
   "chat.findings.noChange": "无需修改",
   "chat.findings.failure": "失败场景",
-  "chat.loadEarlier": "加载更早",
+  "chat.loadEarlier": "显示更多会话",
   "chat.loadEarlierFailed": "加载更早的对话失败:{reason}",
   "chat.openFailed": "打开会话失败:{reason}",
   "chat.att.downloadTip": "{name}(点击下载)",

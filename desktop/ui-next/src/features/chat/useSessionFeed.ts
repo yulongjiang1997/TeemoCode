@@ -9,6 +9,7 @@ import type { Frame } from "@/lib/protocol/types";
 import { afterEngineReady } from "@/lib/ipc/engine";
 import { createChatState, patchLastAgentUsage, prependHistory, reduceBatch } from "@/lib/protocol/reduce";
 import type { ChatState } from "@/lib/protocol/types";
+import { readTaskExpandLimit } from "@/lib/util/prefs";
 import {
   onConnStatus,
   onFrames,
@@ -19,7 +20,9 @@ import {
   type ConnStatus,
 } from "@/lib/ipc/sessions";
 
-const HISTORY_PAGE = 3; // 每次"加载更早"取的轮数窗口(壳侧 cursor 语义)
+const HISTORY_PAGE = 1; // 每次"显示更多会话"补读的轮数(壳侧 cursor 语义)。
+// 用户定案 2026-08-26:「会话历史默认只显示最近 N 条,点一次多读一条」——
+// 逐轮翻找而不是大块灌入,滚动条位置稳定、上下文不突跳。
 /** 大纲跳转补页的页宽 = 壳侧上限(session_history 的 limit.clamp(1,50))。
  *  按钮的 3 轮是人肉节奏;跳转是程序循环,按 3 轮翻就是「跳 60 轮前的消息
  *  = 20 次串行 IPC,每次都完整跑一遍归约 + React 提交 + markdown 解析」
@@ -167,7 +170,7 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
         // 退避重试:引擎重启后 Ready 与壳的 apply 闸门有重叠窗口,首发必被拒
         // (afterEngineReady 头注记了壳侧契约)。不重试的话浏览器配对后这次
         // 重开就静默失败,对话继续挂在旧引擎上、拿不到新 MCP 工具集
-        const win = await afterEngineReady(() => sessionOpen(id));
+        const win = await afterEngineReady(() => sessionOpen(id, readTaskExpandLimit()));
         if (!alive) return;
         cursorRef.current = win.cursor;
         hasMoreRef.current = !!win.has_more;

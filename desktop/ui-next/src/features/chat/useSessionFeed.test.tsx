@@ -105,11 +105,11 @@ describe("useSessionFeed:生命周期与翻页游标", () => {
 
     await act(() => result.current.loadEarlier());
     let calls = ops.filter((o) => o.cmd === "session_history");
-    expect(calls[0]!.args).toEqual({ id: "s1", cursor: 100, limit: 3 });
+    expect(calls[0]!.args).toEqual({ id: "s1", cursor: 100, limit: 1 });
 
     await act(() => result.current.loadEarlier());
     calls = ops.filter((o) => o.cmd === "session_history");
-    expect(calls[1]!.args).toEqual({ id: "s1", cursor: 40, limit: 3 });
+    expect(calls[1]!.args).toEqual({ id: "s1", cursor: 40, limit: 1 });
     expect(result.current.hasMore).toBe(false);
     expect(result.current.state.items.some((it) => it.kind === "user" && it.text === "第三页")).toBe(true);
   });

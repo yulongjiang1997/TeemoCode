@@ -407,9 +407,14 @@ pub async fn usagestats(app: AppHandle) -> Result<Value, String> {
 
 /// 打开会话:返回尾部回放窗口 `{frames, cursor, has_more}`。历史走返回值
 /// 而非 `frames:{sid}` 事件——返回值天生有序,不必依赖"监听先于命令"。
+/// windowTurns:回放窗口轮数(UI 传用户设置,缺省壳兜底 20)。
 #[tauri::command]
-pub async fn session_open(host: State<'_, DriverHost>, id: String) -> Result<Value, String> {
-    host.get()?.session_open(&id).await
+pub async fn session_open(
+    host: State<'_, DriverHost>,
+    id: String,
+    windowTurns: Option<usize>,
+) -> Result<Value, String> {
+    host.get()?.session_open(&id, windowTurns).await
 }
 
 /// 往前翻页:cursor 之前的最多 limit 轮,形状对齐云端 mc_task_rounds

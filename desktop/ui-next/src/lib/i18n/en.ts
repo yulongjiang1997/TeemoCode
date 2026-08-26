@@ -554,7 +554,7 @@ export const en: Record<MessageKey, string> = {
   "chat.findings.skipped": "Skipped",
   "chat.findings.noChange": "No change needed",
   "chat.findings.failure": "Failure scenario",
-  "chat.loadEarlier": "Load earlier",
+  "chat.loadEarlier": "Show more sessions",
   "chat.loadEarlierFailed": "Failed to load earlier messages: {reason}",
   "chat.openFailed": "Failed to open session: {reason}",
   "chat.att.downloadTip": "{name} (click to download)",

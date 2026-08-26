@@ -132,7 +132,7 @@ fn read_tail_returns_the_newest_turns_in_order_with_a_paging_cursor() {
     let dir = temp_dir("tail");
     let path = write_turns(&dir, &[(1, 9, 2), (10, 19, 2), (20, 29, 2)]);
 
-    let (turns, has_more) = read_tail(&path);
+    let (turns, has_more) = read_tail(&path, TAIL_TURNS);
 
     assert_eq!(turns.len(), 3);
     assert_eq!(turns[0].to, 9, "正序返回");
@@ -171,7 +171,7 @@ fn read_tail_stops_on_the_frame_budget_but_always_keeps_one_turn() {
     // 单轮就超预算:窗口仍必须给出完整的一轮,否则长轮次会开出空白
     let path = write_turns(&dir, &[(1, 9, 10), (10, 19, TAIL_FRAMES + 100)]);
 
-    let (turns, has_more) = read_tail(&path);
+    let (turns, has_more) = read_tail(&path, TAIL_TURNS);
 
     assert_eq!(turns.len(), 1);
     assert_eq!(turns[0].to, 19);
@@ -190,7 +190,7 @@ fn a_torn_last_line_degrades_to_the_previous_turn_instead_of_corrupting_the_wind
     write!(f, "{{\"from\":20,\"to\":29,\"frames\":[").unwrap();
     drop(f);
 
-    let (turns, _) = read_tail(&path);
+    let (turns, _) = read_tail(&path, TAIL_TURNS);
 
     assert_eq!(turns.len(), 2, "残行不成行,被跳过");
     assert_eq!(turns[1].to, 19);

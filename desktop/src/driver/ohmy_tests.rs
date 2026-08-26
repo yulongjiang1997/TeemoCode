@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
+use crate::driver::fold::TAIL_TURNS;
+
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
@@ -285,7 +287,7 @@ async fn e2e_chat_normalization() {
     assert_eq!(meta.get("status").and_then(|v| v.as_str()), Some("created"));
     assert_eq!(meta.get("kind").and_then(|v| v.as_str()), Some("local"));
     let sid = meta.get("id").and_then(|v| v.as_str()).unwrap().to_string();
-    driver.session_open(&sid).await.expect("打开会话");
+    driver.session_open(&sid, None).await.expect("打开会话");
 
     let payload = json!({ "content": frame::b64_text("写个 hello world") });
     driver.session_send(&sid, "user-input", payload).await.expect("发送");
@@ -420,7 +422,7 @@ async fn e2e_manual_compaction_lifecycle() {
     let workdir = home.to_string_lossy().into_owned();
     let meta = driver.session_create(&workdir, "测试模型", false).await.expect("建会话");
     let sid = meta.get("id").and_then(Value::as_str).unwrap().to_string();
-    driver.session_open(&sid).await.expect("打开会话");
+    driver.session_open(&sid, None).await.expect("打开会话");
     driver
         .session_send(&sid, "user-input", json!({ "content": frame::b64_text("先聊一轮再压缩") }))
         .await
@@ -498,7 +500,7 @@ async fn e2e_legacy_agent_cancel_has_single_clean_terminal() {
     let workdir = home.to_string_lossy().into_owned();
     let meta = driver.session_create(&workdir, "测试模型", false).await.expect("建会话");
     let sid = meta.get("id").and_then(Value::as_str).unwrap().to_string();
-    driver.session_open(&sid).await.expect("打开会话");
+    driver.session_open(&sid, None).await.expect("打开会话");
     driver
         .session_send(&sid, "user-input", json!({ "content": frame::b64_text("开始一个慢任务") }))
         .await
@@ -568,7 +570,7 @@ async fn e2e_wsl_smoke_full_lifecycle() {
     let workdir = home.to_string_lossy().into_owned();
     let meta = driver.session_create(&workdir, "测试模型", false).await.expect("建会话");
     let sid = meta.get("id").and_then(|v| v.as_str()).unwrap().to_string();
-    driver.session_open(&sid).await.expect("打开会话");
+    driver.session_open(&sid, None).await.expect("打开会话");
     let payload = json!({ "content": frame::b64_text("wsl 冒烟") });
     driver.session_send(&sid, "user-input", payload).await.expect("发送");
 
@@ -702,7 +704,7 @@ async fn e2e_stop_reconciles_running_session() {
     let workdir = home.to_string_lossy().into_owned();
     let meta = driver.session_create(&workdir, "测试模型", false).await.expect("建会话");
     let sid = meta.get("id").and_then(|v| v.as_str()).unwrap().to_string();
-    driver.session_open(&sid).await.expect("打开会话");
+    driver.session_open(&sid, None).await.expect("打开会话");
     let payload = json!({ "content": frame::b64_text("会被挂住的任务") });
     driver.session_send(&sid, "user-input", payload).await.expect("发送");
 
@@ -754,7 +756,7 @@ async fn e2e_outline_two_identical_messages() {
     let workdir = home.to_string_lossy().into_owned();
     let meta = driver.session_create(&workdir, "测试模型", false).await.expect("建会话");
     let sid = meta.get("id").and_then(|v| v.as_str()).unwrap().to_string();
-    driver.session_open(&sid).await.expect("打开会话");
+    driver.session_open(&sid, None).await.expect("打开会话");
 
     // 全程高频轮询大纲:物化(Materialize)与大纲读取并发时,任何一个
     // 快照里都不允许出现重复 seq(UI 在轮末刷新大纲,瞬态重复用户看得到)
@@ -822,7 +824,7 @@ async fn e2e_outline_two_identical_messages() {
 
     // 重开会话(seq 水位恢复路径)后再发第三条同文本消息,仍不得撞 seq
     driver.session_close(&sid).await;
-    driver.session_open(&sid).await.expect("重开会话");
+    driver.session_open(&sid, None).await.expect("重开会话");
     driver.session_send(&sid, "user-input", payload.clone()).await.expect("发送 3");
     let journal = wait_journal(&driver, &sid, ended(3)).await;
     assert!(ended(3)(&journal), "第三轮未结束: {journal:?}");
@@ -850,7 +852,7 @@ async fn e2e_outline_two_identical_messages() {
         ..Default::default()
     };
     let driver = OhmyDriver::start_with(ctx, &cfg).expect("重启引擎");
-    driver.session_open(&sid).await.expect("重启后打开会话");
+    driver.session_open(&sid, None).await.expect("重启后打开会话");
     for i in 0..50 {
         match driver.session_send(&sid, "user-input", payload.clone()).await {
             Ok(_) => break,
@@ -891,7 +893,7 @@ async fn e2e_send_during_replay_recovery_does_not_reuse_seqs() {
     let workdir = home.to_string_lossy().into_owned();
     let meta = driver.session_create(&workdir, "测试模型", false).await.expect("建会话");
     let sid = meta.get("id").and_then(|v| v.as_str()).unwrap().to_string();
-    driver.session_open(&sid).await.expect("打开会话");
+    driver.session_open(&sid, None).await.expect("打开会话");
     let payload = json!({ "content": frame::b64_text("第一轮") });
     driver.session_send(&sid, "user-input", payload.clone()).await.expect("发送");
     let ended = |n: usize| {
@@ -943,7 +945,7 @@ async fn e2e_send_during_replay_recovery_does_not_reuse_seqs() {
     let open_task = {
         let d = driver.clone();
         let s = sid.clone();
-        tokio::spawn(async move { d.session_open(&s).await })
+        tokio::spawn(async move { d.session_open(&s, None).await })
     };
     // 稍等让 open 走到登记会话态/后台 resume,然后立刻怼一条输入
     tokio::time::sleep(Duration::from_millis(30)).await;
@@ -1001,7 +1003,7 @@ async fn e2e_ask_user_question_flow() {
     let workdir = home.to_string_lossy().into_owned();
     let meta = driver.session_create(&workdir, "测试模型", false).await.expect("建会话");
     let sid = meta.get("id").and_then(|v| v.as_str()).unwrap().to_string();
-    driver.session_open(&sid).await.expect("打开会话");
+    driver.session_open(&sid, None).await.expect("打开会话");
     driver.session_call(&sid, "session_set_mode", json!({ "mode": "yolo" })).await.expect("yolo");
     driver
         .session_send(&sid, "user-input", json!({ "content": frame::b64_text("问我一个问题") }))
@@ -1288,7 +1290,7 @@ fn replay_window_no_frame_loss() {
         }
     });
     std::thread::sleep(Duration::from_millis(5)); // 让并发流先跑起来
-    let replay = inner.replay_open("s1");
+    let replay = inner.replay_open("s1", TAIL_TURNS);
     pusher.join().unwrap();
     let rseqs: Vec<u64> =
         replay.frames.iter().filter_map(|f| f.get("seq").and_then(|v| v.as_u64())).collect();
@@ -1351,7 +1353,7 @@ async fn e2e_subagent_progress() {
     let workdir = home.to_string_lossy().into_owned();
     let meta = driver.session_create(&workdir, "测试模型", false).await.expect("建会话");
     let sid = meta.get("id").and_then(|v| v.as_str()).unwrap().to_string();
-    driver.session_open(&sid).await.expect("打开会话");
+    driver.session_open(&sid, None).await.expect("打开会话");
     driver.session_call(&sid, "session_set_mode", json!({ "mode": "yolo" })).await.expect("yolo");
     driver
         .session_send(&sid, "user-input", json!({ "content": frame::b64_text("派个子代理") }))
@@ -1442,7 +1444,7 @@ async fn e2e_perm_remember_engine_rules() {
     let workdir = home.to_string_lossy().into_owned();
     let meta = driver.session_create(&workdir, "测试模型", false).await.expect("建会话");
     let sid = meta.get("id").and_then(|v| v.as_str()).unwrap().to_string();
-    driver.session_open(&sid).await.expect("打开会话");
+    driver.session_open(&sid, None).await.expect("打开会话");
     driver
         .session_send(&sid, "user-input", json!({ "content": frame::b64_text("推送代码") }))
         .await
@@ -1956,7 +1958,7 @@ async fn session_open_returns_recovered_usage_after_legacy_zero_tail() {
     inner.journal_barrier();
 
     let driver = OhmyDriver(inner);
-    let opened = driver.session_open("s1").await.expect("打开会话");
+    let opened = driver.session_open("s1", None).await.expect("打开会话");
     assert_eq!(opened.get("context_used").and_then(Value::as_i64), Some(45_678));
     assert_eq!(opened.get("context_window").and_then(Value::as_i64), Some(200_000));
 }
@@ -2318,7 +2320,7 @@ async fn e2e_readonly_subagent_stays_synchronous() {
     let workdir = home.to_string_lossy().into_owned();
     let meta = driver.session_create(&workdir, "测试模型", false).await.expect("建会话");
     let sid = meta.get("id").and_then(|v| v.as_str()).unwrap().to_string();
-    driver.session_open(&sid).await.expect("打开会话");
+    driver.session_open(&sid, None).await.expect("打开会话");
     driver.session_call(&sid, "session_set_mode", json!({ "mode": "yolo" })).await.expect("yolo");
     driver
         .session_send(&sid, "user-input", json!({ "content": frame::b64_text("派个子代理") }))
@@ -2417,7 +2419,7 @@ fn reopening_reads_the_folded_window_not_the_raw_journal() {
     push_one_turn(&inner, "s1", "问题", 500);
     inner.journal_barrier();
 
-    let w = inner.replay_open("s1");
+    let w = inner.replay_open("s1", TAIL_TURNS);
 
     assert_eq!(w.frames.len(), 4, "打开拿到的是折叠帧,不是 503 帧原始流");
     assert!(!w.has_more);
@@ -2451,7 +2453,7 @@ fn an_unmaterialised_legacy_journal_is_migrated_on_first_open_and_only_once() {
     std::fs::write(dir.join("events.jsonl"), &lines).unwrap();
     inner.sess.sessions.lock().unwrap().insert("s1".into(), idle_session("s1"));
 
-    let first = inner.replay_open("s1");
+    let first = inner.replay_open("s1", TAIL_TURNS);
     inner.journal_barrier();
 
     assert_eq!(replay_lines(&inner, "s1").len(), 2, "两轮各物化一行");
@@ -2460,7 +2462,7 @@ fn an_unmaterialised_legacy_journal_is_migrated_on_first_open_and_only_once() {
     assert_eq!(inner.sess.sessions.lock().unwrap()["s1"].seq, seq);
 
     // 第二次打开:不重复物化、内容一致(补录偏移写对了才可能)
-    let second = inner.replay_open("s1");
+    let second = inner.replay_open("s1", TAIL_TURNS);
     inner.journal_barrier();
     assert_eq!(replay_lines(&inner, "s1").len(), 2, "补录必须幂等");
     assert_eq!(second.frames, first.frames);
@@ -2475,7 +2477,7 @@ fn the_open_window_keeps_only_the_newest_turns_and_pages_back_from_the_cursor() 
     }
     inner.journal_barrier();
 
-    let w = inner.replay_open("s1");
+    let w = inner.replay_open("s1", TAIL_TURNS);
 
     let turns = replay_lines(&inner, "s1");
     assert_eq!(turns.len(), crate::driver::fold::TAIL_TURNS + 5);
@@ -2513,7 +2515,7 @@ fn a_turn_still_running_stays_raw_and_is_not_materialised_early() {
     if let Some(s) = inner.sess.sessions.lock().unwrap().get_mut("s1") {
         s.running = true; // 运行中:补录必须让路
     }
-    let w = inner.replay_open("s1");
+    let w = inner.replay_open("s1", TAIL_TURNS);
     let seqs: Vec<u64> =
         w.frames.iter().filter_map(|f| f.get("seq").and_then(|v| v.as_u64())).collect();
     // 已物化轮折成 user-input(1) + started(2) + 正文(3) + ended(8),
@@ -2547,7 +2549,7 @@ fn a_journal_killed_mid_turn_is_repaired_on_cold_open() {
     std::fs::write(dir.join("events.jsonl"), &lines).unwrap();
     inner.sess.sessions.lock().unwrap().insert("s1".into(), idle_session("s1"));
 
-    let w = inner.replay_open("s1");
+    let w = inner.replay_open("s1", TAIL_TURNS);
     let types: Vec<&str> =
         w.frames.iter().filter_map(|f| f["type"].as_str()).collect();
     assert_eq!(
@@ -2563,7 +2565,7 @@ fn a_journal_killed_mid_turn_is_repaired_on_cold_open() {
 
     // 落盘同样收口:第二次打开不再重复补(已闭合就不满足补的条件)
     inner.journal_barrier();
-    let again = inner.replay_open("s1");
+    let again = inner.replay_open("s1", TAIL_TURNS);
     let ends = |fs: &[Value]| fs.iter().filter(|f| f["type"] == "task-ended").count();
     assert_eq!(ends(&again.frames), ends(&w.frames), "重开不得重复补帧");
     assert_eq!(
@@ -2585,7 +2587,7 @@ fn a_live_running_turn_is_never_cold_repaired() {
     }
     inner.journal_barrier();
 
-    let w = inner.replay_open("s1");
+    let w = inner.replay_open("s1", TAIL_TURNS);
     let types: Vec<&str> = w.frames.iter().filter_map(|f| f["type"].as_str()).collect();
     assert!(!types.contains(&"task-ended"), "运行中会话不该被补收尾: {types:?}");
 }
@@ -2641,7 +2643,7 @@ async fn session_commands_refuse_ids_that_escape_the_session_root() {
             .await
             .expect_err("删除必须对逃逸 id 直接失败,它的终点是 remove_dir_all");
         assert!(err.contains("非法会话 id"), "{evil:?} 的错误文案不对: {err}");
-        assert!(driver.session_open(evil).await.is_err(), "打开也不该放行 {evil:?}");
+        assert!(driver.session_open(evil, None).await.is_err(), "打开也不该放行 {evil:?}");
         assert!(driver.session_frame(evil, 1).await.is_err(), "回读也不该放行 {evil:?}");
         assert!(
             driver.session_patch(evil, json!({ "title": "x" })).await.is_err(),

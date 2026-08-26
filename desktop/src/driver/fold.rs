@@ -35,7 +35,9 @@ use std::path::Path;
 use base64::Engine as _;
 use serde_json::{json, Value};
 
-/// 打开时回放的尾部窗口:最多这么多轮
+/// 打开时回放的尾部窗口:最多这么多轮。
+/// 默认值只是兜底——UI 打开会话时会按用户设置传 window_turns 覆盖
+/// (设置「任务工作区默认展开数」,默认 2:只直接展示最近 2 个会话轮)。
 pub(super) const TAIL_TURNS: usize = 20;
 /// 且最多这么多帧(长轮次一轮就顶满时,至少保证完整的一轮)
 pub(super) const TAIL_FRAMES: usize = 3000;
@@ -402,10 +404,10 @@ fn lines_backward(path: &Path, before: u64, max: usize) -> Vec<(u64, String)> {
     out
 }
 
-/// 读尾部窗口:最近 TAIL_TURNS 轮且不超过 TAIL_FRAMES 帧(至少一轮)。
+/// 读尾部窗口:最近 `tail_turns` 轮且不超过 TAIL_FRAMES 帧(至少一轮)。
 /// 返回 (轮列表正序, 是否还有更早的)。
-pub(super) fn read_tail(path: &Path) -> (Vec<TurnLine>, bool) {
-    read_before(path, u64::MAX, TAIL_TURNS)
+pub(super) fn read_tail(path: &Path, tail_turns: usize) -> (Vec<TurnLine>, bool) {
+    read_before(path, u64::MAX, tail_turns)
 }
 
 /// 读 `before` 之前的最多 limit 轮。返回 (轮列表正序, 是否还有更早的)。

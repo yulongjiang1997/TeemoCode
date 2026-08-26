@@ -805,7 +805,14 @@ impl OhmyDriver {
     ///
     /// 历史帧改走命令返回值而不是 `frames:{sid}` 事件:返回值天生有序,
     /// "监听先于命令"那条约束对历史部分自然消失(实时流仍走事件,契约不变)。
-    pub async fn session_open(&self, id: &str) -> Result<Value, String> {
+    /// 打开会话:立刻返回尾部回放窗口,引擎 resume 转后台。
+    ///
+    /// window_turns:回放窗口的轮数(UI 按用户设置传,缺省 20 兜底)。设置
+    /// 「任务工作区默认展开数」=2 时只直接展示最近 2 轮,更早的经「显示
+    /// 更多会话」按钮按轮补读——打开成本与窗口大小成正比,几十轮的长会话
+    /// 不再一屏铺满、滚动条细成一线(2026-08-26 用户报障)。
+    pub async fn session_open(&self, id: &str, window_turns: Option<usize>) -> Result<Value, String> {
+        let window_turns = window_turns.unwrap_or(fold::TAIL_TURNS).clamp(1, 200);
         check_session_id(id)?;
         let need_create = {
             let sessions = self.0.sess.sessions.lock_ok();
@@ -867,7 +874,7 @@ impl OhmyDriver {
         let window = {
             let inner = self.0.clone();
             let sid = id.to_string();
-            tokio::task::spawn_blocking(move || inner.replay_open(&sid))
+            tokio::task::spawn_blocking(move || inner.replay_open(&sid, window_turns))
                 .await
                 .map_err(|e| format!("回放任务失败: {e}"))?
         };
@@ -2502,7 +2509,7 @@ impl Inner {
     ///    回放与实时流按 seq 无缝衔接、无重复。
     /// 死锁安全:写线程只碰文件系统,不拿 sessions 锁;锁内屏障只等
     /// 窗口内的少量尾帧,阻塞极短。
-    pub(super) fn replay_open(&self, sid: &str) -> ReplayWindow {
+    pub(super) fn replay_open(&self, sid: &str, window_turns: usize) -> ReplayWindow {
         if let Some(s) = self.sess.sessions.lock_ok().get_mut(sid) {
             s.opened = false;
         }
@@ -2532,7 +2539,7 @@ impl Inner {
             }
         }
 
-        let (turns, has_more) = fold::read_tail(&replay);
+        let (turns, has_more) = fold::read_tail(&replay, window_turns);
         let cursor = turns.first().map(|t| t.offset).unwrap_or(0);
         let src_end = turns.last().map(|t| t.src_end).unwrap_or(0);
         let mut high = turns.last().map(|t| t.to).unwrap_or(0);

@@ -118,15 +118,15 @@ describe("聊天视图", () => {
     await waitFor(() => expect(screen.getByText(/再跑测试/)).toBeTruthy());
   });
 
-  it("加载更早:前插历史且 cursor 前移,原条目仍在", async () => {
+  it("显示更多会话:前插历史且 cursor 前移,原条目仍在", async () => {
     const { ops } = stubShell({ hasMore: true });
     render(<ChatView meta={META} />);
     await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
-    await userEvent.click(screen.getByRole("button", { name: "加载更早" }));
+    await userEvent.click(screen.getByRole("button", { name: "显示更多会话" }));
     await waitFor(() => expect(screen.getByText("更早的问题")).toBeTruthy());
     expect(screen.getByText("帮我修 bug")).toBeTruthy();
     const hist = ops.find((o) => o.cmd === "session_history");
-    expect(hist?.args).toEqual({ id: "s1", cursor: 7, limit: 3 });
+    expect(hist?.args).toEqual({ id: "s1", cursor: 7, limit: 1 });
   });
 
   it("滚近顶部(一屏内)自动补一页更早历史,无需点按钮", async () => {
@@ -167,7 +167,7 @@ describe("聊天视图", () => {
     await new Promise((r) => setTimeout(r, 30));
     expect(ops.some((o) => o.cmd === "session_history")).toBe(false);
     // 手动兜底入口仍在
-    expect(screen.getByRole("button", { name: "加载更早" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "显示更多会话" })).toBeTruthy();
   });
 
   it("发送:user-input 帧 content 走 base64;失败不丢草稿", async () => {
@@ -542,7 +542,7 @@ describe("聊天视图", () => {
     const first = { ...META, id: "s-outline-return", title: "长任务" };
     const other = { ...META, id: "s-outline-other", title: "另一个任务" };
     // 超过虚拟窗口上限:若恢复锚点仍拿本次打开才稳定的 row key,切回后会
-    // 渲染尾窗 + 顶部大块 spacer；scrollTop 又停在 0,画面就只剩「加载更早」。
+    // 渲染尾窗 + 顶部大块 spacer；scrollTop 又停在 0,画面就只剩「显示更多会话」。
     const tail = Array.from({ length: 200 }, (_, index) => ({
       type: "user-input",
       data: { content: b64encode(`尾部问题 ${index}`) },
