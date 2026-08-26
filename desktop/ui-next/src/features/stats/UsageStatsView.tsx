@@ -491,8 +491,6 @@ export function UsageStatsView() {
     }
   } else rangeDates = null;
 
-  const inRange = (key: string): boolean => rangeDates === null || rangeDates.has(key);
-
   // 当前范围的合计卡。⚠️ today 必须显式分支:它和 day 的区别只是日期键
   // 固定为今天,绝不能落到 total 的 else 里(否则今日卡显示累计——2026-08-26
   // 用户报障「今日与累计一样,点热力图反而正常」的根因)。
