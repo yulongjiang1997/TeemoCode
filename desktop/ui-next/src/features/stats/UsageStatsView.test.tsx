@@ -60,6 +60,21 @@ describe("UsageStatsView 按天热力图", () => {
     expect(await screen.findByText("按模型")).toBeDefined();
   });
 
+  // 回归钉:今日卡曾因 range 分支缺失落到 total 的 else,显示成累计值
+  // (2026-08-26 用户报障「今日与累计一样,点热力图反而正常」)。
+  it("今日卡只显示今天的用量,不与累计混淆", async () => {
+    stubShell(sample([day(0, 111, 22, 3), day(9, 700_000, 300_000, 40)]));
+    render(<UsageStatsView />);
+    await screen.findByText("按天活跃热力图");
+    // 今日 = 133(111+22);累计 = 1,000,233。缩写后分别是 "133" 与 "1M"
+    expect(screen.getByText("133")).toBeDefined();
+    expect(screen.getByText("1M")).toBeDefined();
+    // 今日卡的副行是今天的输入/输出(↑111 · ↓22),不是累计的。
+    // 卡定位:SumCard 根 div 带 title="133 tokens"(主值进 tooltip)
+    const todayCard = document.querySelector<HTMLDivElement>('div[title="133 tokens"]')!;
+    expect(todayCard.textContent).toContain("↑111 · ↓22 · 3 次");
+  });
+
   it("无数据的格子为灰底(空态不渲染热力图)", async () => {
     stubShell({ totals: { input_tokens: 0, output_tokens: 0, calls: 0 }, days: [], models: [], sessions: [] });
     render(<UsageStatsView />);

@@ -478,7 +478,11 @@ export function UsageStatsView() {
   /** 范围内的日期键集合(单日=那一天;近7日=含今天的 7 个自然日;累计=null 不过滤) */
   let rangeDates: Set<string> | null;
   if (range.kind === "day") rangeDates = new Set([range.date]);
-  else if (range.kind === "last7") {
+  else if (range.kind === "today") {
+    // today 与 day 同口径,只是日期键固定;必须给出集合而非 null,
+    // 否则下方按天过滤的明细路径会拿空集/崩(null 是「不过滤」语义)
+    rangeDates = new Set([todayKey()]);
+  } else if (range.kind === "last7") {
     rangeDates = new Set();
     for (let i = 0; i < 7; i++) {
       const d = new Date();
@@ -489,9 +493,13 @@ export function UsageStatsView() {
 
   const inRange = (key: string): boolean => rangeDates === null || rangeDates.has(key);
 
-  // 当前范围的合计卡
+  // 当前范围的合计卡。⚠️ today 必须显式分支:它和 day 的区别只是日期键
+  // 固定为今天,绝不能落到 total 的 else 里(否则今日卡显示累计——2026-08-26
+  // 用户报障「今日与累计一样,点热力图反而正常」的根因)。
   let sumBucket: Bucket = { ...zeroBucket };
-  if (range.kind === "day") {
+  if (range.kind === "today") {
+    sumBucket = byDate.get(todayKey()) ?? zeroBucket;
+  } else if (range.kind === "day") {
     sumBucket = byDate.get(range.date) ?? zeroBucket;
   } else if (range.kind === "last7") {
     for (const key of rangeDates!) {
@@ -502,24 +510,21 @@ export function UsageStatsView() {
     sumBucket = stats?.totals ?? zeroBucket;
   }
 
-  /** 范围内某实体的聚合(会话行要按 rangeDates 过滤其 days 再聚合模型) */
+  /** 范围内某会话行的聚合:day/today/last7 都按 rangeDates 过滤该会话的
+   *  days 再求和(行合计与汇总卡同口径——否则单日视图里会话行还是全会话
+   *  总量,和顶部对不上);total 不过滤。 */
   const aggSessionInRange = (s: SessionRow): SessionRow | null => {
-    if (range.kind !== "day") return inRange("") ? s : null; // last7/累计:整行保留(累计无过滤;last7 行级 days 过滤意义有限,保持整行)
+    if (range.kind === "total") return s;
     const dayRows = s.days.filter((d) => rangeDates!.has(d.date));
     if (dayRows.length === 0) return null;
-    const models = new Map<string, Bucket & { model: string }>();
-    const out = { session_id: s.session_id, title: s.title, parent: s.parent, days: dayRows, models: [] as (Bucket & { model: string })[], input_tokens: 0, output_tokens: 0, calls: 0 };
+    const out = { session_id: s.session_id, title: s.title, parent: s.parent, days: dayRows, models: s.models, input_tokens: 0, output_tokens: 0, calls: 0 };
     for (const d of dayRows) {
       out.input_tokens += d.input_tokens;
       out.output_tokens += d.output_tokens;
       out.calls += d.calls;
     }
-    // 单日视图里该会话的按模型拆分:从原始 models 无法按天拆(壳未存),
-    // 只有当会话只有这一天有数据时才精确;多天会话在单日视图按天占比近似
-    // ——不做占比猜测,直接展示整会话的 models 并注明是全会话口径。
-    out.models = rangeDates!.size === 1 && s.days.every((d) => rangeDates!.has(d.date)) ? s.models : s.models;
-    for (const m of s.models) models.set(m.model, { ...m });
-    out.models = [...models.values()];
+    // 按模型拆分壳侧只存了整会话口径(无按天×模型粒度),无法精确按范围
+    // 拆;保留整会话 models 供展开明细参考,行级合计以 days 过滤结果为准。
     return out;
   };
 
