@@ -471,6 +471,8 @@ function CustomGroupSection({
   groupIndex,
   draggedKey,
   drag,
+  archOpenSet,
+  onToggleArchOpen,
 }: {
   group: CustomGroup & { projects: ProjectGroup[] };
   p: RowPlumbing;
@@ -497,6 +499,9 @@ function CustomGroupSection({
     onDragStart: (key: string) => void;
     onDragEnd: () => void;
   };
+  /** 组内项目的「已归档任务」小节开合集(与顶层项目同一持久化桶) */
+  archOpenSet?: ReadonlySet<string>;
+  onToggleArchOpen: (key: string) => void;
 }) {
   const { t } = useI18n();
   const [dragOverGroup, setDragOverGroup] = useState(false);
@@ -594,9 +599,10 @@ function CustomGroupSection({
               projectGroups={projectGroups}
               assignProject={assignProject}
               drag={drag}
+              archOpen={archOpenSet?.has(proj.key) ?? false}
+              onToggleArchOpen={onToggleArchOpen}
             />
           ))}
-          {/* 拖动本组项目时显示「移出分组」落点:拖到这里即回到不分组 */}
           {group.projects.some((proj) => proj.key === draggedKey) && (
             <li>
               <div
@@ -638,6 +644,8 @@ function GroupProjectRow({
   projectGroups,
   assignProject,
   drag,
+  archOpen,
+  onToggleArchOpen,
 }: {
   proj: ProjectGroup;
   p: RowPlumbing;
@@ -654,6 +662,9 @@ function GroupProjectRow({
     onDragStart: (key: string) => void;
     onDragEnd: () => void;
   };
+  /** 组内项目的「已归档任务」小节是否展开(与顶层同一持久化桶) */
+  archOpen: boolean;
+  onToggleArchOpen: (key: string) => void;
 }) {
   const { t } = useI18n();
   const usage = sumUsage(
@@ -743,10 +754,27 @@ function GroupProjectRow({
             <IconPlus size={12} stroke={1.75} aria-hidden />
           </button>
         </summary>
-        <ul className={`ms-0 min-w-0 ps-0 pb-1 ${NEST_NO_GUIDE}`}>
-          {rows(proj.sessions, p, 2)}
-          {proj.archivedSessions.length > 0 && rows(proj.archivedSessions, p, 2)}
-        </ul>
+        <TaskListWithMore group={proj} p={p} level={2} />
+        {proj.archivedSessions.length > 0 && (
+          <ul className={`ms-0 min-w-0 ps-0 pb-1 ${NEST_NO_GUIDE}`}>
+            <li>
+              <details open={archOpen} onToggle={(e) => {
+                if (e.target !== e.currentTarget) return;
+                if (e.currentTarget.open !== archOpen) onToggleArchOpen(proj.key);
+              }}>
+                <summary className="flex items-center gap-2 ps-9 text-xs text-base-content/40 after:hidden">
+                  <IconArchive size={10} stroke={1.75} aria-hidden className="shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">{t("sidebar.archivedTasks")}</span>
+                </summary>
+                {archOpen && (
+                  <ul className={`ms-0 min-w-0 ps-0 pb-1 ${NEST_NO_GUIDE}`}>
+                    {rows(proj.archivedSessions, p, 3)}
+                  </ul>
+                )}
+              </details>
+            </li>
+          </ul>
+        )}
       </details>
     </li>
   );
@@ -1382,6 +1410,8 @@ export function Sidebar({
             onRename={renameGroup}
             draggedKey={draggedKey}
             drag={drag}
+            archOpenSet={sessionArchOpen}
+            onToggleArchOpen={toggleSessionArchOpen}
           />
         ))}
         {todoSection}
