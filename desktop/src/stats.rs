@@ -221,7 +221,7 @@ impl UsageStats {
                     "output_tokens": m.1,
                     "calls": m.2,
                 })).collect();
-                (date.as_str(), Value::Array(arr))
+                (date.clone(), Value::Array(arr))
             }).collect::<serde_json::Map<String, Value>>(),
             "sessions": sessions_json,
         })
