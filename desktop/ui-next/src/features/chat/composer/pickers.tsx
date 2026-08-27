@@ -192,7 +192,7 @@ export function ModelMenu({
       {open && (
         <div
           style={{ maxHeight: menuMax }}
-          className={`absolute end-0 top-full z-30 mt-1 flex w-64 flex-col overflow-hidden rounded-box border border-base-300 bg-base-100 p-1.5 shadow-lg ${align === "end" ? "" : "start-0 end-auto"}`}
+          className={`absolute end-0 bottom-full z-30 mb-1 flex w-64 flex-col overflow-hidden rounded-box border border-base-300 bg-base-100 p-1.5 shadow-lg ${align === "end" ? "" : "start-0 end-auto"}`}
         >
           {/* 不 autoFocus:打开菜单是「点选」意图,焦点跳进过滤框
               反而抢走键盘上下文(用户定案) */}
