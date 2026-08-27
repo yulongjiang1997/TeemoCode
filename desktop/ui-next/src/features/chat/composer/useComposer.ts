@@ -377,7 +377,10 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
 
     // 本轮是队列投出的回合:轮已真正开过、且已结束(running 回落),判定成功/失败。
     // 未开轮就回落(上行回显帧先令 running 假)→ 不是本轮结束,等真正开轮再判。
-    if (deliveredTurnRef.current && inFlightRef.current && turnStartedRef.current) {
+    // ⚠️ 但当 turnEnded=true 时说明 task-ended 已到达(不论 task-started 是否
+    // 被 React 批量渲染吞掉),必须处理完成——否则项永远卡 executing,最后一条
+    // 指令"完成了但不会清空"就是这个场景。
+    if (deliveredTurnRef.current && inFlightRef.current && (turnStartedRef.current || turnEnded)) {
       deliveredTurnRef.current = false;
       turnStartedRef.current = false;
       const done = inFlightRef.current;
