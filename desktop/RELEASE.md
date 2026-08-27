@@ -76,6 +76,9 @@ npx --yes @tauri-apps/cli@2 signer sign ^
 > 私钥密码含 `!`（bash 历史扩展）和 `#`（bash 注释符），在 bash 里即使加了双引号也可能被破坏，
 > 表现为"密码错误/私钥解密失败"（2026-08-25 发 v0.1.16 踩过：同样的密码在 bash 里失败、cmd 里成功；
 > v0.1.17 再次踩坑确认）。一键脚本已内置此处理。
+> **v0.1.21 踩坑补充**：即使用 Cmd 工具，.bat 脚本里的 `!` 也可能被 cmd 延迟展开破坏；
+> Python subprocess 调用 cmd.exe 也会遇到同样问题。**唯一可靠的方式是直接在 Cmd 工具里内联执行命令**，
+> 不要通过 .bat 文件或 Python subprocess 中转。签名时绝对不要使用 Bash 工具。
 > 验证签名后 .sig 第一行 base64 解码应含 `signature from tauri secret key`。
 
 > 💡 **Gitee API 注意**（v0.1.17 实战）：创建 release 时 `target_commitish` 现在是
@@ -235,3 +238,74 @@ git clone --depth 1 https://gitee.com/xiaotimor/teemo-code-update.git size-check
 du -sh size-check
 curl -sI "https://gitee.com/xiaotimor/teemo-code-update/releases/download/v0.1.16/TeemoCode_0.1.16_x64-setup.exe"
 ```
+
+---
+
+## 4. 踩坑记录（每次发布必读）
+
+### 4.1 签名：密码传输链上的转义地狱
+
+**现象**：同一密码 `R3l3ase!K3y#2026x`，同样的 `npx @tauri-apps/cli@2 signer sign` 命令，
+在不同调用方式下结果截然不同——昨天成功今天失败，或者换一种调用方式就失败。
+
+**根因**：密码里的 `!`（bash 历史扩展）和 `#`（bash 注释符）在整条执行链的每一层都可能被转义：
+- **Bash 工具**（Git Bash/MSYS）：`!` 触发 history expansion → 密码被截断 → 失败
+- **.bat 脚本**（即使通过 Cmd 工具运行）：cmd.exe 的延迟展开机制（`setlocal EnableDelayedExpansion`）会破坏 `!`
+- **Python subprocess 调用 cmd.exe**：传递参数时 Windows 的引号规则可能额外转义
+- **Cmd 工具内联执行**（唯一可靠路径）：密码原样传给 cmd.exe → 传给 npx → 传给 tauri-cli → minisign 解密 → 成功
+
+**铁律**：
+```
+签名命令必须在 Cmd 工具中直接敲，不通过 .bat / Python / Bash 工具中转。
+命令格式（v0.1.21 验证通过）：
+  cd /d D:\works\ziji\MonkeyCode\desktop && npx --yes @tauri-apps/cli@2 signer sign -f C:\Users\12090\sdk\mc-release-keys-new -p "R3l3ase!K3y#2026x" target\release\bundle\nsis\TeemoCode_<版本>_x64-setup.exe
+```
+
+### 4.2 Tauri 新命令：三处都要注册
+
+**现象**：新增 IPC 命令后前端调用报 `Command not found` 或 `not allowed`。
+
+**根因**：Tauri 的 IPC 权限是三层白名单，新增命令必须同时注册：
+1. `main.rs` `generate_handler!()` → 运行时路由
+2. `build.rs` 权限清单 → 编译时生成权限定义
+3. `tauri.conf.json` + `tauri.debug.conf.json` → 前端调用授权
+
+只改一处或两处都会导致「函数存在但前端调不通」的诡异错误。示例：`mc_models_list` 在 v0.1.20 加了 ①② 但漏了 ③，前端报 `not allowed`。
+
+### 4.3 usage 事件：头尾双发导致统计翻倍
+
+**现象**：用量统计面板的 token 数值远大于实际（今天 11 亿 → 修正后 5.8 亿）。
+
+**根因**：provider 在同一次模型调用的**头**（message_start，input 已定）和**尾**（message_delta，output 定稿）各发一次 usage 事件，壳侧逐事件累加就记了两份。fold.rs 注释明确写了「后到者覆盖前值」但 stats.rs 的 record() 是累加语义。
+
+**修复**：按会话记录上次入账的 `(input,output)` 完全相同视为重复跳过。
+> stats.json 的历史数据无法自动修复——若出现过双记，需要写脚本把对应天的 input/output/calls 减半。
+
+### 4.4 releaseHistory：旧版记录别放云端清单
+
+**现象**：云端 latest.json 的 `history` 数组越滚越长，加载慢且历史记录会在发版时被挪走。
+
+**方案**：历史版本记录内置到 `src/lib/ipc/releaseHistory.ts`（编译期嵌入），云端清单只保留最新一版的 `notes`。发版时在数组头部追加一条 `{version, notes}`，与 `Cargo.toml` 版本同步改。
+
+### 4.5 指令队列补投 effect：turnStartedRef 守卫过严
+
+**现象**：队列最后一条指令完成后卡在 `executing` 状态，永远不会出队。
+
+**根因**：flush effect 的完成判断要求 `turnStartedRef=true`（只有在 effect 捕获到 `running=true` 时才置位）。当 `task-started` 与 `task-ended` 被 React 批量合并为一次渲染时，`running` 从未在 effect 里被设 true → `turnStartedRef` 永远 false → 完成块进不去。
+
+**修复**：条件改为 `turnStartedRef.current || turnEnded`——当 `turnEnded=true` 时（task-ended 已到达）不论 `turnStartedRef` 状态如何都处理完成。
+
+### 4.6 .bat 文件编码：中文注释导致 CP936 解析失败
+
+**现象**：.bat 脚本里的中文注释在 Windows 下被 cmd 按 GBK/CP936 解析，乱码会导致语法错误或意外行为。
+
+**方案**：.bat 脚本只用 ASCII/英文；Python 脚本用 `sys.stdout.reconfigure(encoding="utf-8", errors="replace")` 处理输出。
+
+### 4.7 cargo build 被锁文件阻断
+
+**现象**：`cargo build` 报 `failed to remove file: os error 5`（拒绝访问）。
+
+**根因**：debug 版 TeemoCode 正在运行，Windows 锁住了 `.exe` 文件。`cargo build` 先删旧二进制再写新的，删不掉就报错。
+
+**方案**：构建前先关闭正在运行的 debug 版 TeemoCode；或 `cargo build` 本身只是编译——被锁时只保留旧文件但不影响内部构建流程（`cargo build 2>&1 | grep Finished` 仍显示成功）。
+
