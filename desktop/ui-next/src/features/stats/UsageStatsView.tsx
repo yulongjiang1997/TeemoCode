@@ -528,7 +528,7 @@ export function UsageStatsView() {
 
   const rangeModels: ModelRow[] = (() => {
     if (range.kind === "total") return stats?.models ?? [];
-    if (range.kind === "last7" || range.kind === "day") {
+    if (range.kind === "last7" || range.kind === "day" || range.kind === "today") {
       // 会话行的 days 有按天模型吗?壳只存了整会话 models + 按天 tokens。
       // 精确按范围拆模型做不到,退而求其次:聚合「范围内有数据」的会话的
       // 整会话 models(口径:参与过范围内的调用),并在标题注明。

@@ -399,8 +399,6 @@ pub async fn models_list(host: State<'_, DriverHost>) -> Result<Value, String> {
 /// 本地会话 token 用量统计(按天/会话/模型聚合,usage 事件记账)。
 #[tauri::command]
 pub async fn usagestats(app: AppHandle) -> Result<Value, String> {
-    // 与 usage 事件记账(normalize.rs)共用同一进程级实例:查询走内存,
-    // 不重读磁盘;若每次 new() 各开一份,记账实例的未落盘增量会查不到。
     let cfg_dir = crate::config::config_dir(&app)?;
     Ok(crate::stats::UsageStats::shared(&cfg_dir).snapshot())
 }

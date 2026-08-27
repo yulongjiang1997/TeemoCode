@@ -86,7 +86,10 @@ impl UsageStats {
             .or_default()
             .entry(model.to_string())
             .or_default();
-        if !title.is_empty() {
+        if !title.is_empty() && title != sid {
+            // 子代理 s.title 初始值是 session_id,首次 usage 事件时真实标题
+            // 还没设好——若把 sid 当 title 写入,后续真正标题到来时不会再
+            // 触发 record(),快照里就永远是 raw id;跳过即可。
             rec.title = title.to_string();
         }
         if parent.is_some() {
