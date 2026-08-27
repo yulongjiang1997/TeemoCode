@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.21",
+    notes: "用量统计面板改版(K/M缩写/7日趋势可折叠/四分位热力图/按天明细联动) + 修复今日卡显示累计值 + 修复指令队列最后一条卡死 + 修复同步会员模型选择弹窗",
+  },
+  {
     version: "0.1.20",
     notes: "关于页版本历史改为本地内置(不再依赖云端清单,永不断档);最新版更新内容仍从云端获取",
   },
