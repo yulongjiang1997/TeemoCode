@@ -127,6 +127,8 @@ impl UsageStats {
         let mut totals = (0u64, 0u64, 0u64);
         let mut by_day: BTreeMap<String, (u64, u64, u64)> = BTreeMap::new();
         let mut by_model: BTreeMap<String, (u64, u64, u64)> = BTreeMap::new();
+        // date → model → (input, output, calls) 供 UI 按天范围聚合模型明细
+        let mut by_day_model: BTreeMap<String, BTreeMap<String, (u64, u64, u64)>> = BTreeMap::new();
         // sid → (title, parent, total, by_day, by_model)
         let mut by_session: BTreeMap<String, SessionAgg> = BTreeMap::new();
 
@@ -146,6 +148,11 @@ impl UsageStats {
                     m.0 += rec.input_tokens;
                     m.1 += rec.output_tokens;
                     m.2 += rec.calls;
+
+                    let dm = by_day_model.entry(date.clone()).or_default().entry(model.clone()).or_default();
+                    dm.0 += rec.input_tokens;
+                    dm.1 += rec.output_tokens;
+                    dm.2 += rec.calls;
 
                     let s = by_session.entry(sid.clone()).or_insert_with(|| SessionAgg {
                         title: rec.title.clone(),
@@ -207,6 +214,15 @@ impl UsageStats {
                 "calls": d.2,
             })).collect::<Vec<_>>(),
             "models": sorted_bucket_json(by_model),
+            "day_models": by_day_model.iter().rev().map(|(date, models)| {
+                let arr: Vec<Value> = models.iter().map(|(model, m)| json!({
+                    "model": model,
+                    "input_tokens": m.0,
+                    "output_tokens": m.1,
+                    "calls": m.2,
+                })).collect();
+                (date.as_str(), Value::Array(arr))
+            }).collect::<serde_json::Map<String, Value>>(),
             "sessions": sessions_json,
         })
     }

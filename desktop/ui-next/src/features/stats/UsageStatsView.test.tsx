@@ -28,6 +28,7 @@ const sample = (days: ReturnType<typeof day>[]) => ({
     { input_tokens: 0, output_tokens: 0, calls: 0 },
   ),
   days,
+  day_models: Object.fromEntries(days.map((d) => [d.date, [{ model: "gpt-5", input_tokens: d.input_tokens, output_tokens: d.output_tokens, calls: d.calls }]])),
   models: [{ model: "gpt-5", input_tokens: 100, output_tokens: 50, calls: 3 }],
   sessions: [],
 });
@@ -67,8 +68,9 @@ describe("UsageStatsView 按天热力图", () => {
     render(<UsageStatsView />);
     await screen.findByText("按天活跃热力图");
     // 今日 = 133(111+22);累计 = 1,000,233。缩写后分别是 "133" 与 "1M"
-    expect(screen.getByText("133")).toBeDefined();
-    expect(screen.getByText("1M")).toBeDefined();
+    // (133/1M 也可能出现在模型表,用 getAll 避免重复断言)
+    expect(screen.getAllByText("133").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("1M").length).toBeGreaterThanOrEqual(1);
     // 今日卡的副行是今天的输入/输出(↑111 · ↓22),不是累计的。
     // 卡定位:SumCard 根 div 带 title="133 tokens"(主值进 tooltip)
     const todayCard = document.querySelector<HTMLDivElement>('div[title="133 tokens"]')!;
@@ -76,7 +78,7 @@ describe("UsageStatsView 按天热力图", () => {
   });
 
   it("无数据的格子为灰底(空态不渲染热力图)", async () => {
-    stubShell({ totals: { input_tokens: 0, output_tokens: 0, calls: 0 }, days: [], models: [], sessions: [] });
+    stubShell({ totals: { input_tokens: 0, output_tokens: 0, calls: 0 }, days: [], models: [], sessions: [], day_models: {} });
     render(<UsageStatsView />);
     // 空态文案,而非热力图
     expect(await screen.findByText(/还没有用量数据/)).toBeDefined();

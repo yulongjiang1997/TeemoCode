@@ -13,7 +13,7 @@ import type { SidebarActions } from "./Sidebar";
 import { Sidebar } from "./Sidebar";
 
 vi.mock("@/lib/ipc/usageStats", () => {
-  const usageStats = vi.fn(() => Promise.resolve({ totals: { input_tokens: 0, output_tokens: 0, calls: 0 }, days: [], models: [], sessions: [] } as any));
+  const usageStats = vi.fn(() => Promise.resolve({ totals: { input_tokens: 0, output_tokens: 0, calls: 0 }, days: [], models: [], sessions: [], day_models: {} } as any));
   const buildSessionUsageMap = vi.fn(() => new Map());
   const sumUsage = vi.fn(() => null);
   return { usageStats, buildSessionUsageMap, sumUsage };

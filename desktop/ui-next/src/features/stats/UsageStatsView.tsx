@@ -75,7 +75,7 @@ const fmtFull = (n: number): string => n.toLocaleString("en-US");
  *  数值同样走 K/M 缩写,tooltip 给全量。 */
 function DailyChart({ days }: { days: UsageStats["days"] }) {
   const { t } = useI18n();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const recent = days.slice(0, 7).reverse();
   const max = Math.max(...recent.map((d) => total(d)), 1);
   return (
@@ -528,25 +528,19 @@ export function UsageStatsView() {
 
   const rangeModels: ModelRow[] = (() => {
     if (range.kind === "total") return stats?.models ?? [];
-    if (range.kind === "last7" || range.kind === "day" || range.kind === "today") {
-      // 会话行的 days 有按天模型吗?壳只存了整会话 models + 按天 tokens。
-      // 精确按范围拆模型做不到,退而求其次:聚合「范围内有数据」的会话的
-      // 整会话 models(口径:参与过范围内的调用),并在标题注明。
-      const acc = new Map<string, Bucket & { model: string }>();
-      for (const s of stats?.sessions ?? []) {
-        const hit = s.days.some((d) => rangeDates!.has(d.date));
-        if (!hit) continue;
-        for (const m of s.models) {
-          const cur = acc.get(m.model) ?? { model: m.model, input_tokens: 0, output_tokens: 0, calls: 0 };
-          cur.input_tokens += m.input_tokens;
-          cur.output_tokens += m.output_tokens;
-          cur.calls += m.calls;
-          acc.set(m.model, cur);
-        }
+    // 按天范围:从 day_models 精确聚合(每条是当天模型用量,非全时段)
+    const dm = stats?.day_models ?? {};
+    const acc = new Map<string, Bucket & { model: string }>();
+    for (const date of rangeDates!) {
+      for (const m of dm[date] ?? []) {
+        const cur = acc.get(m.model) ?? { model: m.model, input_tokens: 0, output_tokens: 0, calls: 0 };
+        cur.input_tokens += m.input_tokens;
+        cur.output_tokens += m.output_tokens;
+        cur.calls += m.calls;
+        acc.set(m.model, cur);
       }
-      return [...acc.values()].sort((a, b) => b.input_tokens + b.output_tokens - (a.input_tokens + a.output_tokens));
     }
-    return [];
+    return [...acc.values()].sort((a, b) => b.input_tokens + b.output_tokens - (a.input_tokens + a.output_tokens));
   })();
 
   const rangeSessions = range.kind === "total"

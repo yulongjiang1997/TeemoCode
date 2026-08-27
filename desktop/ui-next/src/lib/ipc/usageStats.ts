@@ -8,6 +8,9 @@ export interface UsageStats {
   days: (DayRow & Bucket)[];
   /** 按模型汇总,用量倒序 */
   models: ModelRow[];
+  /** date → model[] 映射:供 UI 按天范围精确聚合模型明细(整会话 models
+   *  是全时段总量,不能用于单日/7日范围——模型用量随天变化) */
+  day_models: Record<string, ModelRow[]>;
   /** 按会话汇总,用量倒序;子代理会话带 parent 可归并到父任务 */
   sessions: SessionRow[];
 }
@@ -38,7 +41,7 @@ export interface SessionRow extends Bucket {
 /** 壳内失败会抛(引擎重启时降级成空聚合会把面板洗成"全零")。 */
 export async function usageStats(): Promise<UsageStats> {
   if (!inDesktopShell()) {
-    return { totals: { input_tokens: 0, output_tokens: 0, calls: 0 }, days: [], models: [], sessions: [] };
+    return { totals: { input_tokens: 0, output_tokens: 0, calls: 0 }, days: [], models: [], sessions: [], day_models: {} };
   }
   return invoke<UsageStats>("usagestats");
 }
