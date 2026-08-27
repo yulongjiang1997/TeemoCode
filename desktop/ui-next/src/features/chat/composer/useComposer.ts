@@ -206,11 +206,16 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
       // 队列持久化到 localStorage(跨重启):仅当队列非空/暂停才算"有东西要留",
       // 否则移除键。注意:空队列(含仅草稿)不写盘——既贴合"清空即移除"语义,
       // 也避免普通卸载把空档写入盘、污染同 id 会话的下一次挂载(测试/复用隔离)。
+      // ⚠️ 必须过滤 executing 项:cleanup 时 React state 可能还没来得及提交
+      // setQueue(filter) 的删除(异步批量),snap.queue 里仍残留"executing"的
+      // 最后一条指令——写入磁盘后下次挂载会恢复它并重新补投,造成"完成后又
+      // 重发"的无限循环(2026-08-26 用户报障根因)。
       const snap = snapRef.current;
+      const safeQueue = snap.queue.filter((x) => x.state !== "executing");
       writeComposerQueue(
         sessionId,
-        snap.queue.length > 0 || snap.paused
-          ? { queue: snap.queue, paused: snap.paused, draft: snap.draft, atts: snap.atts }
+        safeQueue.length > 0 || snap.paused
+          ? { queue: safeQueue, paused: snap.paused, draft: snap.draft, atts: snap.atts }
           : null,
       );
       clearRetry();
