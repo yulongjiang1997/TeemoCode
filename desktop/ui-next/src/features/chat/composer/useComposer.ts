@@ -76,6 +76,8 @@ export interface ComposerCtl {
   editInstr(id: string, text: string): void;
   /** 从队列移除指定项并立即发送到对话窗口。 */
   sendInstr(id: string): void;
+  /** 直接发送文本到对话(不经过草稿/队列,仓库专用)。 */
+  sendDirect(text: string, atts?: ComposerAtt[]): void;
   /** 向队列追加一条新指令(文本+可选附件)。 */
   addInstr(text: string, atts?: ComposerAtt[]): void;
   clearQueue(): void;
@@ -496,6 +498,37 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
       });
     }
   }, []);
+  /** 直接发送文本到对话(不经过草稿/队列,仓库专用)。 */
+  const sendDirect = useCallback(async (text: string, datts?: ComposerAtt[]) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    // 先上传附件(路径直拷进会话 uploads 目录),拿到引擎可读路径
+    const uploadedAtts: ComposerAtt[] = [];
+    for (const a of datts ?? []) {
+      try {
+        const { path } = await uploadFilePath(sessionId, a.path);
+        uploadedAtts.push({ path, name: a.name, isImage: a.isImage });
+      } catch (e) {
+        console.warn("[warehouse] 附件上传失败:", a.name, e);
+      }
+    }
+    const attLines = uploadedAtts.map((a) => attLineOf(a.path, a.isImage)).filter(Boolean).join("\n");
+    const finalText = attLines ? `${trimmed}\n${attLines}` : trimmed;
+    // 忙/在途 → 入队(跟 send() 同逻辑)
+    if (running || sendingRef.current || queue.length > 0) {
+      flushBlockedRef.current = false;
+      clearRetry();
+      const item: QueueItem = { id: newInstrId(), text: trimmed, atts: uploadedAtts, state: "pending" };
+      setQueue((cur) => [...cur, item]);
+      return;
+    }
+    sendingRef.current = true;
+    void sessionSend(sessionId, "user-input", { content: b64encode(finalText) })
+      .catch((e: unknown) => {
+        sendingRef.current = false;
+        notifyError(t("chat.sendFailed", { reason: e instanceof Error ? e.message : String(e) }));
+      });
+  }, [running, sessionId, clearRetry, notifyError, t]);
   /** 向队列追加一条新指令(文本+可选附件)。 */
   const addInstr = useCallback((text: string, atts?: ComposerAtt[]) => {
     const trimmed = text.trim();
@@ -651,6 +684,7 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
       reorderInstr,
       editInstr,
       sendInstr,
+      sendDirect,
       addInstr,
       clearQueue,
       restorePersisted,
@@ -678,6 +712,7 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
       reorderInstr,
       editInstr,
       sendInstr,
+      sendDirect,
       addInstr,
       clearQueue,
       restorePersisted,

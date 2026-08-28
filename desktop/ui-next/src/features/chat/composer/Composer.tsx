@@ -9,6 +9,7 @@ import {
   IconChevronUp,
   IconGripVertical,
   IconList,
+  IconPackage,
   IconPaperclip,
   IconPlayerPause,
   IconPlayerPlay,
@@ -43,7 +44,7 @@ import { fmtK } from "@/lib/util/fmt";
 import { commandText, createImeGuard, cycleIndex, filterCommands, slashQuery } from "@/lib/util/slash";
 import { ComposerCard, ComposerTextarea, ErrorBar, RunBar, SlashPanel, UsageRing } from "./composerKit";
 import { ModelMenu, SkillsMenu, ThinkMenu } from "./pickers";
-import { QueueModal } from "./QueueModal";
+import { CommandWarehouse } from "./CommandWarehouse";
 import type { ComposerCtl } from "./useComposer";
 
 // 模型/思考档下拉的形态与逻辑收口在 ./pickers(新建任务页共用同一组件);
@@ -54,9 +55,9 @@ function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** 指令队列区:待发送/执行中/失败的指令(输入区上方)。折叠只显示首条+暂停/
- * 展开/失败角标;展开可拖拽排序(仅非执行/失败项可拖,落点不会插到执行中前)、
- * 点击编辑/移除;失败项带重试。队首为执行中,锁定不可拖动/删除/编辑。 */
+/** 自动指令队列区:运行中/失败的指令(输入区上方)。与指令仓库完全独立。
+ * 指令仓库是预设指令库(手动逐条发送);这里是自动执行队列(运行中/失败)。
+ * 折叠只显示首条+暂停/展开/失败角标;展开可拖拽排序/编辑/移除;失败项带重试。 */
 function QueueArea({ ctl }: { ctl: ComposerCtl }) {
   const { t } = useI18n();
   const { queue, queueOpen, toggleQueueOpen, paused, togglePaused, retryInstr, removeInstr, reorderInstr, editInstr, clearQueue } = ctl;
@@ -317,8 +318,20 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
   const imeRef = useRef(createImeGuard());
   const [models, setModels] = useState<ModelInfo[]>([]);
   // teamOn 来自 props(LocalComposerHost 管理状态,通过 useComposer 传递给 send)
-  const [queueModalOpen, setQueueModalOpen] = useState(false);
-  const toggleQueueModal = useCallback(() => setQueueModalOpen((o) => !o), []);
+  const [warehouseOpen, setWarehouseOpen] = useState(false);
+  // 指令仓库:按 sessionId 隔离,持久化到 localStorage
+  const [warehouseItems, setWarehouseItems] = useState<Array<{ id: string; text: string; atts: Array<{ path: string; name: string; isImage: boolean }> }>>(() => {
+    try { return JSON.parse(localStorage.getItem(`mc.warehouse.${sessionId}`) ?? "[]"); } catch { return []; }
+  });
+  // 切会话时恢复该会话的仓库
+  useEffect(() => {
+    try { setWarehouseItems(JSON.parse(localStorage.getItem(`mc.warehouse.${sessionId}`) ?? "[]")); } catch { setWarehouseItems([]); }
+  }, [sessionId]);
+  // 仓库变更时落盘
+  useEffect(() => {
+    try { localStorage.setItem(`mc.warehouse.${sessionId}`, JSON.stringify(warehouseItems)); } catch {}
+  }, [sessionId, warehouseItems]);
+  const toggleWarehouse = useCallback(() => setWarehouseOpen((o) => !o), []);
 
   // 切会话后焦点落到输入框:sessionId 处理同实例内切换;focusRequest 处理
   // 设置/新建/云端视图切回时的重挂载。请求消费后由 App 清零,避免引擎
@@ -595,7 +608,7 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
           soft 底 + 14px 语义图标 + truncate 正文 + 右端关闭 */}
       {ctl.error && <ErrorBar text={ctl.error} onDismiss={ctl.dismissError} />}
 
-      {/* 指令队列:待发送/执行中/失败的指令,折叠显示首条,展开可拖拽排序/重试/移除/编辑 */}
+      {/* 自动指令队列:运行中/失败的指令(输入区上方),与指令仓库完全独立 */}
       {ctl.queue.length > 0 && <QueueArea ctl={ctl} />}
 
       {/* 输入卡外框(形态收口在 composerKit:出血/聚焦边线/禁挂 dropdown 类
@@ -745,17 +758,17 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
                 : t("chat.usageEmpty")
             }
           />
-          {/* 队列按钮:始终显示,点击打开 QueueModal(可预设任务) */}
+          {/* 指令仓库按钮:始终显示,点击打开指令仓库弹窗（预设指令,手动逐条发送） */}
           <button
             type="button"
-            className={`btn btn-ghost btn-square btn-xs shrink-0 ${ctl.queue.length > 0 ? "text-primary" : "text-base-content/50"}`}
-            title={t("chat.queue.modalTitle")}
-            onClick={toggleQueueModal}
+            className="relative btn btn-ghost btn-square btn-xs shrink-0 text-base-content/50"
+            title={t("chat.warehouse.title")}
+            onClick={toggleWarehouse}
           >
-            <IconList size={15} stroke={1.75} aria-hidden />
-            {ctl.queue.length > 0 && (
+            <IconPackage size={15} stroke={1.75} aria-hidden />
+            {warehouseItems.length > 0 && (
               <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-content">
-                {ctl.queue.length}
+                {warehouseItems.length}
               </span>
             )}
           </button>
@@ -771,7 +784,24 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
           </button>
         </div>
       </ComposerCard>
-      {queueModalOpen && <QueueModal ctl={ctl} onClose={() => setQueueModalOpen(false)} />}
+      {warehouseOpen && (
+        <CommandWarehouse
+          items={warehouseItems}
+          onAdd={(text, atts) => setWarehouseItems((prev) => [...prev, { id: `wh-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text, atts }])}
+          onEdit={(id, text) => setWarehouseItems((prev) => prev.map((it) => it.id === id ? { ...it, text } : it))}
+          onRemove={(id) => setWarehouseItems((prev) => prev.filter((it) => it.id !== id))}
+          onClear={() => setWarehouseItems([])}
+          onSend={(id: string, text: string, atts: Array<{ path: string; name: string; isImage: boolean }>) => {
+            // 直接发送指令到对话（不经过草稿/队列，仓库专用）
+            ctl.sendDirect(text, atts);
+            // 发送后从仓库移除该条指令
+            setWarehouseItems((prev) => prev.filter((it) => it.id !== id));
+            // 关闭弹窗
+            setWarehouseOpen(false);
+          }}
+          onClose={() => setWarehouseOpen(false)}
+        />
+      )}
     </div>
   );
 });

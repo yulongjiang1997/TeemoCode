@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.25",
+    notes: "command warehouse + confirm fix + queue persist + team injection",
+  },
+  {
     version: "0.1.24",
     notes: "team mode + queue modal + pet GIF animation",
   },
