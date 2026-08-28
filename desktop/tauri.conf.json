@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "TeemoCode",
   "mainBinaryName": "TeemoCode",
-  "version": "0.1.22",
+  "version": "0.1.23",
   "identifier": "com.teemocode.desktop",
   "build": {
     "frontendDist": "uidist",
@@ -96,6 +96,7 @@
             "allow-model-test",
             "allow-reveal-path",
             "allow-save-config",
+            "allow-pet-recreate",
             "allow-session-call",
             "allow-session-close",
             "allow-session-create",

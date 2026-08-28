@@ -14,6 +14,7 @@ import { LOCALES, setLocale, useI18n } from "@/lib/i18n";
 import {
   getConfig,
   listWslDistros,
+  petRecreate,
   saveConfig,
   type DesktopConfig,
 } from "@/lib/ipc/config";
@@ -427,7 +428,7 @@ function ThemePicker({ theme, custom, onPick }: { theme: Theme; custom: CustomTh
 }
 
 /** 通用:外观主题 / 语言 / 提示音(仅桌面壳)。 */
-function GeneralSection() {
+function GeneralSection({ petConfig }: { petConfig?: DesktopConfig | null }) {
   const { t, locale } = useI18n();
   const [theme, setThemeState] = useState<Theme>(readTheme);
   // 自定义背景图(data URL)与透明度;未自定义 → 默认纯色背景
@@ -436,7 +437,27 @@ function GeneralSection() {
   const [maskOpacity, setMaskOpacityState] = useState(readMaskOpacity);
   const [bgBlur, setBgBlurState] = useState(readBgBlur);
   const [taskExpandLimit, setTaskExpandLimit] = useState(readTaskExpandLimit);
+  // 桌宠缩放防抖:滑杆拖动中高频触发 onChange,每帧都重建窗口会卡死。
+  // 用 setTimeout 防抖——松手后 400ms 才真正重建(用户拖动停止 → settle → 重建)。
+  const petRecreateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bgFileRef = useRef<HTMLInputElement | null>(null);
+  const cfgRef = useRef<DesktopConfig | null>(null);
+  // 桌宠设置从 config.json 读取(不在 localStorage);初始值在 config 加载后覆盖。
+  const [petScale, setPetScale] = useState(() => petConfig?.pet_scale ?? 1.0);
+  const [petSprites, setPetSprites] = useState<Record<string, string>>(() => (petConfig?.pet_sprites as Record<string, string>) ?? {});
+  // 当父组件加载完配置后,用实际值覆盖初始默认值(解决重启后恢复 100% 的问题)
+  useEffect(() => {
+    if (petConfig?.pet_scale !== undefined) setPetScale(petConfig.pet_scale);
+    if (petConfig?.pet_sprites && Object.keys(petConfig.pet_sprites).length > 0) setPetSprites(petConfig.pet_sprites as Record<string, string>);
+  }, [petConfig]);
+  // 同步读取当前配置(用于即时保存 pet 设置,不走 draft 保存流程)。
+  // 若配置尚未加载,先等加载完再返回(首次上传必须等)。
+  const getConfigNow = useCallback(async () => {
+    if (cfgRef.current) return cfgRef.current;
+    const c = await getConfig();
+    if (c) cfgRef.current = c;
+    return c;
+  }, []);
   const pickBg = (file: File | null | undefined) => {
     if (!file || !file.type.startsWith("image/")) return;
     const reader = new FileReader();
@@ -619,6 +640,116 @@ function GeneralSection() {
             <span className="w-8 text-right text-xs tabular-nums text-base-content/60">{taskExpandLimit}</span>
           </div>
         </SettingRow>
+        {inDesktopShell() && (
+          <>
+            <SettingRow label={t("settings.pet.scale")} hint={t("settings.pet.scaleHint")}>
+              <div className="flex items-center gap-2">
+                <input
+                  type="range"
+                  min={30}
+                  max={300}
+                  step={10}
+                  className="range range-xs w-40"
+                  aria-label={t("settings.pet.scale")}
+                  value={Math.round(petScale * 100)}
+                  onChange={async (e) => {
+                    const v = Number(e.target.value) / 100;
+                    setPetScale(v);
+                    const cfg = await getConfigNow();
+                    if (cfg) { cfg.pet_scale = v; await saveConfig(cfg); }
+                    // 防抖:拖动中不重建,松手 400ms 后才执行
+                    if (petRecreateTimer.current) clearTimeout(petRecreateTimer.current);
+                    petRecreateTimer.current = setTimeout(() => {
+                      petRecreate();
+                      window.dispatchEvent(new Event("mc-pet-changed"));
+                    }, 400);
+                  }}
+                  onMouseUp={() => {
+                    if (petRecreateTimer.current) {
+                      clearTimeout(petRecreateTimer.current);
+                      petRecreateTimer.current = null;
+                    }
+                    petRecreate();
+                    window.dispatchEvent(new Event("mc-pet-changed"));
+                  }}
+                  onTouchEnd={() => {
+                    if (petRecreateTimer.current) {
+                      clearTimeout(petRecreateTimer.current);
+                      petRecreateTimer.current = null;
+                    }
+                    petRecreate();
+                    window.dispatchEvent(new Event("mc-pet-changed"));
+                  }}
+                />
+                <span className="w-8 text-right text-xs tabular-nums text-base-content/60">{Math.round(petScale * 100)}%</span>
+              </div>
+            </SettingRow>
+            <SettingRow label={t("settings.pet.customSprite")} hint={t("settings.pet.customSpriteHint")}>
+              <div className="flex flex-col gap-1.5">
+                {["idle", "running", "waiting", "celebrate", "offline"].map((action) => (
+                  <div key={action} className="flex items-center gap-2">
+                    <span className="w-16 shrink-0 text-xs text-base-content/50">{t(`settings.pet.action.${action}` as "settings.pet.action.idle")}</span>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => {
+                        const input = document.createElement("input");
+                        input.type = "file";
+                        // 支持 GIF(动图,含帧信息)和 PNG(精灵图横条)
+                        input.accept = "image/gif,image/png";
+                        input.onchange = async () => {
+                          const file = input.files?.[0];
+                          if (!file) return;
+                          const reader = new FileReader();
+                          reader.onload = async () => {
+                            // 直接保存原始文件 data URL:Rust 侧 image crate
+                            // 原生支持 GIF 解码(提取所有帧),PNG 直接用。
+                            // 前端转换会丢失动画帧(只取第一帧),导致桌宠不动。
+                            const dataUrl = reader.result as string;
+                            const cfg = await getConfigNow();
+                            if (cfg) {
+                              const sprites = { ...cfg.pet_sprites, [action]: dataUrl };
+                              cfg.pet_sprites = sprites;
+                              await saveConfig(cfg);
+                              setPetSprites(sprites);
+                              // 保存完成后立即重建桌宠(配置已写盘)
+                              petRecreate();
+                              window.dispatchEvent(new Event("mc-pet-changed"));
+                            }
+                          };
+                          reader.readAsDataURL(file);
+                        };
+                        input.click();
+                      }}
+                    >
+                      {petSprites[action] ? t("settings.pet.changeSprite") : t("settings.pet.uploadSprite")}
+                    </button>
+                    {petSprites[action] && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs text-error"
+                        onClick={async () => {
+                          const cfg = await getConfigNow();
+                          if (cfg) {
+                            const sprites = { ...cfg.pet_sprites };
+                            delete sprites[action];
+                            cfg.pet_sprites = sprites;
+                            await saveConfig(cfg);
+                            setPetSprites(sprites);
+                            petRecreate();
+                            window.dispatchEvent(new Event("mc-pet-changed"));
+                          }
+                        }}
+                      >
+                        {t("settings.pet.resetSprite")}
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </SettingRow>
+          </>
+        )}
       </div>
       <p className="text-xs text-base-content/50">{t("settings.appearance.hint")}</p>
     </section>
@@ -932,7 +1063,7 @@ export function SettingsView({
   const body = () => {
     switch (section) {
       case "general":
-        return <GeneralSection />;
+        return <GeneralSection petConfig={cfg} />;
       case "account":
         // 账号分区不吃壳配置(登录态自查、浏览器降级自带),不走 configGate;
         // 同步结果经 applySync 并入模型/MCP 草稿。草稿另供自建部署高级块编辑

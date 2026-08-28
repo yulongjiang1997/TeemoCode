@@ -57,6 +57,10 @@ fn default_engine() -> String {
     String::new() // 字段已废弃,仅兼容旧 config.json 反序列化
 }
 
+fn default_pet_scale() -> f64 {
+    1.0
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MainWindowState {
     /// 窗口外框左上角，物理像素（可跨多显示器为负坐标）。
@@ -112,6 +116,14 @@ pub struct DesktopConfig {
     /// 桌宠窗口位置(物理像素;拖动后记忆)
     #[serde(default)]
     pub pet_pos: Option<(i32, i32)>,
+    /// 桌宠缩放系数(1.0=默认尺寸;0.5=半大;2.0=双倍)。设置页滑杆控制。
+    #[serde(default = "default_pet_scale")]
+    pub pet_scale: f64,
+    /// 桌宠自定义精灵图路径(绝对路径;空=用内置默认)。键=动作名
+    /// (offline/idle/running/waiting/celebrate),值=文件路径。
+    /// 文件格式:PNG 横条精灵图,每帧 SOURCE_FRAME(400)px 宽,高 400px。
+    #[serde(default = "json_object")]
+    pub pet_sprites: serde_json::Value,
     /// 主窗口正常态的位置、大小与最大化状态。
     #[serde(default)]
     pub main_window_state: Option<MainWindowState>,
@@ -137,6 +149,8 @@ impl Default for DesktopConfig {
             pet_enabled: true,
             sound_enabled: true,
             pet_pos: None,
+            pet_scale: default_pet_scale(),
+            pet_sprites: json_object(),
             main_window_state: None,
             telemetry_enabled: true,
         }

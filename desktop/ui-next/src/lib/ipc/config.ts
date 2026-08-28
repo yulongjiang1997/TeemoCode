@@ -61,6 +61,10 @@ export interface DesktopConfig {
   /** 提示音真值走 sound_enabled/set_sound_enabled 即时命令,不进保存条 */
   sound_enabled?: boolean;
   pet_pos?: [number, number] | null;
+  /** 桌宠缩放系数(1.0=默认;0.3~3.0) */
+  pet_scale?: number;
+  /** 桌宠自定义精灵图(data URL);键=动作名(idle/running/waiting/celebrate/offline) */
+  pet_sprites?: Record<string, string>;
   telemetry_enabled?: boolean;
 }
 
@@ -75,6 +79,13 @@ export async function getConfig(): Promise<DesktopConfig | null> {
 export async function saveConfig(config: DesktopConfig): Promise<void> {
   if (!inDesktopShell()) throw new Error("浏览器模式下配置只读,请在桌面应用中修改");
   await invoke("save_config", { config });
+}
+
+/** 事件提示音开关当前值;浏览器模式(没有桌宠也就没有音效)返回开,
+ *  设置页不渲染这一项。 */
+export async function petRecreate(): Promise<void> {
+  if (!inDesktopShell()) return;
+  await invoke("pet_recreate");
 }
 
 /** 事件提示音开关当前值;浏览器模式(没有桌宠也就没有音效)返回开,

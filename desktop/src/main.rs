@@ -32,6 +32,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use base64::Engine as _;
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -1366,9 +1367,10 @@ fn hide_native_window_buttons(window: &tauri::WebviewWindow) {
 
 // ==================== 桌宠 ====================
 
-/// 桌宠窗口尺寸(逻辑像素):气泡(24)+ 吉祥物精灵图(88)的画布。
-const PET_W: f64 = 116.0;
-const PET_H: f64 = 120.0;
+/// 桌宠窗口尺寸(逻辑像素):精灵图 200x200 + 气泡 32px 总高 232px。
+/// pet.html 的 body 也是 204x232;Windows layered window 与 CSS 对齐。
+const PET_W: f64 = 200.0;
+const PET_H: f64 = 232.0;
 
 /// 创建非 Windows 桌宠窗口。先隐藏创建以避免定位前在屏幕角落闪现,
 /// 定位完成后按用户开关显示,不受主窗口焦点影响。
@@ -1482,15 +1484,42 @@ fn ensure_pet_window(app: &AppHandle) {
         })
         .map(|m| m.scale_factor())
         .unwrap_or(1.0);
+    // 桌宠缩放:读用户设置的 pet_scale,乘以 DPI 缩放得到最终物理缩放。
+    let cfg = load_config(app).unwrap_or_default();
+    let user_scale = cfg.pet_scale.clamp(0.3, 3.0);
+    let physical_scale = scale * user_scale;
+
+    // 自定义精灵图:从 pet_sprites 配置读取 idle 动作的 data URL;为空用内置默认。
+    let custom_sprite = cfg.pet_sprites.get("idle").and_then(|v| v.as_str()).and_then(|data_url| {
+        // data URL 格式:data:image/png;base64,XXXX
+        let base64_part = data_url.split(',').last()?;
+        let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, base64_part).ok()?;
+        Some(bytes)
+    });
+
     if let Err(e) = native_pet::create(
         app,
         position.x,
         position.y,
-        (PET_W * scale).round() as i32,
-        (PET_H * scale).round() as i32,
+        (PET_W * physical_scale).round() as i32,
+        (PET_H * physical_scale).round() as i32,
+        user_scale,
+        custom_sprite,
     ) {
         eprintln!("[desktop] Windows 原生桌宠初始化失败: {e}");
-        return;
+        // 自定义精灵图失败时回退到内置默认(避免闪退)
+        if let Err(e2) = native_pet::create(
+            app,
+            position.x,
+            position.y,
+            (PET_W * physical_scale).round() as i32,
+            (PET_H * physical_scale).round() as i32,
+            user_scale,
+            None,
+        ) {
+            eprintln!("[desktop] Windows 原生桌宠初始化(回退)失败: {e2}");
+            return;
+        }
     }
 
     // 不透明、永不 show:它只是桌宠状态机与音频宿主,
@@ -1619,6 +1648,19 @@ fn set_sound_enabled(app: AppHandle, enabled: bool) {
 
 /// 提示音开关的唯一落点(设置页命令与托盘勾选项共用):更新运行时真值 →
 /// 同步托盘勾选态 → 广播给桌宠页与设置页 → 落盘。
+
+/// 重建桌宠窗口:设置页改 pet_scale/pet_sprites 后调用。
+/// 先销毁旧窗口再创建新窗口(缩放/精灵图变更无法热更新)。
+#[tauri::command]
+fn pet_recreate(app: AppHandle) -> Result<(), String> {
+    let cfg = load_config(&app).unwrap_or_default();
+    let scale = cfg.pet_scale.clamp(0.3, 3.0);
+    let custom_sprite = cfg.pet_sprites.get("idle").and_then(|v| v.as_str()).and_then(|data_url| {
+        let base64_part = data_url.split(',').last()?;
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, base64_part).ok()
+    });
+    native_pet::recreate_with(&app, scale, custom_sprite)
+}
 ///
 /// 广播先于落盘:静音是用户此刻就要的效果,写盘失败(磁盘满/权限)不该让
 /// 本次静音也失效——下次启动回到旧值即可,而不是"点了没反应"。
@@ -1699,6 +1741,7 @@ fn main() {
             pet_native_render,
             sound_enabled,
             set_sound_enabled,
+            pet_recreate,
             update_check,
             update_download,
             update_install,

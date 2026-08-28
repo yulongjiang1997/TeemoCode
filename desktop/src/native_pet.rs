@@ -8,6 +8,7 @@
 //! 不兼容,UpdateLayeredWindow 会失败并留下黑底。
 
 use std::ffi::c_void;
+use image::AnimationDecoder;
 use std::mem::size_of;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -171,19 +172,114 @@ pub fn exists(app: &AppHandle) -> bool {
 
 /// 创建独立 Win32 popup。窗口类不带 Tao 的 CS_OWNDC,因此 Win7/10 都能
 /// 正常使用 UpdateLayeredWindow 的逐像素 alpha；WS_POPUP 从源头消除标题栏/X。
-pub fn create(app: &AppHandle, x: i32, y: i32, width: i32, height: i32) -> Result<(), String> {
+/// scale:缩放系数(1.0=默认);custom_sprite:可选的自定义精灵图字节(优先于内置)。
+pub fn create(
+    app: &AppHandle,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    scale: f64,
+    custom_sprite: Option<Vec<u8>>,
+) -> Result<(), String> {
     register_window_class()?;
-    let sprite = tauri::image::Image::from_bytes(include_bytes!("assets/pet-sprite.png"))
-        .map_err(|e| format!("桌宠 PNG 解码失败: {e}"))?
-        .to_owned();
-    if sprite.width() as usize != SOURCE_FRAME * FRAME_COUNT
-        || sprite.height() as usize != SOURCE_FRAME
-    {
-        return Err(format!(
-            "桌宠精灵图尺寸异常: {}x{}",
-            sprite.width(),
-            sprite.height()
-        ));
+    let sprite = if let Some(ref data) = custom_sprite {
+        // image crate 解码 GIF:GifDecoder + AnimationDecoder 逐帧提取。
+        let cursor: std::io::Cursor<&[u8]> = std::io::Cursor::new(data.as_ref());
+        let gif_decoder = image::codecs::gif::GifDecoder::new(cursor);
+        let frames: Vec<image::RgbaImage> = match gif_decoder {
+            Ok(decoder) => {
+                let iter = decoder.into_frames();
+                let mut v = Vec::new();
+                for result in iter {
+                    match result {
+                        Ok(frame) => v.push(frame.into_buffer()),
+                        Err(e) => eprintln!("[desktop] GIF 帧解码失败(跳过): {e}"),
+                    }
+                }
+                v
+            }
+            Err(_) => Vec::new(),
+        };
+        if frames.is_empty() {
+            // 非动画图:单帧直接转 RGBA
+            let img = image::load_from_memory(data)
+                .map_err(|e| format!("自定义桌宠精灵图解码失败: {e}"))?;
+            let rgba = img.to_rgba8();
+            let mut sheet = vec![0u8; SOURCE_FRAME * SOURCE_FRAME * 4];
+            let raw = rgba.as_raw();
+            let fw = rgba.width() as usize;
+            let fh = rgba.height() as usize;
+            for y in 0..SOURCE_FRAME.min(fh) {
+                for x in 0..SOURCE_FRAME.min(fw) {
+                    let si = (y * fw + x) * 4;
+                    let di = (y * SOURCE_FRAME + x) * 4;
+                    sheet[di..di+4].copy_from_slice(&raw[si..si+4]);
+                }
+            }
+            let sheet_img = image::RgbaImage::from_raw(SOURCE_FRAME as u32, SOURCE_FRAME as u32, sheet)
+                .ok_or("精灵图缓冲区尺寸不匹配")?;
+            let mut png_buf = std::io::Cursor::new(Vec::new());
+            sheet_img.write_to(&mut png_buf, image::ImageFormat::Png)
+                .map_err(|e| format!("精灵图 PNG 编码失败: {e}"))?;
+            tauri::image::Image::from_bytes(&png_buf.into_inner())
+                .map_err(|e| format!("精灵图加载失败: {e}"))?
+                .to_owned()
+        } else {
+            // 多帧 GIF:拼成横条。PNG 行主序:row0 = 所有帧的第 0 行并排,然后 row1...
+            // 正确偏移:di = (y * sheet_w + frame_i * SOURCE_FRAME + x) * 4
+            let sheet_w = SOURCE_FRAME * frames.len();
+            let mut sheet = vec![0u8; sheet_w * SOURCE_FRAME * 4];
+            for (i, frame) in frames.iter().enumerate() {
+                let fw = frame.width() as usize;
+                let fh = frame.height() as usize;
+                let raw = frame.as_raw();
+                for y in 0..SOURCE_FRAME.min(fh) {
+                    for x in 0..SOURCE_FRAME.min(fw) {
+                        let si = (y * fw + x) * 4;
+                        let di = (y * sheet_w + i * SOURCE_FRAME + x) * 4;
+                        sheet[di..di+4].copy_from_slice(&raw[si..si+4]);
+                    }
+                }
+            }
+            let sheet_img = image::RgbaImage::from_raw(sheet_w as u32, SOURCE_FRAME as u32, sheet)
+                .ok_or("精灵图缓冲区尺寸不匹配")?;
+            let mut png_buf = std::io::Cursor::new(Vec::new());
+            sheet_img.write_to(&mut png_buf, image::ImageFormat::Png)
+                .map_err(|e| format!("精灵图 PNG 编码失败: {e}"))?;
+            tauri::image::Image::from_bytes(&png_buf.into_inner())
+                .map_err(|e| format!("精灵图加载失败: {e}"))?
+                .to_owned()
+        }
+    } else {
+        tauri::image::Image::from_bytes(include_bytes!("assets/pet-sprite.png"))
+            .map_err(|e| format!("桌宠 PNG 解码失败: {e}"))?
+            .to_owned()
+    };
+    if custom_sprite.is_some() {
+        // 自定义精灵图:接受任何有效图片(已由 image crate 验证)。
+        // 横条格式:宽>=高 且 宽%400==0;单帧格式:宽/高 >= 400。
+        let w = sprite.width() as usize;
+        let h = sprite.height() as usize;
+        if w < SOURCE_FRAME || h < SOURCE_FRAME {
+            return Err(format!(
+                "自定义桌宠精灵图太小: {}x{}(最小 {}x{})",
+                w, h, SOURCE_FRAME, SOURCE_FRAME,
+            ));
+        }
+    } else {
+        // 内置精灵图:严格校验 37 帧 × 400px
+        if sprite.width() as usize != SOURCE_FRAME * FRAME_COUNT
+            || sprite.height() as usize != SOURCE_FRAME
+        {
+            return Err(format!(
+                "桌宠精灵图尺寸异常: {}x{}(期望 {}x{})",
+                sprite.width(),
+                sprite.height(),
+                SOURCE_FRAME * FRAME_COUNT,
+                SOURCE_FRAME,
+            ));
+        }
     }
 
     let module =
@@ -273,6 +369,55 @@ pub fn set_visible(app: &AppHandle, visible: bool) {
     }
 }
 
+/// 重建桌宠窗口(设置页改 scale/sprite 后):先销毁旧窗口,用新配置重新创建。
+/// scale:用户缩放系数;custom_sprite:可选的自定义精灵图字节(优先于内置)。
+pub fn recreate_with(
+    app: &AppHandle,
+    scale: f64,
+    custom_sprite: Option<Vec<u8>>,
+) -> Result<(), String> {
+    // 先关闭旧窗口
+    if let Some(pet) = app.state::<NativePetHost>().take() {
+        unsafe { let _ = DestroyWindow(pet.hwnd()); }
+    }
+    // 获取 DPI scale 和默认位置
+    let scale_factor = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| m.scale_factor())
+        .unwrap_or(1.0);
+    let logical_w = 200.0f64;
+    let logical_h = 232.0f64;
+    let (x, y) = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| {
+            let r = m.size();
+            let s = m.scale_factor();
+            let px = ((r.width as f64 - logical_w * s) * 0.5) as i32;
+            let py = ((r.height as f64 - logical_h * s) * 0.8) as i32;
+            (m.position().x + px, m.position().y + py)
+        })
+        .unwrap_or((100, 100));
+    let physical_scale = scale_factor * scale;
+    let w = (logical_w * physical_scale).round() as i32;
+    let h = (logical_h * physical_scale).round() as i32;
+    // 创建新窗口
+    if let Err(e) = create(app, x, y, w, h, scale, custom_sprite) {
+        eprintln!("[desktop] 桌宠重建失败: {e}, 尝试用内置精灵图");
+        // 自定义精灵图失败时回退到内置默认
+        if let Err(e2) = create(app, x, y, w, h, scale, None) {
+            return Err(format!("桌宠重建失败(含回退): {e2}"));
+        }
+    }
+    // 读配置确定可见性
+    let cfg = crate::config::load_config(app).unwrap_or_default();
+    set_visible(app, cfg.pet_enabled);
+    Ok(())
+}
+
 pub fn position(app: &AppHandle) -> Option<(i32, i32)> {
     let pet = app.state::<NativePetHost>().get()?;
     let mut rect = RECT::default();
@@ -330,16 +475,24 @@ impl NativePet {
         HWND(self.hwnd as *mut c_void)
     }
 
-    fn frame_at(mode: Mode, elapsed: Duration) -> usize {
-        // 帧段:0-11 idle / 12-17 running / 18-29 waiting / 30-35 celebrate / 36 offline。
-        // 每帧时长 160ms,与 ui-next/public/pet.html 的 CSS steps 保持一致。
+    fn frame_at(mode: Mode, elapsed: Duration, total_frames: usize) -> usize {
+        // 内置精灵图(37帧):各 mode 对应固定帧段,每帧 160ms。
+        // 自定义精灵图(任意帧数):忽略 mode,直接顺序循环播放,GIF 原生时序。
         let ms = elapsed.as_millis() as usize;
-        match mode {
-            Mode::Idle => (ms / 160) % 12,
-            Mode::Running => 12 + (ms / 160) % 6,
-            Mode::Waiting => 18 + (ms / 160) % 12,
-            Mode::Celebrate => 30 + (ms / 160).min(5),
-            Mode::Offline => 36,
+        if total_frames == FRAME_COUNT {
+            // 内置:保持原有帧段分配
+            let f = match mode {
+                Mode::Idle => (ms / 160) % 12,
+                Mode::Running => 12 + (ms / 160) % 6,
+                Mode::Waiting => 18 + (ms / 160) % 12,
+                Mode::Celebrate => 30 + (ms / 160).min(5),
+                Mode::Offline => 36,
+            };
+            f
+        } else {
+            // 自定义 GIF:直接顺序播放所有帧,160ms/帧(与内置帧率一致,
+            // 使各 mode 都能完整播放 GIF 动画)
+            (ms / 160) % total_frames
         }
     }
 
@@ -352,7 +505,7 @@ impl NativePet {
 
         let (frame, tone, text, mode) = {
             let mut visual = self.visual.lock_ok();
-            let frame = Self::frame_at(visual.mode, visual.since.elapsed());
+            let frame = Self::frame_at(visual.mode, visual.since.elapsed(), self.sprite.width() as usize / SOURCE_FRAME);
             let key = (frame, visual.generation, width, height);
             if !force && visual.last_key == Some(key) {
                 return Ok(());
@@ -375,7 +528,9 @@ impl NativePet {
     ) -> Result<(), String> {
         let mut pixels = vec![0u8; width as usize * height as usize * 4];
         let scale = (height as f64 / LOGICAL_H).max(0.5);
-        let sprite_size = (LOGICAL_SPRITE * scale).round().max(1.0) as u32;
+        // 精灵图尺寸不超过窗口边界(防裁切)
+        let max_sprite = width.min(height);
+        let sprite_size = (LOGICAL_SPRITE * scale).round().max(1.0).min(max_sprite as f64) as u32;
         let sprite_x = (width.saturating_sub(sprite_size) / 2) as i32;
         let sprite_y = height.saturating_sub(sprite_size) as i32;
         self.draw_sprite(
@@ -412,20 +567,27 @@ impl NativePet {
     ) {
         let src = self.sprite.rgba();
         let src_w = self.sprite.width() as usize;
-        let sx0 = frame * SOURCE_FRAME;
+        let src_h = self.sprite.height() as usize;
+        // 自定义图片(GIF/PNG):非横条格式时视为单帧,整体渲染。
+        // 横条格式:宽>=高 且 宽%400==0;否则当单帧处理。
+        let is_sprite_sheet = src_w >= src_h && src_w % SOURCE_FRAME == 0 && src_w / SOURCE_FRAME > 1;
+        let frame_w = if is_sprite_sheet { SOURCE_FRAME } else { src_w };
+        let frame_h = if is_sprite_sheet { SOURCE_FRAME } else { src_h };
+        let sx0 = if is_sprite_sheet { frame * SOURCE_FRAME } else { 0 };
         for y in 0..size {
-            let sy = ((y as usize * SOURCE_FRAME) / size as usize).min(SOURCE_FRAME - 1);
+            let sy = ((y as usize * frame_h) / size as usize).min(frame_h - 1);
             let oy = dy + y as i32;
             if oy < 0 || oy >= dst_h as i32 {
                 continue;
             }
             for x in 0..size {
-                let sx = ((x as usize * SOURCE_FRAME) / size as usize).min(SOURCE_FRAME - 1);
+                let sx = ((x as usize * frame_w) / size as usize).min(frame_w - 1);
                 let ox = dx + x as i32;
                 if ox < 0 || ox >= dst_w as i32 {
                     continue;
                 }
                 let si = (sy * src_w + sx0 + sx) * 4;
+                if si + 3 >= src.len() { continue; }
                 let mut r = src[si] as u32;
                 let mut g = src[si + 1] as u32;
                 let mut b = src[si + 2] as u32;
