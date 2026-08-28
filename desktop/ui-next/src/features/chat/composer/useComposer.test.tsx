@@ -14,6 +14,8 @@ const feed = (over: Partial<ComposerFeed> = {}): ComposerFeed => ({
   historyLoaded: true,
   lastSeq: 0,
   turnEnded: false,
+  teamOn: false,
+  enabledSkills: [],
   ...over,
 });
 

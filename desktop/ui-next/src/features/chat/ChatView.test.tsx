@@ -486,9 +486,7 @@ describe("聊天视图", () => {
     await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
     const nav = await screen.findByRole("navigation", { name: "提问大纲" });
     fireEvent.mouseEnter(nav.querySelector("[data-outline-dot]")!);
-    // 面板默认折叠为最近 2 条:先铺开才能看到早期条目(正文里还没有,
-    // 在更早的历史页里)
-    await userEvent.click(within(nav).getByText(/显示更早/));
+    // 面板直接显示全部条目(无折叠)
     expect(screen.getByText("最早的问题")).toBeTruthy();
     expect(ops.some((o) => o.cmd === "session_history")).toBe(false);
     fireEvent.click(screen.getByText("最早的问题"));
@@ -567,8 +565,7 @@ describe("聊天视图", () => {
     await screen.findByText("尾部问题 199");
     const nav = await screen.findByRole("navigation", { name: "提问大纲" });
     fireEvent.mouseEnter(nav.querySelector("[data-outline-dot]")!);
-    // 面板默认折叠为最近 2 条:先铺开才能点到早期条目
-    await userEvent.click(within(nav).getByText(/显示更早/));
+    // 面板直接显示全部条目(无折叠)
     await userEvent.click(within(nav).getByText("最早的问题"));
 
     const earlyBubble = await waitFor(() => {

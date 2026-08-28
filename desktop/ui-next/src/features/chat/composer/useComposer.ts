@@ -28,6 +28,7 @@ import {
 } from "@/lib/ipc/uploads";
 import { b64encode } from "@/lib/protocol/codec";
 import { bindActiveComposer, stashGet, stashSet } from "./stash";
+import { buildTeamPreamble } from "@/lib/ipc/teamPreamble";
 import { readComposerQueue, writeComposerQueue, type QueueItem } from "@/lib/util/prefs";
 
 // QueueItem 的权威定义在 lib/util/prefs(叶子模块,无依赖);此处再导出,方便
@@ -73,6 +74,10 @@ export interface ComposerCtl {
   /** 拖动排序(仅 pending 项可拖;执行中/失败项不参与换序)。 */
   reorderInstr(from: number, to: number): void;
   editInstr(id: string, text: string): void;
+  /** 从队列移除指定项并立即发送到对话窗口。 */
+  sendInstr(id: string): void;
+  /** 向队列追加一条新指令(文本+可选附件)。 */
+  addInstr(text: string, atts?: ComposerAtt[]): void;
   clearQueue(): void;
   /** 从 localStorage 恢复持久化队列:按文本去重后追加到队尾(补投 effect 会自动投)。 */
   restorePersisted(items: QueueItem[]): void;
@@ -115,10 +120,14 @@ export interface ComposerFeed {
   /** 轮次正常结束(task-ended 置 true;task-error 不置)——队列靠它区分
    *  "本轮成功" 与 "本轮失败",失败时当前指令标 failed 并自动暂停。 */
   turnEnded: boolean;
+  /** 团队模式开关(会话级)。开启时发送消息前注入 [mc-team] 编排指令。 */
+  teamOn: boolean;
+  /** 当前会话启用的技能名列表(团队编排时取交集生成技能提示)。 */
+  enabledSkills: string[];
 }
 
 export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl {
-  const { running, historyLoaded, lastSeq, turnEnded } = feed;
+  const { running, historyLoaded, lastSeq, turnEnded, teamOn, enabledSkills } = feed;
   const [draft, setDraft] = useState("");
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [paused, setPaused] = useState(false);
@@ -129,6 +138,8 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
   // 上行在途:user-input 发出到回执/开轮之间再发必须入队,否则第二条直发
   // 会被壳的忙碌守卫拒掉
   const sendingRef = useRef(false);
+  // sendInstr 需要引用 send() 函数,用 ref 打破循环依赖
+  const sendRef = useRef<(() => boolean) | null>(null);
   // 排队补投失败后的抑制闸:防「失败→回队→effect 立即重投」空转,
   // 新帧到达/running 变化/退避到点/用户再次发送时解除
   const flushBlockedRef = useRef(false);
@@ -280,6 +291,11 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
   const send = useCallback((): boolean => {
     const text = [draft.trim(), ...atts.map(attLine)].filter(Boolean).join("\n");
     if (!text) return false;
+    // 团队模式:注入编排指令前缀([mc-team]...[/mc-team])
+    // 引擎识别后按角色分派任务;LogList 中 stripTeamPreamble 会在渲染时剥离
+    // 这个块,用户看到的仍是原始消息。
+    const teamPreamble = teamOn ? buildTeamPreamble(enabledSkills) : "";
+    const finalText = teamPreamble ? teamPreamble + text : text;
     // /compact 是控制指令不是消息:直达壳的 session_call,不得进排队槽
     // (排队会在轮后把「/compact」当普通文本发给模型)。忙时外显错误并留
     // 住草稿;接受后不乐观落帧——压缩生命周期由壳外显(task_started +
@@ -321,7 +337,7 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
     setAtts([]);
     // 成功路径**不摘** sendingRef:壳在引擎 ack 时就返回,回显帧还在路上,
     // 这段真空里摘掉标记会让下一条直发撞忙碌守卫(见上面的帧水位 effect)
-    void sessionSend(sessionId, "user-input", { content: b64encode(text) })
+    void sessionSend(sessionId, "user-input", { content: b64encode(finalText) })
       .catch((e: unknown) => {
         sendingRef.current = false;
         // 失败不丢草稿:文本回输入框、附件回 chips(壳契约 Err ⟺ 未入会话)。
@@ -349,6 +365,7 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
       });
     return true;
   }, [draft, atts, queue, running, sessionId, clearRetry]);
+  sendRef.current = send;
 
   // 当前正在执行(已投出)的队列指令:回合结束(running→false)时据它判成败
   const inFlightRef = useRef<QueueItem | null>(null);
@@ -456,6 +473,35 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
   }, []);
   const editInstr = useCallback((id: string, text: string) => {
     setQueue((cur) => cur.map((x) => (x.id === id ? { ...x, text } : x)));
+  }, []);
+  /** 从队列移除指定项并立即发送:先移除,再将文本+附件写入草稿触发 send()。
+   * send() 内部会根据 running/在途/队列状态决定直发还是入队。 */
+  const sendInstr = useCallback((id: string) => {
+    let removed: QueueItem | undefined;
+    setQueue((cur) => {
+      const idx = cur.findIndex((x) => x.id === id);
+      if (idx < 0) return cur;
+      removed = cur[idx];
+      return cur.filter((_, i) => i !== idx);
+    });
+    // 延一帧等 setQueue 生效后再写草稿+发送
+    if (removed) {
+      window.queueMicrotask(() => {
+        setDraft(removed!.text);
+        setAtts([...(removed!.atts ?? [])]);
+        // send 会在下一次渲染时读到新的 draft/atts
+        window.queueMicrotask(() => {
+          sendRef.current?.();
+        });
+      });
+    }
+  }, []);
+  /** 向队列追加一条新指令(文本+可选附件)。 */
+  const addInstr = useCallback((text: string, atts?: ComposerAtt[]) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const item: QueueItem = { id: newInstrId(), text: trimmed, atts: atts ? [...atts] : [], state: "pending" };
+    setQueue((cur) => [...cur, item]);
   }, []);
   const clearQueue = useCallback(() => {
     flushBlockedRef.current = false;
@@ -604,6 +650,8 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
       removeInstr,
       reorderInstr,
       editInstr,
+      sendInstr,
+      addInstr,
       clearQueue,
       restorePersisted,
       atts,
@@ -629,6 +677,8 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
       removeInstr,
       reorderInstr,
       editInstr,
+      sendInstr,
+      addInstr,
       clearQueue,
       restorePersisted,
       atts,

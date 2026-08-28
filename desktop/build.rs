@@ -25,6 +25,7 @@ fn main() {
             tauri_build::AppManifest::new().commands(&[
                 "get_config",
                 "save_config",
+                "pet_recreate",
                 "models_fetch",
                 "model_test",
                 "reveal_path",

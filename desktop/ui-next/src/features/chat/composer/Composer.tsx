@@ -34,7 +34,6 @@ import { sessionSetMode, sessionSetModel, sessionSetSkills, sessionSetThink } fr
 import { afterEngineReady } from "@/lib/ipc/engine";
 import { gitImport, gitPush } from "@/lib/ipc/git";
 import { modelMenuList, resolveModelName } from "@/lib/models/modelMenu";
-import { readTeamMode, writeTeamMode } from "@/lib/util/prefs";
 import { modelsList, type ModelInfo, type SessionMeta } from "@/lib/ipc/sessions";
 import { defaultEnabledSkills, skillsList, type SkillInfo } from "@/lib/ipc/skills";
 import { pickAttachmentPaths } from "@/lib/ipc/uploads";
@@ -44,6 +43,7 @@ import { fmtK } from "@/lib/util/fmt";
 import { commandText, createImeGuard, cycleIndex, filterCommands, slashQuery } from "@/lib/util/slash";
 import { ComposerCard, ComposerTextarea, ErrorBar, RunBar, SlashPanel, UsageRing } from "./composerKit";
 import { ModelMenu, SkillsMenu, ThinkMenu } from "./pickers";
+import { QueueModal } from "./QueueModal";
 import type { ComposerCtl } from "./useComposer";
 
 // 模型/思考档下拉的形态与逻辑收口在 ./pickers(新建任务页共用同一组件);
@@ -293,6 +293,8 @@ interface ComposerProps {
   presentation: ComposerPresentation;
   meta: SessionMeta;
   ctl: ComposerCtl;
+  teamOn: boolean;
+  toggleTeamMode: (next: boolean) => void;
   onAfterSend?: () => void;
   focusRequest?: number;
   onFocusRequestHandled?: (request: number) => void;
@@ -303,6 +305,8 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
   presentation,
   meta,
   ctl,
+  teamOn,
+  toggleTeamMode,
   onAfterSend,
   focusRequest = 0,
   onFocusRequestHandled,
@@ -312,9 +316,9 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
   useImperativeHandle(ref, () => ({ focus: () => taRef.current?.focus() }), []);
   const imeRef = useRef(createImeGuard());
   const [models, setModels] = useState<ModelInfo[]>([]);
-  // 团队模式(按会话):开启后发送任务注入团队编排指令
-  const [teamOn, setTeamOn] = useState(() => readTeamMode(sessionId));
-  useEffect(() => setTeamOn(readTeamMode(sessionId)), [sessionId]);
+  // teamOn 来自 props(LocalComposerHost 管理状态,通过 useComposer 传递给 send)
+  const [queueModalOpen, setQueueModalOpen] = useState(false);
+  const toggleQueueModal = useCallback(() => setQueueModalOpen((o) => !o), []);
 
   // 切会话后焦点落到输入框:sessionId 处理同实例内切换;focusRequest 处理
   // 设置/新建/云端视图切回时的重挂载。请求消费后由 App 清零,避免引擎
@@ -696,11 +700,7 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
               teamOn ? "border-primary/60 bg-primary/10 text-primary" : "badge-outline text-base-content/40 hover:text-base-content/60"
             }`}
             title={t("chat.team.toggleTip")}
-            onClick={() => setTeamOn((on) => {
-              const next = !on;
-              writeTeamMode(sessionId, next);
-              return next;
-            })}
+            onClick={() => toggleTeamMode(!teamOn)}
           >
             {t("chat.team.mode")}
           </button>
@@ -745,6 +745,20 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
                 : t("chat.usageEmpty")
             }
           />
+          {/* 队列按钮:始终显示,点击打开 QueueModal(可预设任务) */}
+          <button
+            type="button"
+            className={`btn btn-ghost btn-square btn-xs shrink-0 ${ctl.queue.length > 0 ? "text-primary" : "text-base-content/50"}`}
+            title={t("chat.queue.modalTitle")}
+            onClick={toggleQueueModal}
+          >
+            <IconList size={15} stroke={1.75} aria-hidden />
+            {ctl.queue.length > 0 && (
+              <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-content">
+                {ctl.queue.length}
+              </span>
+            )}
+          </button>
           <button
             type="button"
             aria-label={t("chat.send")}
@@ -757,6 +771,7 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
           </button>
         </div>
       </ComposerCard>
+      {queueModalOpen && <QueueModal ctl={ctl} onClose={() => setQueueModalOpen(false)} />}
     </div>
   );
 });

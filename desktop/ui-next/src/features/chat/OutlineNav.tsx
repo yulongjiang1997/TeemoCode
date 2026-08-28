@@ -16,7 +16,6 @@ import type { ChatItem } from "@/lib/protocol/types";
 import type { ChatState } from "@/lib/protocol/types";
 import { timelineDeltaOf } from "@/lib/protocol/reduce";
 import { fmtClock } from "@/lib/util/fmt";
-import { readOutlineExpandLimit } from "@/lib/util/prefs";
 
 const MAX_LABEL = 60;
 const MAX_RAIL_DOTS = 12;
@@ -165,22 +164,14 @@ export const OutlineNav = memo(function OutlineNav({
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const panelRef = useRef<HTMLUListElement>(null);
-  // 面板折叠:默认只直接列出最近 N 条提问(prefs outlineExpandLimit,设置页
-  // 可改),更早的收进「显示更多」——长会话几十条全量铺开,滚动条细成一线,
-  // 找当前条目像在大海捞针(2026-08-26 用户报障)。「更多」是单向铺开:
-  // 铺开即说明用户要的就是全量翻找,再收起反而添乱。
-  const [expanded, setExpanded] = useState(false);
-  const limit = readOutlineExpandLimit();
-  const hiddenCount = Math.max(0, entries.length - limit);
-  const panelEntries = expanded ? entries : entries.slice(-limit);
 
   // 默认定位到最底部(最新指令):打开面板即停在最新一条上,而不是当前项的
   // 居中(用户定案 2026-08-14)。只随「打开」滚,打开后自由翻看不打扰。
   useEffect(() => {
     const box = panelRef.current;
-    if (!open || !box || expanded) return;
+    if (!open || !box) return;
     box.scrollTop = box.scrollHeight;
-  }, [open, expanded]);
+  }, [open]);
 
   // 一条提问的会话不值得占一条轨道
   if (entries.length < 2) return null;
@@ -229,7 +220,7 @@ export const OutlineNav = memo(function OutlineNav({
             ref={panelRef}
             className="dropdown-content menu max-h-full w-64 flex-nowrap [&_li]:flex-nowrap overflow-x-hidden overflow-y-auto rounded-box bg-base-100 p-2 shadow-sm"
           >
-            {panelEntries.map((e) => (
+            {entries.map((e) => (
               <li key={e.seq}>
                 <button
                   type="button"
@@ -253,13 +244,6 @@ export const OutlineNav = memo(function OutlineNav({
                 </button>
               </li>
             ))}
-            {!expanded && hiddenCount > 0 && (
-              <li>
-                <button type="button" className="text-base-content/50" onClick={() => setExpanded(true)}>
-                  {t("chat.outline.showMore", { count: hiddenCount })}
-                </button>
-              </li>
-            )}
           </ul>
         )}
       </div>

@@ -145,11 +145,7 @@ describe("长对话点列压缩", () => {
     );
 
     fireEvent.mouseEnter(container.querySelector("[data-outline-dot]")!);
-    // 面板折叠:只直接列出最近 2 条 + 一条「显示更早」入口
-    expect(container.querySelectorAll(".dropdown-content li")).toHaveLength(3);
-    expect(screen.getByText(/显示更早 · 38 条提问/)).toBeTruthy();
-    fireEvent.click(screen.getByText(/显示更早/));
-    // 铺开后全量可见
+    // 面板直接显示全部条目(无折叠)
     expect(container.querySelectorAll(".dropdown-content li")).toHaveLength(40);
   });
 

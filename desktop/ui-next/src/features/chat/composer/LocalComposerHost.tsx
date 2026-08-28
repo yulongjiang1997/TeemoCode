@@ -1,9 +1,10 @@
 // 本地 composer 的状态边界。草稿、附件、上传和错误都只在这个子树更新；
 // ChatView/Timeline 不再因为 textarea 每个按键重渲。
-import { forwardRef, useImperativeHandle, useMemo, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 
 import type { SessionMeta } from "@/lib/ipc/sessions";
 import type { ChatState } from "@/lib/protocol/types";
+import { readTeamMode, writeTeamMode } from "@/lib/util/prefs";
 import { Composer, composerPresentationOf, type ComposerInputHandle } from "./Composer";
 import { useComposer } from "./useComposer";
 import type { QueueItem } from "./useComposer";
@@ -30,7 +31,11 @@ export const LocalComposerHost = forwardRef<
   { sessionId, state, historyLoaded, meta, onAfterSend, focusRequest, onFocusRequestHandled },
   ref,
 ) {
-  const ctl = useComposer(sessionId, { running: state.running, historyLoaded, lastSeq: state.lastSeq, turnEnded: state.turnEnded });
+  // 团队模式(按会话):开启后发送任务注入团队编排指令
+  const [teamOn, setTeamOn] = useState(() => readTeamMode(sessionId));
+  useEffect(() => setTeamOn(readTeamMode(sessionId)), [sessionId]);
+  const enabledSkills = meta.skills ?? [];
+  const ctl = useComposer(sessionId, { running: state.running, historyLoaded, lastSeq: state.lastSeq, turnEnded: state.turnEnded, teamOn, enabledSkills });
   const inputRef = useRef<ComposerInputHandle>(null);
   const presentation = useMemo(() => composerPresentationOf(state), [state]);
 
@@ -47,6 +52,11 @@ export const LocalComposerHost = forwardRef<
     [ctl.addFiles, ctl.notifyError, ctl.restorePersisted],
   );
 
+  const toggleTeamMode = (next: boolean) => {
+    setTeamOn(next);
+    writeTeamMode(sessionId, next);
+  };
+
   return (
     <Composer
       ref={inputRef}
@@ -54,6 +64,8 @@ export const LocalComposerHost = forwardRef<
       presentation={presentation}
       meta={meta}
       ctl={ctl}
+      teamOn={teamOn}
+      toggleTeamMode={toggleTeamMode}
       onAfterSend={onAfterSend}
       focusRequest={focusRequest}
       onFocusRequestHandled={onFocusRequestHandled}
