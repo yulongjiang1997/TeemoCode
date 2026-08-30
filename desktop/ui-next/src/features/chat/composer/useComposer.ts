@@ -324,8 +324,10 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
       flushBlockedRef.current = false;
       clearRetry();
       // 指令连同附件一起入队(附件行随指令拼装正文,见 flush effect);
+      // 入队存**含团队前缀的 finalText**:补投/留档恢复/日志渲染都以
+      // item.text 为准,前缀不会在排队路径上丢失(直发路径同样用 finalText)。
       // 仅当本轮是"手动直发回合"时附件才走下面的直发路径。
-      const item: QueueItem = { id: newInstrId(), text, atts: [...atts], state: "pending" };
+      const item: QueueItem = { id: newInstrId(), text: finalText, atts: [...atts], state: "pending" };
       setQueue((cur) => [...cur, item]);
       setDraft("");
       setAtts([]);

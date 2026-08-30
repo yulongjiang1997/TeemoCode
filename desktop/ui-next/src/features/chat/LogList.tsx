@@ -32,14 +32,10 @@ import { PermCard } from "./cards/PermCard";
 import { statusDot } from "./cards/statusDot";
 import { ToolCard } from "./cards/ToolCard";
 import { MessageTime } from "./MessageTime";
+// 团队编排块剥离与生成同源(teamPreamble):标签格式 + 旧版 [团队协调] 兼容
+import { stripTeamPreamble } from "@/lib/ipc/teamPreamble";
 import { useTimelineProjection } from "./timeline/useTimelineProjection";
 import { useTimelineWindow } from "./timeline/useTimelineWindow";
-
-/** 剥掉发送时注入的团队编排块([mc-team]…[/mc-team]),消息气泡只显示原文。 */
-function stripTeamPreamble(text: string): string {
-  const m = text.match(/^\[mc-team\][\s\S]*?\[\/mc-team\]\n*\s*/);
-  return m ? text.slice(m[0].length) : text;
-}
 
 /** 用户气泡:正文 + 附件呈现(旧 UI logView 的信息布局)。附件两个来源互斥:
  * 本地会话走正文附件行约定(uploadUrl 回读工作区,点图看大图/点文件下载),

@@ -227,6 +227,38 @@ export function writeTeamRoles(roles: TeamRole[]): void {
   }
 }
 
+/** 团队工作流步骤(SOP,参考 MetaGPT 的阶段流水线):标题 + 参与角色。 */
+export interface TeamWorkflowStep {
+  id: string;
+  title: string;
+  roleIds: string[];
+}
+
+export function readTeamWorkflow(): TeamWorkflowStep[] {
+  try {
+    const v = JSON.parse(localStorage.getItem("mc.teamWorkflow") ?? "[]");
+    return Array.isArray(v)
+      ? v
+          .filter((s): s is TeamWorkflowStep => Boolean(s && typeof s.title === "string" && Array.isArray(s.roleIds)))
+          .map((s) => ({
+            id: typeof s.id === "string" ? s.id : "",
+            title: s.title,
+            roleIds: s.roleIds.filter((x): x is string => typeof x === "string"),
+          }))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export function writeTeamWorkflow(steps: TeamWorkflowStep[]): void {
+  try {
+    localStorage.setItem("mc.teamWorkflow", JSON.stringify(steps));
+  } catch {
+    // 只丢持久化
+  }
+}
+
 /** 会话的团队模式开关(发送任务时注入团队编排指令)。 */
 export function readTeamMode(sid: string): boolean {
   try {
