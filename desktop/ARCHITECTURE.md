@@ -387,6 +387,44 @@ interactive:true,引擎给持久 Task 工具族)、会话思考档 session/setTh
 (dab1b85,壳精确认领)。固定引擎已删除“同步 Agent 超时后自动转后台”，
 后台执行必须由 `run_in_background:true` 显式声明。
 
+## 模型网关(gateway/,统一大模型调度平台)
+
+壳原生服务(与 browser/ 同级,与引擎零耦合):把若干"模型组"暴露成
+OpenAI Chat Completions 兼容端点 `http://127.0.0.1:{port}/v1`,组内模型
+按权重调度、上游报错自动故障切换。spec/plans 见
+`docs/superpowers/{specs,plans}/2026-08-30-model-gateway*`。
+
+- **组即调度与鉴权边界**:Bearer = 组 Key(tgk-*),每组独立、可重置;
+  `/v1/models` 把启用组列为模型条目(id=组名,context_length=组级上下文)。
+- **配置权威在 config.json 的 `DesktopConfig.gateway`**(enabled/port/groups)。
+  组的增删改走 gateway_* 命令(`update_config_json` 事务),**不进设置页
+  save_config 表单**;`merge_shell_prefs` 以磁盘值保全该字段(同 pet_* 铁律,
+  漏保全 = 设置页一次保存清空全部模型组)。变更命令后必须 `gateway::reload`
+  重建快照/启停监听;save_config 后也 reload(兜用户手编)。
+- **请求期只读内存快照**(RuntimeSnapshot):引用模型库的条目(alias →
+  config.models)在 reload 时解析成连接信息,会员条目凭据注入复用
+  `config::resolve_monkeycode_base_url/api_key`(与引擎物化同一出处);
+  请求路径不碰磁盘。alias 失效(改名/删除)→ 候选恒失败并带原因,不算模型故障。
+- **故障切换纪律**:首字节发出前才允许换模型(任何上游错误/超时都算该候选
+  失败);SSE 头一旦落笔,上游中途出错只能补发一条 SSE error 事件收尾。
+  熔断健康簿:连败 3 开断 30s、半开放行、成功复位(sched.rs)。
+- **协议翻译**(upstream.rs):对外恒 OpenAI 形态;openai 上游原样中继
+  (旁路嗅探 usage),anthropic/openai_responses 上游做请求/响应/SSE 双向
+  翻译。组级共享上下文(max_output 钳制、temperature 缺省、system_prompt
+  前置)在此生效。已知取舍:上游无视 `stream:true` 回 JSON 时按原样中继,
+  不做流式回退翻译。
+- **HTTP 面是手写最小面**(server.rs,browser/mcp.rs 同款):环回单监听、
+  每连接一线程、体上限 32MB、Expect: 100-continue 应答、流式用
+  Connection: close 收尾(不写 Content-Length)。reqwest 客户端**不设**
+  总超时(reqwest 的 `timeout(Duration::ZERO)` 是"立即超时"不是"不限时",
+  长流式生成会被掐断),超时一律由网关按组配置用 tokio timeout 自己施加。
+- **可观测**:最近 100 条请求日志 + 组级计数(会话期内存,gateway_log/
+  gateway_status),响应头 `X-Gateway-Group/Model` 标注实际应答者;
+  gateway_test_group 走真实调度链路(含故障切换)做连通性测试。
+- 新命令七条(gateway_status/log/save_group/delete_group/update_settings/
+  regen_key/test_group)按契约三处登记,UI 分区 features/settings/
+  GatewaySection.tsx(即时生效,不进保存条)。
+
 ## 开发与构建产物
 
 uidist/ 是纯生成物不入库;壳静态页与 webfonts 在 ui-next/public/。

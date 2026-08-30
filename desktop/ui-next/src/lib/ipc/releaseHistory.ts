@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.26",
+    notes: "model gateway: unified LLM scheduling (model groups, OpenAI-compatible endpoint, weighted failover, circuit breaker, shared group context) + group save fix + restored update/sound/import-mc commands",
+  },
+  {
     version: "0.1.25",
     notes: "command warehouse + confirm fix + queue persist + team injection",
   },

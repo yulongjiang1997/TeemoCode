@@ -133,6 +133,11 @@ pub struct DesktopConfig {
     /// 选项。真正的第一道闸门在构建期:没注入上报端点就恒不上报。
     #[serde(default = "default_true")]
     pub telemetry_enabled: bool,
+    /// 模型网关(统一大模型调度平台):模型组/端口/开关。与桌宠偏好同理**不在
+    /// 设置页表单里**(组的增删改走 gateway_* 独立命令),merge_shell_prefs
+    /// 必须以磁盘值保全,否则设置页一次保存就把全部模型组打回空。
+    #[serde(default)]
+    pub gateway: crate::gateway::GatewaySettings,
 }
 
 impl Default for DesktopConfig {
@@ -153,6 +158,7 @@ impl Default for DesktopConfig {
             pet_sprites: json_object(),
             main_window_state: None,
             telemetry_enabled: true,
+            gateway: crate::gateway::GatewaySettings::default(),
         }
     }
 }
@@ -422,6 +428,7 @@ fn merge_shell_prefs(incoming: DesktopConfig, disk: &DesktopConfig) -> DesktopCo
         pet_pos: disk.pet_pos,
         main_window_state: disk.main_window_state,
         telemetry_enabled: disk.telemetry_enabled,
+        gateway: disk.gateway.clone(),
         ..incoming
     }
 }
@@ -478,6 +485,31 @@ fn on_mc_host(url: &str, mc_base_url: &str) -> bool {
         return false;
     };
     a.host_str() == b.host_str() && a.port_or_known_default() == b.port_or_known_default()
+}
+
+/// 会员条目的请求地址(按当前配置现算):设置里显式指定 > 官方云代理子域 >
+/// {服务地址}/v1。**不读 Key 文件里的 base_url 快照**——那是建 Key 当时的
+/// 地址,默认值一改(如官方云从主域挪到 proxy 子域)老机器会一直打旧地址,
+/// 直到下次重新同步。引擎配置物化与模型网关共用,语义必须一致。
+pub(crate) fn resolve_monkeycode_base_url(cfg: &DesktopConfig) -> String {
+    let server = crate::baizhi::Endpoints::resolve(&cfg.mc_base_url).monkeycode;
+    let mut b = crate::baizhi::resolve_mc_llm(&cfg.mc_llm_base_url, &server);
+    let basic = cfg.mc_basic_auth.trim();
+    // Basic Auth 只嵌给 MonkeyCode 主机:模型请求地址指向别的主机时嵌入
+    // 等于把反代凭证泄漏给第三方(host 门与 mc_basic_header 同语义)
+    if !b.is_empty() && !basic.is_empty() && on_mc_host(&b, &cfg.mc_base_url) {
+        b = with_basic_userinfo(&b, basic);
+    }
+    b
+}
+
+/// 会员条目的 API Key(应用配置目录的本机 Key 记录)。Key 明确属于另一套
+/// 服务(传输指纹不匹配)时不注入——切了服务地址就不能继续用旧 Key。
+pub(crate) fn resolve_monkeycode_api_key(cfg_dir: &Path, cfg: &DesktopConfig) -> String {
+    crate::baizhi::stored_ohmyagent_key(cfg_dir)
+        .filter(|key| crate::baizhi::ohmyagent_key_matches_config(key, cfg))
+        .and_then(|v| v.get("api_key").and_then(|s| s.as_str()).map(str::to_string))
+        .unwrap_or_default()
 }
 
 /// 反代 Basic Auth 嵌进 base_url 的 userinfo(https://user:pass@host/…)。
@@ -559,22 +591,10 @@ fn write_ohmyagent_config(
         let get = |k: &str| m.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
         let (name, provider, model) = (get("name"), get("provider"), get("model"));
         // 会员条目的密钥由壳补齐(本机记录缺失时照常物化,请求时报错外显,
-        // 不静默丢条目);配了测试环境反代 Basic Auth 时嵌进 userinfo
-        // (见 with_basic_userinfo)
+        // 不静默丢条目);地址/凭证解析见 resolve_monkeycode_base_url /
+        // resolve_monkeycode_api_key(引擎物化与模型网关共用同一出处)
         let (base_url, api_key) = if is_monkeycode(m) {
-            // 地址按当前配置现算(baizhi::resolve_mc_llm 单一出处):设置里显式
-            // 指定 > 官方云代理子域 > {服务地址}/v1。**不读 Key 文件里的
-            // base_url 快照**——那是建 Key 当时的地址,默认值一改(如官方云
-            // 从主域挪到 proxy 子域)老机器会一直打旧地址,直到下次重新同步
-            let server = crate::baizhi::Endpoints::resolve(&cfg.mc_base_url).monkeycode;
-            let mut b = crate::baizhi::resolve_mc_llm(&cfg.mc_llm_base_url, &server);
-            let basic = cfg.mc_basic_auth.trim();
-            // Basic Auth 只嵌给 MonkeyCode 主机:模型地址指向别的主机时嵌入
-            // 等于把反代凭证泄漏给第三方(host 门与 mc_basic_header 同语义)
-            if !b.is_empty() && !basic.is_empty() && on_mc_host(&b, &cfg.mc_base_url) {
-                b = with_basic_userinfo(&b, basic);
-            }
-            (b, mc_key_field("api_key"))
+            (resolve_monkeycode_base_url(cfg), mc_key_field("api_key"))
         } else {
             (get("base_url"), get("api_key"))
         };

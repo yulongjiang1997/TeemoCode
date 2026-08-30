@@ -16,7 +16,9 @@ mod baizhi;
 mod browser;
 mod config;
 mod driver;
+mod gateway;
 mod git;
+mod import_mc;
 #[cfg(target_os = "windows")]
 mod native_pet;
 mod repo;
@@ -678,6 +680,9 @@ async fn save_config(app: AppHandle, config: DesktopConfig) -> Result<(), String
         // 切换排在其后,失败路径会留下「盘上/引擎是新地址、壳侧云端打旧地址」
         // 的分裂态,且两条自动恢复路径都不会替本命令收这个尾。
         apply_cloud_config(&app, &config);
+        // 网关快照跟随盘上配置(用户手编 config.json 的兜底;表单不含
+        // gateway 字段,正常保存时是 no-op)
+        gateway::reload(&app);
         restart_engine_locked(&app, &config)?;
         Ok(())
     })
@@ -1649,6 +1654,34 @@ fn sound_enabled(app: AppHandle) -> bool {
     app.state::<SoundEnabled>().0.load(Ordering::Relaxed)
 }
 
+/// 导入自定义音效文件:复制到 app_data/sounds/<event>.<ext>,返回路径
+/// (主窗与桌宠经 asset 协议播放)。src 可为 file:// URL 或裸路径。
+/// (0557b70 引入,一次 stash 操作中从 main.rs 丢失致按钮报
+/// "Command import_sound not found";此处原样恢复。)
+#[tauri::command]
+async fn import_sound(app: AppHandle, event: String, src: String) -> Result<String, String> {
+    use std::io::Write;
+    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let dir = data.join("sounds");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    // 源路径可能是 file:// 或裸路径
+    let src_path = src.strip_prefix("file://").unwrap_or(&src);
+    let bytes = std::fs::read(src_path).map_err(|e| format!("读取源文件失败: {e}"))?;
+    if bytes.is_empty() {
+        return Err("文件为空".into());
+    }
+    let ext = std::path::Path::new(src_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("mp3");
+    let name = format!("{event}.{ext}");
+    let dest = dir.join(&name);
+    let mut f = std::fs::File::create(&dest).map_err(|e| e.to_string())?;
+    f.write_all(&bytes).map_err(|e| e.to_string())?;
+    // 返回 asset 协议可用的 URL(main 窗口与桌宠同源)
+    Ok(dest.to_string_lossy().to_string())
+}
+
 /// 设置页切换提示音。与主题一样点一下即生效:不进保存条、不重启引擎。
 #[tauri::command]
 fn set_sound_enabled(app: AppHandle, enabled: bool) {
@@ -1750,6 +1783,7 @@ fn main() {
             pet_native_render,
             sound_enabled,
             set_sound_enabled,
+            import_sound,
             pet_recreate,
             update_check,
             update_download,
@@ -1837,6 +1871,16 @@ fn main() {
             git::relaunch_app,
             git::skills_import_git,
             git::skill_analyze,
+            gateway::gateway_status,
+            gateway::gateway_log,
+            gateway::gateway_save_group,
+            gateway::gateway_delete_group,
+            gateway::gateway_update_settings,
+            gateway::gateway_regen_key,
+            gateway::gateway_test_group,
+            import_mc::import_mc_scan,
+            import_mc::import_mc_scan_dir,
+            import_mc::import_mc_apply,
             driver::usagestats
         ])
         .setup(|app| {
@@ -1862,6 +1906,10 @@ fn main() {
             *app.state::<PetPos>()
                 .0
                 .lock_ok() = cfg.pet_pos;
+
+            // 模型网关(统一大模型调度平台):挂在配置加载之后,按 gateway 配置
+            // 起停监听;失败只记错误外显在设置页,不阻塞应用其余功能。
+            gateway::manage(app.handle());
 
             // 托盘失败只降级(无托盘宿主的桌面环境),不阻塞
             if let Err(e) = setup_tray(app.handle(), cfg.pet_enabled, cfg.sound_enabled) {

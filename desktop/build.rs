@@ -71,6 +71,22 @@ fn main() {
                 "skills_save",
                 "skills_delete",
                 "skills_set_default",
+                // 模型网关(gateway/mod.rs:统一大模型调度平台)
+                "gateway_status",
+                "gateway_log",
+                "gateway_save_group",
+                "gateway_delete_group",
+                "gateway_update_settings",
+                "gateway_regen_key",
+                "gateway_test_group",
+                // update_download 曾漏登记:UI 点「更新」报 Command not
+                // found(main.rs:930 的历史注释即此事故),契约脚本恢复后补齐
+                "update_download",
+                // 原版任务一键导入(import_mc.rs)与音效文件导入
+                "import_mc_scan",
+                "import_mc_scan_dir",
+                "import_mc_apply",
+                "import_sound",
                 "upload_begin",
                 "upload_chunk",
                 "upload_finish",

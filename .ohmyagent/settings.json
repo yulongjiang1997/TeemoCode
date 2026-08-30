@@ -3,6 +3,10 @@
     {
       "tool": "Grep",
       "decision": "allow"
+    },
+    {
+      "tool": "Bash(cd *)",
+      "decision": "allow"
     }
   ]
 }
