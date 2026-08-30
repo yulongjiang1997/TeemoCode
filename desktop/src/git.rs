@@ -368,6 +368,8 @@ pub async fn skill_analyze(
         .timeout(std::time::Duration::from_secs(120))
         .build()
         .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+    // Responses API(openai_responses)的请求/响应结构都不同:
+    // 请求 POST {base}/responses {model, input};回复 output_text 串联。
     let (url, req) = match provider.as_str() {
         "anthropic" => (
             format!("{base}/v1/messages"),
@@ -379,6 +381,16 @@ pub async fn skill_analyze(
                     "model": model,
                     "max_tokens": 1024,
                     "messages": [{ "role": "user", "content": prompt }]
+                })),
+        ),
+        "openai_responses" => (
+            format!("{base}/responses"),
+            client
+                .post(format!("{base}/responses"))
+                .bearer_auth(&key)
+                .json(&serde_json::json!({
+                    "model": model,
+                    "input": prompt,
                 })),
         ),
         _ => (
@@ -399,17 +411,31 @@ pub async fn skill_analyze(
     let body: serde_json::Value = resp.json().await.map_err(|_| format!("响应不是有效 JSON (HTTP {status})"))?;
     if !status.is_success() {
         let msg = body.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()).unwrap_or("");
-        return Err(format!("HTTP {status}{}", if msg.is_empty() { String::new() } else { format!(": {msg}") }));
+        return Err(format!("HTTP {status} @ {url}{}", if msg.is_empty() { String::new() } else { format!(": {msg}") }));
     }
-    // 提取回复文本(openai: choices[0].message.content;anthropic: content[0].text)
+    // 提取回复文本(openai: choices[0].message.content;anthropic: content[0].text;
+    // responses: output_text 或 output[].content[].text)
     let text = body
         .pointer("/choices/0/message/content")
         .and_then(|v| v.as_str())
+        .or_else(|| body.get("output_text").and_then(|v| v.as_str()))
         .or_else(|| {
             body.get("content")
                 .and_then(|c| c.get(0))
                 .and_then(|c| c.get("text"))
                 .and_then(|v| v.as_str())
+        })
+        .or_else(|| {
+            // responses API: output[] 里 type=message 的 content[] 里 type=output_text 的 text
+            body.get("output")
+                .and_then(|o| o.as_array())
+                .and_then(|arr| {
+                    arr.iter()
+                        .filter_map(|step| step.get("content").and_then(|c| c.as_array()))
+                        .flatten()
+                        .filter_map(|part| part.get("text").and_then(|v| v.as_str()))
+                        .next()
+                })
         })
         .unwrap_or("")
         .to_string();
