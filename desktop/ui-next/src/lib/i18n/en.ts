@@ -360,6 +360,7 @@ export const en: Record<MessageKey, string> = {
   "settings.skills.import.fSummary": "Summary:",
   "settings.skills.import.fDetails": "Details:",
   "settings.skills.import.fScenarios": "Scenarios:",
+  "settings.skills.import.fKeywords": "Keywords:",
   "settings.skills.import.importN": "Import selected ({n})",
   "settings.skills.import.done": "Imported {n} skills",
   "settings.skills.import.close": "Close",

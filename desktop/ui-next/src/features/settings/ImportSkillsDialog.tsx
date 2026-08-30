@@ -93,23 +93,29 @@ export function ImportSkillsDialog({ onClose, onImported, existingNames }: Impor
       setItems(analyzed);
       if (useModel && curModel) {
         setPhase("analyzing");
-        // 逐个解析(串行避免网关限流);失败不阻断,回退原始 description
-        for (const item of analyzed) {
-          try {
-            const out = await skillAnalyze({
-              provider: curModel.provider,
-              baseUrl: curModel.base_url,
-              apiKey: curModel.api_key,
-              model: curModel.model,
-              content: item.raw.content.slice(0, 8000), // 截断防爆 token
-            });
-            item.summary = extractJson(out);
-            if (!item.summary) item.analyzeError = "模型输出无法解析为 JSON";
-          } catch (e) {
-            item.analyzeError = e instanceof Error ? e.message : String(e);
+        // 并行解析(并发 3 限流);失败不阻断,回退原始 description
+        const queue = [...analyzed];
+        const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
+          for (;;) {
+            const item = queue.shift();
+            if (!item) return;
+            try {
+              const out = await skillAnalyze({
+                provider: curModel.provider,
+                baseUrl: curModel.base_url,
+                apiKey: curModel.api_key,
+                model: curModel.model,
+                content: item.raw.content.slice(0, 8000), // 截断防爆 token
+              });
+              item.summary = extractJson(out);
+              if (!item.summary) item.analyzeError = "模型输出无法解析为 JSON";
+            } catch (e) {
+              item.analyzeError = e instanceof Error ? e.message : String(e);
+            }
+            setItems([...analyzed]);
           }
-          setItems([...analyzed]);
-        }
+        });
+        await Promise.all(workers);
       }
       setPhase("list");
       // 默认全选未冲突的
@@ -120,6 +126,24 @@ export function ImportSkillsDialog({ onClose, onImported, existingNames }: Impor
     }
   };
 
+  /** 把解析摘要合并进 SKILL.md frontmatter:导入后的技能在详情里能看到
+   *  模型解析出的作用/关键词/场景,而不只是仓库原始的 description。
+   *  已有 frontmatter 时增补字段,没有时新建一段。 */
+  const mergeSummary = (raw: GitSkillRaw, s: NonNullable<AnalyzedSkill["summary"]>): string => {
+    const metaLines = [
+      `x-summary: ${s.summary.replace(/\n/g, " ")}`,
+      ...(s.keywords.length > 0 ? [`x-keywords: ${s.keywords.join(", ")}`] : []),
+      ...(s.scenarios.length > 0 ? [`x-scenarios: ${s.scenarios.join("; ")}`] : []),
+    ];
+    const fm = raw.content.match(/^---\n([\s\S]*?)\n---\n?/);
+    if (fm) {
+      // 已有 frontmatter:在其末尾追加 meta 段
+      const head = `---\n${fm[1]}\n`;
+      return `${head}${metaLines.join("\n")}\n---\n${raw.content.slice(fm[0].length)}`;
+    }
+    return `---\n${metaLines.join("\n")}\n---\n\n${raw.content}`;
+  };
+
   const doImport = async () => {
     const chosen = items.filter((i) => checked.has(i.raw.dir_name));
     if (chosen.length === 0) return;
@@ -128,7 +152,9 @@ export function ImportSkillsDialog({ onClose, onImported, existingNames }: Impor
     const okNames: string[] = [];
     for (const item of chosen) {
       try {
-        await skillsSave(item.raw.dir_name, item.raw.content);
+        // 有解析摘要时合并进 frontmatter,否则原样导入
+        const content = item.summary ? mergeSummary(item.raw, item.summary) : item.raw.content;
+        await skillsSave(item.raw.dir_name, content);
         okNames.push(item.raw.dir_name);
       } catch (e) {
         setError(`${item.raw.dir_name}: ${e instanceof Error ? e.message : String(e)}`);

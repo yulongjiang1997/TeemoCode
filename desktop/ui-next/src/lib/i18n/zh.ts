@@ -370,6 +370,7 @@ export const zh = {
   "settings.skills.import.fSummary": "作用:",
   "settings.skills.import.fDetails": "说明:",
   "settings.skills.import.fScenarios": "适用场景:",
+  "settings.skills.import.fKeywords": "关键词:",
   "settings.skills.import.importN": "导入所选({n})",
   "settings.skills.import.done": "已成功导入 {n} 个技能",
   "settings.skills.import.close": "关闭",

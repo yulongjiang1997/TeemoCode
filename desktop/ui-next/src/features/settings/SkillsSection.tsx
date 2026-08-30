@@ -15,6 +15,22 @@ function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** 从 SKILL.md frontmatter 提取导入时写入的解析摘要(x-summary/x-keywords/
+ * x-scenarios);没有这些字段(内置/手建技能)返回 null,展开视图不渲染摘要块。 */
+function parseSkillMeta(content: string): { summary: string; keywords: string[]; scenarios: string[] } | null {
+  const fmBody = content.match(/^---\n([\s\S]*?)\n---\n?/)?.[1];
+  if (!fmBody) return null;
+  const get = (key: string): string => {
+    const m = fmBody.match(new RegExp(`^${key}:\\s*(.*)$`, "m"));
+    return m?.[1] ? m[1].trim() : "";
+  };
+  const summary = get("x-summary");
+  const keywords = get("x-keywords").split(",").map((k) => k.trim()).filter(Boolean);
+  const scenarios = get("x-scenarios").split(/[;;]/).map((k) => k.trim()).filter(Boolean);
+  if (!summary && keywords.length === 0 && scenarios.length === 0) return null;
+  return { summary, keywords, scenarios };
+}
+
 /** 新建技能的 SKILL.md 起稿(frontmatter 缺省口径与壳/引擎一致:
  * description 单行;name 不写,跟随目录名,避免两处名字打架)。 */
 function draftContent(t: (k: "settings.skills.tplDesc" | "settings.skills.tplBody") => string): string {
@@ -295,6 +311,23 @@ export function SkillsSection() {
                         {!isUser && (
                           <p className="mb-2 text-2xs text-base-content/50">{t("settings.skills.readonlyHint")}</p>
                         )}
+                        {/* 解析摘要(导入时大模型生成,存于 frontmatter x-* 字段) */}
+                        {(() => {
+                          const meta = parseSkillMeta(s.content);
+                          if (!meta) return null;
+                          return (
+                            <div className="mb-2 flex flex-col gap-1 rounded-box bg-base-200/50 p-2.5 text-xs">
+                              {meta.summary && <p><span className="font-semibold">{t("settings.skills.import.fSummary")}</span> {meta.summary}</p>}
+                              {meta.keywords.length > 0 && (
+                                <div className="flex flex-wrap items-center gap-1">
+                                  <span className="font-semibold">{t("settings.skills.import.fKeywords")}</span>
+                                  {meta.keywords.map((k) => <span key={k} className="badge badge-ghost badge-xs">{k}</span>)}
+                                </div>
+                              )}
+                              {meta.scenarios.length > 0 && <p><span className="font-semibold">{t("settings.skills.import.fScenarios")}</span> {meta.scenarios.join("、")}</p>}
+                            </div>
+                          );
+                        })()}
                         <pre className="max-h-64 overflow-auto rounded-box bg-base-200/60 p-3 font-mono text-xs whitespace-pre-wrap">
                           {s.content}
                         </pre>
