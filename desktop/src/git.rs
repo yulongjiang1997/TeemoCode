@@ -370,11 +370,15 @@ pub async fn skill_analyze(
         .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
     // Responses API(openai_responses)的请求/响应结构都不同:
     // 请求 POST {base}/responses {model, input};回复 output_text 串联。
+    // base 已带版本段(如智谱 /api/coding/paas/v4)时不再补 /v1,防 /v4/v1/... 404。
+let seg = base.rsplit('/').next().unwrap_or("");
+let versioned = seg.len() >= 2 && seg.starts_with('v') && seg[1..].bytes().all(|c| c.is_ascii_digit());
+    let vpath = |p: &str| if versioned { format!("{base}/{p}") } else { format!("{base}/v1/{p}") };
     let (url, req) = match provider.as_str() {
         "anthropic" => (
-            format!("{base}/v1/messages"),
+            vpath("messages"),
             client
-                .post(format!("{base}/v1/messages"))
+                .post(vpath("messages"))
                 .header("x-api-key", &key)
                 .header("anthropic-version", "2023-06-01")
                 .json(&serde_json::json!({
@@ -384,9 +388,9 @@ pub async fn skill_analyze(
                 })),
         ),
         "openai_responses" => (
-            format!("{base}/responses"),
+            vpath("responses"),
             client
-                .post(format!("{base}/responses"))
+                .post(vpath("responses"))
                 .bearer_auth(&key)
                 .json(&serde_json::json!({
                     "model": model,
@@ -394,9 +398,9 @@ pub async fn skill_analyze(
                 })),
         ),
         _ => (
-            format!("{base}/v1/chat/completions"),
+            vpath("chat/completions"),
             client
-                .post(format!("{base}/v1/chat/completions"))
+                .post(vpath("chat/completions"))
                 .bearer_auth(&key)
                 .json(&serde_json::json!({
                     "model": model,

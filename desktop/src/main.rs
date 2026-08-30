@@ -548,18 +548,22 @@ async fn models_fetch(provider: String, base_url: String, api_key: String) -> Re
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+    // base 已带版本段(如智谱 /api/coding/paas/v4)时不再补 /v1,防 /v4/v1/... 404
+    let seg = base.rsplit('/').next().unwrap_or("");
+    let versioned = seg.len() >= 2 && seg.starts_with('v') && seg[1..].bytes().all(|c| c.is_ascii_digit());
+    let models_url = if versioned { format!("{base}/models") } else { format!("{base}/v1/models") };
     let (url, req) = match provider.as_str() {
         "anthropic" => (
-            format!("{base}/v1/models"),
+            models_url.clone(),
             client
-                .get(format!("{base}/v1/models"))
+                .get(models_url.clone())
                 .header("x-api-key", &key)
                 .header("anthropic-version", "2023-06-01"),
         ),
         // openai 与 openai_responses 同一 models 端点
         _ => (
-            format!("{base}/v1/models"),
-            client.get(format!("{base}/v1/models")).bearer_auth(&key),
+            models_url.clone(),
+            client.get(models_url).bearer_auth(&key),
         ),
     };
     let resp = req.send().await.map_err(|e| format!("请求失败: {e}"))?;
@@ -614,11 +618,15 @@ async fn model_test(provider: String, base_url: String, api_key: String, model: 
         .build()
         .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
     let started = std::time::Instant::now();
+    // base 已带版本段(如智谱 /api/coding/paas/v4)时不再补 /v1,防 /v4/v1/... 404
+    let seg = base.rsplit('/').next().unwrap_or("");
+    let versioned = seg.len() >= 2 && seg.starts_with('v') && seg[1..].bytes().all(|c| c.is_ascii_digit());
+    let vpath = |p: &str| if versioned { format!("{base}/{p}") } else { format!("{base}/v1/{p}") };
     let (url, req) = match provider.as_str() {
         "anthropic" => (
-            format!("{base}/v1/messages"),
+            vpath("messages"),
             client
-                .post(format!("{base}/v1/messages"))
+                .post(vpath("messages"))
                 .header("x-api-key", &key)
                 .header("anthropic-version", "2023-06-01")
                 .json(&serde_json::json!({
@@ -628,9 +636,9 @@ async fn model_test(provider: String, base_url: String, api_key: String, model: 
                 })),
         ),
         _ => (
-            format!("{base}/v1/chat/completions"),
+            vpath("chat/completions"),
             client
-                .post(format!("{base}/v1/chat/completions"))
+                .post(vpath("chat/completions"))
                 .bearer_auth(&key)
                 .json(&serde_json::json!({
                     "model": model,
