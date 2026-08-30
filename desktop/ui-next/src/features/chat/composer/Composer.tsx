@@ -296,6 +296,8 @@ interface ComposerProps {
   ctl: ComposerCtl;
   teamOn: boolean;
   toggleTeamMode: (next: boolean) => void;
+  planOn: boolean;
+  togglePlanMode: (next: boolean) => void;
   onAfterSend?: () => void;
   focusRequest?: number;
   onFocusRequestHandled?: (request: number) => void;
@@ -308,6 +310,8 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
   ctl,
   teamOn,
   toggleTeamMode,
+  planOn,
+  togglePlanMode,
   onAfterSend,
   focusRequest = 0,
   onFocusRequestHandled,
@@ -705,6 +709,18 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
             disabled={presentation.running}
             title={presentation.running ? t("chat.switchWhileRunning") : t("chat.model.tip")}
           />
+
+          {/* 计划模式开关(对标 ZCode Plan Mode):本轮只调研与出计划,等确认再动手 */}
+          <button
+            type="button"
+            className={`badge badge-sm shrink-0 cursor-pointer transition-colors ${
+              planOn ? "border-secondary/60 bg-secondary/10 text-secondary" : "badge-outline text-base-content/40 hover:text-base-content/60"
+            }`}
+            title={t("chat.plan.toggleTip")}
+            onClick={() => togglePlanMode(!planOn)}
+          >
+            {t("chat.plan.mode")}
+          </button>
 
           {/* 团队模式开关:开启后发送任务注入团队编排指令(协调者分派成员) */}
           <button

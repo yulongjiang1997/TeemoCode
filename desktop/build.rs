@@ -79,6 +79,9 @@ fn main() {
                 "gateway_update_settings",
                 "gateway_regen_key",
                 "gateway_test_group",
+                // 工作区记忆(memory.rs:.monkeycode/MEMORY.md 面板)
+                "memory_read",
+                "memory_write",
                 // update_download 曾漏登记:UI 点「更新」报 Command not
                 // found(main.rs:930 的历史注释即此事故),契约脚本恢复后补齐
                 "update_download",

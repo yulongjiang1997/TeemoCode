@@ -276,6 +276,24 @@ export function writeTeamMode(sid: string, on: boolean): void {
   }
 }
 
+/** 会话的计划模式开关(Plan Mode,对标 ZCode):发送注入 [mc-plan] 前缀,
+ * 本轮只调研与产出计划、不动手改。 */
+export function readPlanMode(sid: string): boolean {
+  try {
+    return localStorage.getItem(`mc.planMode.${sid}`) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function writePlanMode(sid: string, on: boolean): void {
+  try {
+    localStorage.setItem(`mc.planMode.${sid}`, on ? "1" : "0");
+  } catch {
+    // 只丢持久化
+  }
+}
+
 /** 已从本地删除的同步模型名(下次同步跳过,不重新拉回)。 */
 export function readSyncedExcluded(): string[] {
   try {

@@ -66,6 +66,8 @@
             "allow-import-sound",
             "allow-import-task-data",
             "allow-list-wsl-distros",
+            "allow-memory-read",
+            "allow-memory-write",
             "allow-mc-checkin",
             "allow-mc-disconnect",
             "allow-mc-file-download",

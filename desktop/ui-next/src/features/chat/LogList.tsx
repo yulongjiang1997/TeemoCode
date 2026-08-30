@@ -32,8 +32,8 @@ import { PermCard } from "./cards/PermCard";
 import { statusDot } from "./cards/statusDot";
 import { ToolCard } from "./cards/ToolCard";
 import { MessageTime } from "./MessageTime";
-// 团队编排块剥离与生成同源(teamPreamble):标签格式 + 旧版 [团队协调] 兼容
-import { stripTeamPreamble } from "@/lib/ipc/teamPreamble";
+// 注入前缀剥离与生成同源:团队块(teamPreamble)+ 计划块(planMode)组合剥离
+import { stripInjectedPreambles } from "@/lib/ipc/planMode";
 import { useTimelineProjection } from "./timeline/useTimelineProjection";
 import { useTimelineWindow } from "./timeline/useTimelineWindow";
 
@@ -55,7 +55,7 @@ function UserBubble({
   const [zoomUrl, setZoomUrl] = useState<string | null>(null); // 云端图:直链
   const { body, images, files } = uploadUrl
     ? splitAttachments(item.text)
-    : { body: stripTeamPreamble(item.text), images: [] as string[], files: [] as string[] };
+    : { body: stripInjectedPreambles(item.text), images: [] as string[], files: [] as string[] };
   // 归约层对缺名附件留空串(不产成品文案),展示名在这儿兜底
   const attName = (a: { filename: string }) => a.filename || t("common.unnamedFile");
   const atts = item.attachments ?? [];

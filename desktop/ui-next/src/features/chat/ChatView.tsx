@@ -41,6 +41,7 @@ import { createImeGuard } from "@/lib/util/slash";
 import { useEscLayer } from "@/lib/util/escLayer";
 import { useDismiss } from "@/lib/util/useDismiss";
 import { LocalComposerHost, type LocalComposerHandle } from "./composer/LocalComposerHost";
+import { MemoryDialog } from "./MemoryDialog";
 import { LogList, type LogListHandle } from "./LogList";
 import { OutlineNav, outlineEntriesOf } from "./OutlineNav";
 import { TaskPanel } from "./TaskPanel";
@@ -720,6 +721,8 @@ export function ChatView({
   // onDeleted 通知 App)。 ====
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // 工作区记忆面板(引擎 .monkeycode/MEMORY.md 的查看/编辑入口)
+  const [memoryOpen, setMemoryOpen] = useState(false);
   const menuBoxRef = useRef<HTMLDivElement | null>(null);
   const closeMenu = () => {
     setMenuOpen(false);
@@ -1101,6 +1104,20 @@ export function ChatView({
           </button>
           {menuOpen && (
             <ul role="menu" aria-label={t("chat.menu.label")} className="dropdown-content menu z-40 w-44 flex-nowrap [&_li]:flex-nowrap rounded-box bg-base-100 p-2 shadow-sm">
+              {(meta.kind ?? "local") === "local" && (
+                <li role="none">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      closeMenu();
+                      setMemoryOpen(true);
+                    }}
+                  >
+                    {t("chat.memory.menu")}
+                  </button>
+                </li>
+              )}
               <li role="none">
                 <button
                   type="button"
@@ -1161,6 +1178,7 @@ export function ChatView({
           )}
         </div>
       </header>
+      {memoryOpen && <MemoryDialog workdir={meta.workdir} onClose={() => setMemoryOpen(false)} />}
 
       {/* 布局规范:header 只放身份与动作;会话连接状态是内容级信息,
           以内嵌条挂在 header 之下,恢复即消。形态 = 「header 的延长线」:

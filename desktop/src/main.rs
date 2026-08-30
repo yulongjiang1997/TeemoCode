@@ -18,6 +18,7 @@ mod config;
 mod driver;
 mod gateway;
 mod git;
+mod memory;
 mod import_mc;
 #[cfg(target_os = "windows")]
 mod native_pet;
@@ -1878,6 +1879,8 @@ fn main() {
             gateway::gateway_update_settings,
             gateway::gateway_regen_key,
             gateway::gateway_test_group,
+            memory::memory_read,
+            memory::memory_write,
             import_mc::import_mc_scan,
             import_mc::import_mc_scan_dir,
             import_mc::import_mc_apply,

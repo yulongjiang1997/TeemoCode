@@ -4,7 +4,7 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState }
 
 import type { SessionMeta } from "@/lib/ipc/sessions";
 import type { ChatState } from "@/lib/protocol/types";
-import { readTeamMode, writeTeamMode } from "@/lib/util/prefs";
+import { readPlanMode, readTeamMode, writePlanMode, writeTeamMode } from "@/lib/util/prefs";
 import { Composer, composerPresentationOf, type ComposerInputHandle } from "./Composer";
 import { useComposer } from "./useComposer";
 import type { QueueItem } from "./useComposer";
@@ -34,8 +34,11 @@ export const LocalComposerHost = forwardRef<
   // 团队模式(按会话):开启后发送任务注入团队编排指令
   const [teamOn, setTeamOn] = useState(() => readTeamMode(sessionId));
   useEffect(() => setTeamOn(readTeamMode(sessionId)), [sessionId]);
+  // 计划模式(按会话,对标 ZCode Plan Mode):注入 [mc-plan] 前缀,本轮只调研与出计划
+  const [planOn, setPlanOn] = useState(() => readPlanMode(sessionId));
+  useEffect(() => setPlanOn(readPlanMode(sessionId)), [sessionId]);
   const enabledSkills = meta.skills ?? [];
-  const ctl = useComposer(sessionId, { running: state.running, historyLoaded, lastSeq: state.lastSeq, turnEnded: state.turnEnded, teamOn, enabledSkills });
+  const ctl = useComposer(sessionId, { running: state.running, historyLoaded, lastSeq: state.lastSeq, turnEnded: state.turnEnded, teamOn, planOn, enabledSkills });
   const inputRef = useRef<ComposerInputHandle>(null);
   const presentation = useMemo(() => composerPresentationOf(state), [state]);
 
@@ -56,6 +59,10 @@ export const LocalComposerHost = forwardRef<
     setTeamOn(next);
     writeTeamMode(sessionId, next);
   };
+  const togglePlanMode = (next: boolean) => {
+    setPlanOn(next);
+    writePlanMode(sessionId, next);
+  };
 
   return (
     <Composer
@@ -66,6 +73,8 @@ export const LocalComposerHost = forwardRef<
       ctl={ctl}
       teamOn={teamOn}
       toggleTeamMode={toggleTeamMode}
+      planOn={planOn}
+      togglePlanMode={togglePlanMode}
       onAfterSend={onAfterSend}
       focusRequest={focusRequest}
       onFocusRequestHandled={onFocusRequestHandled}

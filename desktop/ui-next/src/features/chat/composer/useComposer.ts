@@ -28,6 +28,7 @@ import {
 } from "@/lib/ipc/uploads";
 import { b64encode } from "@/lib/protocol/codec";
 import { bindActiveComposer, stashGet, stashSet } from "./stash";
+import { buildPlanPreamble } from "@/lib/ipc/planMode";
 import { buildTeamPreamble } from "@/lib/ipc/teamPreamble";
 import { readComposerQueue, writeComposerQueue, type QueueItem } from "@/lib/util/prefs";
 
@@ -124,12 +125,14 @@ export interface ComposerFeed {
   turnEnded: boolean;
   /** 团队模式开关(会话级)。开启时发送消息前注入 [mc-team] 编排指令。 */
   teamOn: boolean;
+  /** 计划模式开关(会话级)。开启时发送消息前注入 [mc-plan] 前缀(只调研出计划)。 */
+  planOn?: boolean;
   /** 当前会话启用的技能名列表(团队编排时取交集生成技能提示)。 */
   enabledSkills: string[];
 }
 
 export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl {
-  const { running, historyLoaded, lastSeq, turnEnded, teamOn, enabledSkills } = feed;
+  const { running, historyLoaded, lastSeq, turnEnded, teamOn, planOn, enabledSkills } = feed;
   const [draft, setDraft] = useState("");
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [paused, setPaused] = useState(false);
@@ -293,11 +296,12 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
   const send = useCallback((): boolean => {
     const text = [draft.trim(), ...atts.map(attLine)].filter(Boolean).join("\n");
     if (!text) return false;
-    // 团队模式:注入编排指令前缀([mc-team]...[/mc-team])
-    // 引擎识别后按角色分派任务;LogList 中 stripTeamPreamble 会在渲染时剥离
-    // 这个块,用户看到的仍是原始消息。
+    // 注入前缀(计划在外层,团队其次,用户原文最后):渲染层
+    // stripInjectedPreambles 会全部剥掉,用户看到的仍是原始消息。
+    // 入队项存最终文本,补投/留档恢复路径不丢前缀。
+    const planPreamble = planOn ? buildPlanPreamble() : "";
     const teamPreamble = teamOn ? buildTeamPreamble(enabledSkills) : "";
-    const finalText = teamPreamble ? teamPreamble + text : text;
+    const finalText = planPreamble + teamPreamble + text;
     // /compact 是控制指令不是消息:直达壳的 session_call,不得进排队槽
     // (排队会在轮后把「/compact」当普通文本发给模型)。忙时外显错误并留
     // 住草稿;接受后不乐观落帧——压缩生命周期由壳外显(task_started +
