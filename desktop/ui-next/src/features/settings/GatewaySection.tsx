@@ -205,8 +205,17 @@ export function GatewaySection() {
       );
   };
 
+  // 重置 Key 两段确认(Tauri 下 window.confirm 是 dialog 插件命令,未放行
+  // 会被 ACL 拒 → unhandledrejection;与删除按钮同款布防模式)
+  const [confirmingRegen, setConfirmingRegen] = useState<string | null>(null);
   const regenKey = (g: ModelGroup) => {
-    if (!window.confirm(t("settings.gateway.group.regenConfirm"))) return;
+    if (confirmingRegen !== g.id) {
+      setConfirmingRegen(g.id);
+      if (confirmTimer.current) clearTimeout(confirmTimer.current);
+      confirmTimer.current = setTimeout(() => setConfirmingRegen(null), 4000);
+      return;
+    }
+    setConfirmingRegen(null);
     run(() => gatewayRegenKey(g.id));
   };
 
@@ -689,9 +698,15 @@ export function GatewaySection() {
                       >
                         <IconCopy size={12} stroke={1.75} aria-hidden />
                       </button>
-                      <button type="button" className="btn btn-ghost btn-xs" disabled={busy} onClick={() => regenKey(g)}>
+                      <button
+                        type="button"
+                        className={`btn btn-ghost btn-xs ${confirmingRegen === g.id ? "text-error" : "text-base-content/60"}`}
+                        disabled={busy}
+                        onClick={() => regenKey(g)}
+                        onBlur={() => setConfirmingRegen(null)}
+                      >
                         <IconRefresh size={12} stroke={1.75} aria-hidden />
-                        {t("settings.gateway.group.regen")}
+                        {confirmingRegen === g.id ? t("settings.gateway.group.regenArm") : t("settings.gateway.group.regen")}
                       </button>
                     </div>
                     <p className="text-2xs text-base-content/40">{t("settings.gateway.group.keyHint")}</p>

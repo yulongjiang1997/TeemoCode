@@ -131,15 +131,26 @@ export function TeamSection() {
   };
 
   // ---- 预设 / 导入导出 ----
+  // 覆盖确认走应用内确认条(Tauri 里 window.confirm 是 dialog 插件命令,
+  // 未在 capability 放行会被 ACL 拒掉 → unhandledrejection 启动异常横幅)
+  const [pendingPreset, setPendingPreset] = useState<string | null>(null);
   const applyPreset = (presetId: string) => {
     const preset = TEAM_PRESETS.find((p) => p.id === presetId);
     if (!preset) return;
-    if ((roles.length > 0 || workflow.length > 0) && !window.confirm(t("settings.team.presets.confirm"))) return;
     const { roles: nextRoles, workflow: nextWorkflow } = instantiatePreset(preset, () => crypto.randomUUID());
     commit(nextRoles, nextWorkflow);
     resetDraft();
     setEditingId(null);
+    setPendingPreset(null);
     setNotice(t("settings.team.presets.applied", { name: t(`settings.team.preset.${preset.id}`) }));
+  };
+  const requestPreset = (presetId: string) => {
+    if (!TEAM_PRESETS.some((p) => p.id === presetId)) return;
+    if (roles.length === 0 && workflow.length === 0) {
+      applyPreset(presetId); // 空配置无覆盖风险,直接应用
+    } else {
+      setPendingPreset(presetId);
+    }
   };
 
   const exportTeam = () => {
@@ -243,7 +254,7 @@ export function TeamSection() {
             aria-label={t("settings.team.presets.label")}
             value=""
             onChange={(e) => {
-              if (e.target.value) applyPreset(e.target.value);
+              if (e.target.value) requestPreset(e.target.value);
               e.currentTarget.value = "";
             }}
           >
@@ -271,6 +282,17 @@ export function TeamSection() {
             {roles.length}/{TEAM_MAX_ROLES}
           </span>
         </div>
+        {pendingPreset && (
+          <div className="flex flex-wrap items-center gap-2 border-b border-base-300/70 px-3 py-1.5">
+            <span className="text-[11px] text-warning">{t("settings.team.presets.confirm")}</span>
+            <button type="button" className="btn btn-warning btn-xs" onClick={() => applyPreset(pendingPreset)}>
+              {t("settings.team.presets.applyConfirm")}
+            </button>
+            <button type="button" className="btn btn-ghost btn-xs" onClick={() => setPendingPreset(null)}>
+              {t("settings.team.cancel")}
+            </button>
+          </div>
+        )}
         {overLimit && (
           <p className="border-b border-base-300/70 px-3 py-1.5 text-[11px] text-warning">
             {t("settings.team.rolesOverLimit", { max: TEAM_MAX_ROLES })}
