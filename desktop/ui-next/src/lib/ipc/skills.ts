@@ -48,3 +48,41 @@ export function skillsSave(name: string, content: string): Promise<SkillInfo> {
 export function skillsDelete(name: string): Promise<void> {
   return invoke<void>("skills_delete", { name });
 }
+
+// ===== Git 技能库导入 =====
+
+/** 从 git 仓库扫描到的原始技能(未解析) */
+export interface GitSkillRaw {
+  /** 技能所在目录名(默认技能名) */
+  dir_name: string;
+  /** frontmatter name(缺省时同 dir_name) */
+  name: string;
+  /** frontmatter description(缺省时取正文首个非空行) */
+  description: string;
+  /** 相对仓库根的路径 */
+  rel_path: string;
+  /** SKILL.md 原文 */
+  content: string;
+}
+
+/** 克隆 git 仓库到临时目录并扫描 SKILL.md。 */
+export function skillsImportGit(url: string): Promise<{ tmp_dir: string; skills: GitSkillRaw[] }> {
+  return invoke<{ tmp_dir: string; skills: GitSkillRaw[] }>("skills_import_git", { url });
+}
+
+/** 用大模型解析 SKILL.md 内容,返回模型输出(期望 JSON 文本)。 */
+export function skillAnalyze(params: {
+  provider: string;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  content: string;
+}): Promise<string> {
+  return invoke<string>("skill_analyze", {
+    provider: params.provider,
+    baseUrl: params.baseUrl,
+    apiKey: params.apiKey,
+    model: params.model,
+    content: params.content,
+  });
+}

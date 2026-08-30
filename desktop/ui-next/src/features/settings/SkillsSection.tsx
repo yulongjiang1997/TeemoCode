@@ -3,12 +3,13 @@
 // 就是一目录一文件的权威(壳 src/skills.rs),skills_save/skills_delete
 // 即时落盘,也**不重启引擎**(技能按会话物化,新建/重选启用集时生效)。
 // 行形态照 McpSection(list-row + 行内展开编辑)。
-import { IconChevronDown, IconPlus } from "@tabler/icons-react";
+import { IconChevronDown, IconDownload, IconPlus } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
 import { inDesktopShell } from "@/lib/ipc/ipc";
 import { skillsDelete, skillsList, skillsSave, skillsSetDefault, type SkillInfo } from "@/lib/ipc/skills";
+import { ImportSkillsDialog } from "./ImportSkillsDialog";
 
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -37,6 +38,8 @@ export function SkillsSection() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [edit, setEdit] = useState<EditState | null>(null);
   const [busy, setBusy] = useState(false);
+  // git 技能库导入弹窗
+  const [importOpen, setImportOpen] = useState(false);
   // 组折叠(ModelsSection 同款):默认全展开,点组头收起
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const toggleGroup = (key: string) =>
@@ -312,17 +315,35 @@ export function SkillsSection() {
       {edit && edit.editing === null ? (
         editForm
       ) : (
-        <button
-          type="button"
-          className="btn btn-sm btn-outline w-fit"
-          onClick={() => {
-            setExpanded(null);
-            setEdit({ name: "", content: draftContent(t), editing: null });
-          }}
-        >
-          <IconPlus size={14} stroke={2} aria-hidden />
-          {t("settings.skills.add")}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="btn btn-sm btn-outline w-fit"
+            onClick={() => {
+              setExpanded(null);
+              setEdit({ name: "", content: draftContent(t), editing: null });
+            }}
+          >
+            <IconPlus size={14} stroke={2} aria-hidden />
+            {t("settings.skills.add")}
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm btn-outline w-fit"
+            onClick={() => setImportOpen(true)}
+          >
+            <IconDownload size={14} stroke={2} aria-hidden />
+            {t("settings.skills.import.open")}
+          </button>
+        </div>
+      )}
+
+      {importOpen && (
+        <ImportSkillsDialog
+          existingNames={skills.map((s) => s.name)}
+          onClose={() => setImportOpen(false)}
+          onImported={() => refresh()}
+        />
       )}
     </section>
   );

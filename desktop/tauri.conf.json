@@ -114,6 +114,8 @@
             "allow-skills-list",
             "allow-skills-save",
             "allow-skills-set-default",
+            "allow-skills-import-git",
+            "allow-skill-analyze",
             "allow-sound-enabled",
             "allow-stat-dropped-file",
             "allow-take-ui-intent",

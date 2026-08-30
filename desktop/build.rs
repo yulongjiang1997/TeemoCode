@@ -122,6 +122,14 @@ fn main() {
                 "mc_file_download",
                 "mc_file_download_cancel",
                 "mc_terminal_list",
+                // Git 导入/推送(git.rs)
+                "git_push",
+                "git_import",
+                "import_task_data",
+                "relaunch_app",
+                // 技能库 git 导入(git.rs)
+                "skills_import_git",
+                "skill_analyze",
             ]),
         ),
     )

@@ -16,6 +16,7 @@ mod baizhi;
 mod browser;
 mod config;
 mod driver;
+mod git;
 #[cfg(target_os = "windows")]
 mod native_pet;
 mod repo;
@@ -1822,6 +1823,12 @@ fn main() {
             todos::todo_upload_read,
             todos::todo_upload_delete,
             todos::todo_uploads_dir,
+            git::git_push,
+            git::git_import,
+            git::import_task_data,
+            git::relaunch_app,
+            git::skills_import_git,
+            git::skill_analyze,
             driver::usagestats
         ])
         .setup(|app| {

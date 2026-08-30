@@ -238,3 +238,183 @@ fn write_json(p: &Path, v: &serde_json::Value) -> Result<(), String> {
 pub fn relaunch_app(app: tauri::AppHandle) {
     app.restart();
 }
+
+/// 克隆 git 仓库到临时目录并扫描 SKILL.md 技能文件。
+/// 返回技能原始信息列表(name/description/content/相对路径),供大模型解析。
+#[tauri::command]
+pub async fn skills_import_git(url: String) -> Result<serde_json::Value, String> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err("git 地址为空".into());
+    }
+    let rand: u128 = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!("skills-import-{rand}"));
+    if tmp.exists() {
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+    std::fs::create_dir_all(&tmp).map_err(|e| format!("创建临时目录失败: {e}"))?;
+    let tmp_s = tmp.to_string_lossy().to_string();
+    if let Err(e) = git(&tmp_s, &["clone", "--depth", "1", url, "."]) {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return Err(format!("git clone 失败: {e}"));
+    }
+    let mut skills: Vec<serde_json::Value> = Vec::new();
+    scan_skill_dirs(&tmp, &tmp, &mut skills);
+    if skills.is_empty() {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return Err("仓库中未找到 SKILL.md 技能文件(需形如 <skill-name>/SKILL.md)".into());
+    }
+    Ok(json!({ "tmp_dir": tmp_s, "skills": skills }))
+}
+
+/// 递归扫描目录下所有 SKILL.md(最多 5 层深),读取 name/description/content。
+fn scan_skill_dirs(root: &Path, dir: &Path, out: &mut Vec<serde_json::Value>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            if p.file_name().map(|n| n == ".git").unwrap_or(false) {
+                continue;
+            }
+            let depth = p.strip_prefix(root).map(|r| r.components().count()).unwrap_or(0);
+            if depth <= 5 {
+                scan_skill_dirs(root, &p, out);
+            }
+        } else if p.file_name().map(|n| n == "SKILL.md").unwrap_or(false) {
+            let Ok(content) = std::fs::read_to_string(&p) else { continue };
+            let rel = p
+                .strip_prefix(root)
+                .map(|r| r.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            let dir_name = p
+                .parent()
+                .and_then(|d| d.file_name())
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "skill".into());
+            let mut name = dir_name.clone();
+            let mut desc = String::new();
+            let mut in_fm = false;
+            for line in content.lines() {
+                let t = line.trim();
+                if t == "---" {
+                    if in_fm {
+                        break;
+                    }
+                    in_fm = true;
+                    continue;
+                }
+                if in_fm {
+                    if let Some(v) = t.strip_prefix("name:") {
+                        let v = v.trim().trim_matches('"');
+                        if !v.is_empty() {
+                            name = v.to_string();
+                        }
+                    } else if let Some(v) = t.strip_prefix("description:") {
+                        desc = v.trim().trim_matches('"').to_string();
+                    }
+                }
+            }
+            if desc.is_empty() {
+                desc = content
+                    .lines()
+                    .skip_while(|l| l.trim().is_empty() || l.trim() == "---")
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("")
+                    .trim()
+                    .chars()
+                    .take(120)
+                    .collect();
+            }
+            out.push(json!({
+                "dir_name": dir_name,
+                "name": name,
+                "description": desc,
+                "rel_path": rel,
+                "content": content,
+            }));
+        }
+    }
+}
+
+/// 用大模型解析单个 SKILL.md 内容,提取结构化摘要(名称/作用/关键信息/适用场景)。
+/// 复用 model_test 的 provider/base/key 口径(openai/anthropic 两种协议)。
+#[tauri::command]
+pub async fn skill_analyze(
+    provider: String,
+    base_url: String,
+    api_key: String,
+    model: String,
+    content: String,
+) -> Result<String, String> {
+    let base = base_url.trim().trim_end_matches('/').trim_end_matches("/v1").to_string();
+    if base.is_empty() {
+        return Err("请先填写接口地址".into());
+    }
+    let key = api_key.trim().to_string();
+    if key.is_empty() {
+        return Err("请先填写 API Key".into());
+    }
+    let model = model.trim().to_string();
+    if model.is_empty() {
+        return Err("请先填写模型标识".into());
+    }
+    let prompt = format!(
+        "你是技能库分析师。以下是一个 Agent 技能(SKILL.md)的完整内容。请用中文输出严格的 JSON(不要 markdown 代码块包裹),格式:\n{{\"summary\": \"一句话作用概括(50字内)\", \"details\": \"详细说明(功能、用法、前置条件,200字内)\", \"keywords\": [\"关键词1\", ...], \"scenarios\": [\"适用场景1\", ...]}}\n\n技能名与 description 已解析,重点分析正文。\n\n--- SKILL.md 内容 ---\n{content}"
+    );
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+    let (url, req) = match provider.as_str() {
+        "anthropic" => (
+            format!("{base}/v1/messages"),
+            client
+                .post(format!("{base}/v1/messages"))
+                .header("x-api-key", &key)
+                .header("anthropic-version", "2023-06-01")
+                .json(&serde_json::json!({
+                    "model": model,
+                    "max_tokens": 1024,
+                    "messages": [{ "role": "user", "content": prompt }]
+                })),
+        ),
+        _ => (
+            format!("{base}/v1/chat/completions"),
+            client
+                .post(format!("{base}/v1/chat/completions"))
+                .bearer_auth(&key)
+                .json(&serde_json::json!({
+                    "model": model,
+                    "messages": [{ "role": "user", "content": prompt }]
+                })),
+        ),
+    };
+    let resp = req.send().await.map_err(|e| {
+        if e.is_timeout() { "请求超时(120s)".to_string() } else { format!("无法连接: {e}") }
+    })?;
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.map_err(|_| format!("响应不是有效 JSON (HTTP {status})"))?;
+    if !status.is_success() {
+        let msg = body.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()).unwrap_or("");
+        return Err(format!("HTTP {status}{}", if msg.is_empty() { String::new() } else { format!(": {msg}") }));
+    }
+    // 提取回复文本(openai: choices[0].message.content;anthropic: content[0].text)
+    let text = body
+        .pointer("/choices/0/message/content")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            body.get("content")
+                .and_then(|c| c.get(0))
+                .and_then(|c| c.get("text"))
+                .and_then(|v| v.as_str())
+        })
+        .unwrap_or("")
+        .to_string();
+    if text.is_empty() {
+        return Err("模型返回为空".into());
+    }
+    Ok(text)
+}
