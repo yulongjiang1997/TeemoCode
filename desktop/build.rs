@@ -82,6 +82,11 @@ fn main() {
                 // 工作区记忆(memory.rs:.monkeycode/MEMORY.md 面板)
                 "memory_read",
                 "memory_write",
+                // 自动化定时任务(automation.rs)
+                "automation_list",
+                "automation_save",
+                "automation_delete",
+                "automation_run_now",
                 // update_download 曾漏登记:UI 点「更新」报 Command not
                 // found(main.rs:930 的历史注释即此事故),契约脚本恢复后补齐
                 "update_download",
@@ -89,6 +94,8 @@ fn main() {
                 "import_mc_scan",
                 "import_mc_scan_dir",
                 "import_mc_apply",
+                // MCP 一键装(mcp_servers_install)
+                "mcp_servers_install",
                 "import_sound",
                 "upload_begin",
                 "upload_chunk",

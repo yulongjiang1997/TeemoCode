@@ -33,6 +33,10 @@
             "main"
           ],
           "permissions": [
+            "allow-automation-delete",
+            "allow-automation-list",
+            "allow-automation-run-now",
+            "allow-automation-save",
             "allow-baizhi-login",
             "allow-baizhi-logout",
             "allow-baizhi-send-code",
@@ -63,6 +67,7 @@
             "allow-import-mc-apply",
             "allow-import-mc-scan",
             "allow-import-mc-scan-dir",
+            "allow-mcp-servers-install",
             "allow-import-sound",
             "allow-import-task-data",
             "allow-list-wsl-distros",

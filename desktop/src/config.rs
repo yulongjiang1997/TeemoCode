@@ -49,7 +49,7 @@ fn json_object() -> serde_json::Value {
     serde_json::Value::Object(serde_json::Map::new())
 }
 
-fn default_true() -> bool {
+pub(crate) fn default_true() -> bool {
     true
 }
 
@@ -138,6 +138,10 @@ pub struct DesktopConfig {
     /// 必须以磁盘值保全,否则设置页一次保存就把全部模型组打回空。
     #[serde(default)]
     pub gateway: crate::gateway::GatewaySettings,
+    /// 自动化定时任务(automation.rs):到点把提示词发给 agent。增删改走
+    /// automation_* 独立命令,同样不在设置页表单里,merge 以磁盘值保全。
+    #[serde(default)]
+    pub automations: Vec<crate::automation::Automation>,
 }
 
 impl Default for DesktopConfig {
@@ -159,6 +163,7 @@ impl Default for DesktopConfig {
             main_window_state: None,
             telemetry_enabled: true,
             gateway: crate::gateway::GatewaySettings::default(),
+            automations: vec![],
         }
     }
 }
@@ -429,6 +434,7 @@ fn merge_shell_prefs(incoming: DesktopConfig, disk: &DesktopConfig) -> DesktopCo
         main_window_state: disk.main_window_state,
         telemetry_enabled: disk.telemetry_enabled,
         gateway: disk.gateway.clone(),
+        automations: disk.automations.clone(),
         ..incoming
     }
 }

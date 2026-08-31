@@ -12,6 +12,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod automation;
 mod baizhi;
 mod browser;
 mod config;
@@ -710,6 +711,43 @@ async fn engine_restart(app: AppHandle) -> Result<(), String> {
     })
     .await
     .map_err(|e| format!("重启失败: {e}"))?
+}
+
+/// 从仓库扫描结果批量安装 MCP 服务器(技能市场一键装)。entries 形状:
+/// `{"mcpServers": {name: {command,args,...} | {url,headers,...}}}`。
+/// 合并进 cfg.mcp_servers(同名覆盖),随后按保存设置的锁序重启引擎生效。
+/// 从仓库扫描结果批量安装 MCP 服务器(技能市场一键装)。entries 形状:
+/// `{"mcpServers": {name: {command,args,...} | {url,headers,...}}}`。
+/// 合并进 cfg.mcp_servers(同名覆盖),随后按保存设置的锁序重启引擎生效。
+#[tauri::command]
+async fn mcp_servers_install(app: AppHandle, entries: serde_json::Value) -> Result<String, String> {
+    let servers = entries
+        .as_object()
+        .ok_or_else(|| "entries 必须是 {mcpServers: {...}} 形状".to_string())?;
+    for (name, v) in servers {
+        if !v.is_object() || name.is_empty() {
+            return Err(format!("MCP 服务器 {name} 配置格式错误"));
+        }
+    }
+    let server_map = servers.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let apply = app.state::<EngineApply>();
+        let _apply = apply.0.lock_ok();
+        let host = app.state::<DriverHost>();
+        let _host_apply = host.begin_apply();
+        reset_engine_supervision(&app);
+        let saved = crate::config::update_config_json(&app, |cfg| {
+            for (name, v) in server_map.iter() {
+                cfg.mcp_servers.as_object_mut().unwrap().insert(name.clone(), v.clone());
+            }
+        })?;
+        apply_cloud_config(&app, &saved);
+        materialize_engine_config(&app, &saved, browser::mcp_endpoint(&app))?;
+        restart_engine_locked(&app, &saved)?;
+        Ok(format!("已安装 {} 个 MCP 服务器", server_map.len()))
+    })
+    .await
+    .map_err(|e| format!("MCP 安装失败: {e}"))?
 }
 
 /// 取走(消费)待处理的壳→UI 意图。UI 两处调用:启动完成后补处理错过的
@@ -1881,6 +1919,11 @@ fn main() {
             gateway::gateway_test_group,
             memory::memory_read,
             memory::memory_write,
+            automation::automation_list,
+            automation::automation_save,
+            automation::automation_delete,
+            automation::automation_run_now,
+            mcp_servers_install,
             import_mc::import_mc_scan,
             import_mc::import_mc_scan_dir,
             import_mc::import_mc_apply,
@@ -1913,6 +1956,8 @@ fn main() {
             // 模型网关(统一大模型调度平台):挂在配置加载之后,按 gateway 配置
             // 起停监听;失败只记错误外显在设置页,不阻塞应用其余功能。
             gateway::manage(app.handle());
+            // 自动化调度线程(20s 一扫,到点建会话发提示词)
+            automation::start(app.handle());
 
             // 托盘失败只降级(无托盘宿主的桌面环境),不阻塞
             if let Err(e) = setup_tray(app.handle(), cfg.pet_enabled, cfg.sound_enabled) {

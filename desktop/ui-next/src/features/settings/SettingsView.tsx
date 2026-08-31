@@ -6,7 +6,7 @@
 //   sound-enabled 事件与托盘/桌宠双向同步);
 // - models/mcp/kernel_env 走保存条:save_config 全量写回(表单外字段从载入
 //   配置透传),壳保存后重启引擎——重启过程由全局引擎横幅外显,这里不管。
-import { IconAdjustmentsHorizontal, IconAlertTriangle, IconArrowsExchange, IconDice5, IconRotate, IconWand, IconBrain, IconCheck, IconChevronDown, IconInfoCircle, IconServer, IconSparkles, IconTerminal2, IconUser, IconUsers, IconVolume, IconWorld, type TablerIcon } from "@tabler/icons-react";
+import { IconAdjustmentsHorizontal, IconAlarm, IconAlertTriangle, IconArrowsExchange, IconDice5, IconRotate, IconWand, IconBrain, IconCheck, IconChevronDown, IconInfoCircle, IconServer, IconSparkles, IconTerminal2, IconUser, IconUsers, IconVolume, IconWorld, type TablerIcon } from "@tabler/icons-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 import { resolveShortcut } from "@/app/shortcuts";
@@ -35,6 +35,7 @@ import { SoundSection } from "./SoundSection";
 import { BrowserSection } from "./BrowserSection";
 import { McpSection } from "./McpSection";
 import { SkillsSection } from "./SkillsSection";
+import { AutomationSection } from "./AutomationSection";
 import { GatewaySection } from "./GatewaySection";
 import { ModelsSection } from "./ModelsSection";
 import type { BaizhiSyncResult, McModelsSyncResult } from "@/lib/ipc/account";
@@ -51,7 +52,7 @@ import {
   type SettingsDraft,
 } from "./settingsForm";
 
-type Section = "general" | "account" | "models" | "mcp" | "skills" | "gateway" | "browser" | "env" | "team" | "sound" | "about";
+type Section = "general" | "account" | "models" | "mcp" | "skills" | "gateway" | "automation" | "browser" | "env" | "team" | "sound" | "about";
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -1039,6 +1040,7 @@ export function SettingsView({
     { id: "mcp", label: t("settings.nav.mcp"), desc: t("settings.desc.mcp"), icon: IconServer },
     { id: "skills", label: t("settings.nav.skills"), desc: t("settings.desc.skills"), icon: IconSparkles },
     { id: "gateway", label: t("settings.nav.gateway"), desc: t("settings.desc.gateway"), icon: IconArrowsExchange },
+    { id: "automation", label: t("settings.nav.automation"), desc: t("settings.desc.automation"), icon: IconAlarm },
     { id: "sound", label: t("settings.nav.sound"), desc: t("settings.desc.sound"), icon: IconVolume },
     { id: "team", label: t("settings.nav.team"), desc: t("settings.desc.team"), icon: IconUsers },
     ...(browserExt
@@ -1096,6 +1098,8 @@ export function SettingsView({
       case "skills":
         // 技能库是壳侧即时读写(skills_* 命令),不进 config 草稿,不走 configGate
         return <SkillsSection />;
+      case "automation":
+        return <AutomationSection />;
       case "gateway":
         // 模型网关是壳侧即时读写(gateway_* 命令),不进 config 草稿,不走 configGate
         return <GatewaySection />;

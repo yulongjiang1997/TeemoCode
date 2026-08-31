@@ -267,7 +267,15 @@ pub async fn skills_import_git(url: String) -> Result<serde_json::Value, String>
         let _ = std::fs::remove_dir_all(&tmp);
         return Err("仓库中未找到 SKILL.md 技能文件(需形如 <skill-name>/SKILL.md)".into());
     }
-    Ok(json!({ "tmp_dir": tmp_s, "skills": skills }))
+
+    // 扫描仓库根 mcp.json(引擎同构形态 {"mcpServers":{...}}),若存在
+    // 一并返回,供技能市场的 MCP 一键装功能消费。
+    let mcp_value = std::fs::read_to_string(Path::new(&tmp).join("mcp.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("mcpServers").cloned())
+        .filter(|v| v.is_object());
+    Ok(json!({ "tmp_dir": tmp_s, "skills": skills, "mcp": mcp_value }))
 }
 
 /// 递归扫描目录下所有 SKILL.md(最多 5 层深),读取 name/description/content。

@@ -66,8 +66,8 @@ export interface GitSkillRaw {
 }
 
 /** 克隆 git 仓库到临时目录并扫描 SKILL.md。 */
-export function skillsImportGit(url: string): Promise<{ tmp_dir: string; skills: GitSkillRaw[] }> {
-  return invoke<{ tmp_dir: string; skills: GitSkillRaw[] }>("skills_import_git", { url });
+export function skillsImportGit(url: string): Promise<{ tmp_dir: string; skills: GitSkillRaw[]; mcp?: Record<string, Record<string, unknown>> }> {
+  return invoke<{ tmp_dir: string; skills: GitSkillRaw[]; mcp?: Record<string, Record<string, unknown>> }>("skills_import_git", { url });
 }
 
 /** 用大模型解析 SKILL.md 内容,返回模型输出(期望 JSON 文本)。 */
