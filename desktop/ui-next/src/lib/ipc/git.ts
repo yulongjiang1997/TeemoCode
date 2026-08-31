@@ -38,3 +38,19 @@ export async function importTaskData(workdir: string): Promise<ImportTaskDataRes
 export async function relaunchApp(): Promise<void> {
   return invoke("relaunch_app");
 }
+
+export async function gitBranch(workdir: string): Promise<string> {
+  return invoke<string>("git_branch", { workdir });
+}
+
+export async function gitBranchList(workdir: string): Promise<string[]> {
+  return invoke<string[]>("git_branch_list", { workdir });
+}
+
+export async function gitIsClean(workdir: string): Promise<boolean> {
+  return invoke<boolean>("git_is_clean", { workdir });
+}
+
+export async function gitCheckout(workdir: string, branch: string): Promise<void> {
+  return invoke<void>("git_checkout", { workdir, branch });
+}

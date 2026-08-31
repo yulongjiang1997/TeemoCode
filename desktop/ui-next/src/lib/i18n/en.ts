@@ -691,6 +691,8 @@ export const en: Record<MessageKey, string> = {
   "chat.findings.fixed": "Fixed",
   "chat.findings.skipped": "Skipped",
   "chat.findings.noChange": "No change needed",
+  "chat.git.branchHint": "Uncommitted changes. Please commit or discard first.",
+  "chat.git.switchFailed": "Failed to switch branch: {reason}",
   "chat.findings.failure": "Failure scenario",
   "chat.loadEarlier": "Show more sessions",
   "chat.loadEarlierCloud": "Load earlier",

@@ -233,6 +233,61 @@ fn write_json(p: &Path, v: &serde_json::Value) -> Result<(), String> {
     std::fs::write(p, s).map_err(|e| format!("写入 {} 失败: {e}", p.display()))
 }
 
+/// 查询当前分支名。返回 branch name 或空字符串(无 git 仓库)。
+#[tauri::command]
+pub fn git_branch(workdir: String) -> String {
+    let dir = workdir.trim();
+    if dir.is_empty() {
+        return String::new();
+    }
+    let out = git(dir, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    match out {
+        Ok(s) => s.trim().to_string(),
+        Err(_) => String::new(),
+    }
+}
+
+/// 列出所有本地分支名。返回 Vec<String>。
+#[tauri::command]
+pub fn git_branch_list(workdir: String) -> Vec<String> {
+    let dir = workdir.trim();
+    if dir.is_empty() {
+        return Vec::new();
+    }
+    let out = git(dir, &["branch", "--format=%(refname:short)"]);
+    match out {
+        Ok(s) => s.lines().filter(|l| !l.is_empty()).map(String::from).collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// 检查工作区是否干净(无未提交更改)。
+#[tauri::command]
+pub fn git_is_clean(workdir: String) -> bool {
+    let dir = workdir.trim();
+    if dir.is_empty() {
+        return true;
+    }
+    // git status --porcelain:无输出=干净
+    git(dir, &["status", "--porcelain"])
+        .map(|s| s.trim().is_empty())
+        .unwrap_or(true)
+}
+
+/// 切换分支。失败返回错误信息。
+#[tauri::command]
+pub fn git_checkout(workdir: String, branch: String) -> Result<(), String> {
+    let dir = workdir.trim();
+    if dir.is_empty() {
+        return Err("工作目录为空".into());
+    }
+    // 先检查是否干净
+    if !git_is_clean(dir.to_string()) {
+        return Err("工作区有未提交的更改,请先提交或丢弃后再切换分支".into());
+    }
+    git(dir, &["checkout", &branch]).map(|_| ()).map_err(|e| format!("切换失败: {e}"))
+}
+
 /// 重启应用(任务数据迁移后让用户重启重新加载)。
 #[tauri::command]
 pub fn relaunch_app(app: tauri::AppHandle) {

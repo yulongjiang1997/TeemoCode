@@ -7,7 +7,7 @@
 // 大纲跳转:锚(data-user-seq)不在 DOM 时按条目 offset 走 ensureLoaded
 // 精确补页(session_history 以 offset 为终点,不盲翻),补页提交前的空窗
 // 用短时重试兜；当前项由虚拟高度索引 O(1) 反查最近的用户行。
-import { IconDots, IconFolderOpen, IconPencil, IconX } from "@tabler/icons-react";
+import { IconDots, IconFolderOpen, IconPencil, IconX, IconGitBranch, IconCheck } from "@tabler/icons-react";
 import {
   useCallback,
   useEffect,
@@ -26,6 +26,7 @@ import { useI18n } from "@/lib/i18n";
 import { sessionOutline, sessionSetModel, type OutlineItem } from "@/lib/ipc/controls";
 import { getConfig } from "@/lib/ipc/config";
 import { repoChanges, repoReveal } from "@/lib/ipc/repo";
+import { gitBranch, gitBranchList, gitIsClean, gitCheckout } from "@/lib/ipc/git";
 import { sessionFrame, sessionPatch, sessionSend, type SessionMeta } from "@/lib/ipc/sessions";
 import { b64encode } from "@/lib/protocol/codec";
 import { buildSessionUsageMap, usageStats, type TokenUsage } from "@/lib/ipc/usageStats";
@@ -734,6 +735,59 @@ export function ChatView({
     closeMenu();
   }, [meta.id]);
 
+  // ==== Git 分支显示与切换 ====
+  const [branch, setBranch] = useState("");
+  const [branches, setBranches] = useState<string[]>([]);
+  const [branchOpen, setBranchOpen] = useState(false);
+  const branchBoxRef = useRef<HTMLDivElement | null>(null);
+
+  const refreshBranches = useCallback(async () => {
+    if (!meta.workdir) return;
+    try {
+      const [cur, list] = await Promise.all([
+        gitBranch(meta.workdir),
+        gitBranchList(meta.workdir),
+      ]);
+      setBranch(cur);
+      setBranches(list);
+    } catch {
+      setBranch("");
+      setBranches([]);
+    }
+  }, [meta.workdir]);
+
+  const switchBranch = useCallback(
+    async (target: string) => {
+      if (!meta.workdir || target === branch) {
+        setBranchOpen(false);
+        return;
+      }
+      try {
+        const clean = await gitIsClean(meta.workdir);
+        if (!clean) {
+          window.alert(t("chat.git.branchHint"));
+          setBranchOpen(false);
+          return;
+        }
+        await gitCheckout(meta.workdir, target);
+        setBranch(target);
+        setBranchOpen(false);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        window.alert(t("chat.git.switchFailed", { reason: msg }));
+        setBranchOpen(false);
+      }
+    },
+    [meta.workdir, branch, t],
+  );
+
+  useEffect(() => {
+    void refreshBranches();
+  }, [refreshBranches]);
+
+  // 点击外部关闭分支下拉
+  useDismiss(branchOpen, branchBoxRef, () => setBranchOpen(false));
+
   // ==== 子代理会话回放浮层(D2):工具卡「查看子会话」入口打开,只读 ====
   const [childId, setChildId] = useState<string | null>(null);
   useEffect(() => {
@@ -1050,6 +1104,40 @@ export function ChatView({
                 <IconPencil size={12} stroke={1.75} aria-hidden />
               </button>
             </h1>
+          )}
+          {/* Git 分支徽标 */}
+          {meta.workdir && branch && (
+            <div ref={branchBoxRef} className="relative shrink-0">
+              <button
+                type="button"
+                className="badge badge-ghost badge-sm cursor-pointer text-base-content/60 hover:text-base-content"
+                onClick={() => {
+                  setBranchOpen((o) => !o);
+                  if (!branchOpen) void refreshBranches();
+                }}
+              >
+                <IconGitBranch size={12} aria-hidden />
+                {branch}
+              </button>
+              {branchOpen && (
+                <div className="absolute left-0 top-full z-50 mt-1 min-w-[180px] rounded-box border border-base-300 bg-base-100 shadow-lg">
+                  <ul className="menu menu-sm">
+                    {branches.map((b) => (
+                      <li key={b}>
+                        <button
+                          type="button"
+                          className={b === branch ? "active" : ""}
+                          onClick={() => void switchBranch(b)}
+                        >
+                          {b === branch && <IconCheck size={12} />}
+                          {b}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
           )}
         </div>
         {/* 任务 token 用量:标题右侧,点击弹明细(输入/输出/调用 + 按模型) */}

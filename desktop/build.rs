@@ -153,6 +153,10 @@ fn main() {
                 "git_import",
                 "import_task_data",
                 "relaunch_app",
+                "git_branch",
+                "git_branch_list",
+                "git_is_clean",
+                "git_checkout",
                 // 技能库 git 导入(git.rs)
                 "skills_import_git",
                 "skill_analyze",

@@ -16,27 +16,23 @@ export interface ReleaseNote {
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
     version: "0.1.26",
-    notes: "git skill import + LLM analysis + parallel analyze + summary tags",
-  },
-  {
-    version: "0.1.26",
-    notes: "model gateway: unified LLM scheduling (model groups, OpenAI-compatible endpoint, weighted failover, circuit breaker, shared group context) + group save fix + restored update/sound/import-mc commands",
+    notes: "Git 技能库导入(克隆仓库扫描 SKILL.md) + 大模型解析技能摘要(并行 3 并发) + 摘要标签持久化到 frontmatter + 版本化 base_url 修复(智谱 /v4 不再错误拼接 /v1) + openai_responses 协议支持",
   },
   {
     version: "0.1.25",
-    notes: "command warehouse + confirm fix + queue persist + team injection",
+    notes: "指令仓库(预设指令库,按会话隔离持久化,手动逐条发送) + confirm 崩溃修复 + 自动指令队列持久化 + 团队编排指令注入([mc-team] 前缀)",
   },
   {
     version: "0.1.24",
-    notes: "team mode + queue modal + pet GIF animation",
+    notes: "团队模式编排注入 + 队列管理弹窗 + GIF 桌宠动画支持",
   },
   {
     version: "0.1.23",
-    notes: "GIF animation support + pet size fix + config persistence fix",
+    notes: "GIF 动画支持(Rust 侧 image crate 解码) + 桌宠尺寸修复(PET_W/H 200x232) + 配置持久化",
   },
   {
     version: "0.1.22",
-    notes: "model dropdown popup direction fix + queue infinite resend fix",
+    notes: "模型下拉菜单弹出方向修复 + 队列无限重发修复",
   },
   {
     version: "0.1.21",

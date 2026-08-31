@@ -705,6 +705,8 @@ export const zh = {
   "chat.findings.fixed": "已修复",
   "chat.findings.skipped": "已跳过",
   "chat.findings.noChange": "无需修改",
+  "chat.git.branchHint": "有未提交的更改,请先提交或丢弃",
+  "chat.git.switchFailed": "切换分支失败: {reason}",
   "chat.findings.failure": "失败场景",
   "chat.loadEarlier": "显示更多会话",
   "chat.loadEarlierCloud": "加载更早",
