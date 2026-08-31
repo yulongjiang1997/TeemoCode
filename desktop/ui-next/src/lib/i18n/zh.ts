@@ -761,6 +761,7 @@ export const zh = {
   "chat.model.fallbackInUse": "备用模型使用中",
   "chat.plan.mode": "计划",
   "chat.plan.toggleTip": "计划模式:本轮只调研并产出实施计划,等确认后再执行(再次点击关闭)",
+  "chat.plan.placeholder": "计划模式已开启:描述任务,我将只做调研并给出实施计划,等你确认后再动手",
   "chat.team.mode": "团队",
   "chat.warehouse.title": "指令仓库",
   "chat.warehouse.count": "{n} 条预设指令",

@@ -654,7 +654,13 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
         <ComposerTextarea
           taRef={taRef}
           aria-label={t("chat.composer")}
-          placeholder={presentation.running ? t("chat.composerPlaceholderRunning") : t("chat.composerPlaceholder")}
+          placeholder={
+            planOn
+              ? t("chat.plan.placeholder")
+              : presentation.running
+                ? t("chat.composerPlaceholderRunning")
+                : t("chat.composerPlaceholder")
+          }
           value={ctl.draft}
           onChange={(e) => ctl.setDraft(e.target.value)}
           onCompositionEnd={(e) => imeRef.current.markEnd(e.timeStamp)}

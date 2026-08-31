@@ -746,6 +746,7 @@ export const en: Record<MessageKey, string> = {
   "chat.model.fallbackInUse": "Using fallback",
   "chat.plan.mode": "Plan",
   "chat.plan.toggleTip": "Plan mode: research and draft an implementation plan this turn; executes only after you confirm (click again to turn off)",
+  "chat.plan.placeholder": "Plan mode on: describe the task and I will only research and draft a plan for your confirmation",
   "chat.team.mode": "Team",
   "chat.warehouse.title": "Command Warehouse",
   "chat.warehouse.count": "{n} preset commands",

@@ -682,3 +682,46 @@ describe("切会话焦点", () => {
     expect(calls(ops, "session_compact")[0]?.args?.id).toBe("s1");
   });
 });
+
+// 计划模式开关(对标 ZCode Plan Mode):点击高亮,发送注入 [mc-plan] 前缀,
+// 气泡渲染剥掉前缀只显原文(与团队前缀叠加时各自剥净)。
+describe("计划模式", () => {
+  it("点击高亮开关;发送载荷带 [mc-plan] 前缀", async () => {
+    const user = userEvent.setup();
+    const { ops } = stubShell();
+    render(<ChatView meta={META} onPatched={() => {}} onDeleted={() => {}} />);
+    const box = await ready();
+
+    const planBadge = screen.getByRole("button", { name: "计划" });
+    expect(planBadge.className).toContain("badge-outline");
+    await user.click(planBadge);
+    expect(planBadge.className).toContain("bg-secondary");
+
+    await user.type(box, "先做调研");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(sends(ops, "user-input").length).toBe(1));
+    const payload = b64decode((sends(ops, "user-input")[0]?.args?.payload as { content: string }).content);
+    expect(payload.startsWith("[mc-plan]")).toBe(true);
+    expect(payload).toContain("等我确认");
+    expect(payload.endsWith("先做调研")).toBe(true);
+  });
+
+  it("再点一次取消;取消后发送不带前缀", async () => {
+    const user = userEvent.setup();
+    const { ops } = stubShell();
+    render(<ChatView meta={META} onPatched={() => {}} onDeleted={() => {}} />);
+    const box = await ready();
+
+    const planBadge = screen.getByRole("button", { name: "计划" });
+    await user.click(planBadge);
+    await user.click(planBadge);
+    expect(planBadge.className).toContain("badge-outline");
+
+    await user.type(box, "直接修");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(sends(ops, "user-input").length).toBe(1));
+    const payload = b64decode((sends(ops, "user-input")[0]?.args?.payload as { content: string }).content);
+    expect(payload).not.toContain("[mc-plan]");
+    expect(payload).toBe("直接修");
+  });
+});
