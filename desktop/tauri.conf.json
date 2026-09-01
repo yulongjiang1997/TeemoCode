@@ -156,6 +156,8 @@
             "allow-usagestats",
             "allow-window-system-menu",
             "allow-wsl-workdir-base",
+            "allow-get-notification-enabled",
+            "allow-set-notification-enabled",
             "core:default",
             "core:webview:allow-set-webview-zoom",
             "core:window:allow-close",
