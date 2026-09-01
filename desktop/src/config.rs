@@ -142,6 +142,9 @@ pub struct DesktopConfig {
     /// automation_* 独立命令,同样不在设置页表单里,merge 以磁盘值保全。
     #[serde(default)]
     pub automations: Vec<crate::automation::Automation>,
+    /// 系统通知开关:子代理完成/中断时弹窗(默认开启)。
+    #[serde(default = "default_true")]
+    pub notification_enabled: bool,
 }
 
 impl Default for DesktopConfig {
@@ -164,6 +167,7 @@ impl Default for DesktopConfig {
             telemetry_enabled: true,
             gateway: crate::gateway::GatewaySettings::default(),
             automations: vec![],
+            notification_enabled: true,
         }
     }
 }
@@ -403,6 +407,11 @@ pub fn load_config(app: &AppHandle) -> Result<DesktopConfig, String> {
     let store = app.state::<ConfigStore>();
     let _guard = store.lock();
     load_config_unlocked(&config_dir(app)?)
+}
+
+/// 从任意路径加载配置(不持 ConfigStore 锁),供 ShellCtx 内部调用时使用。
+pub fn load_config_from_dir(dir: &Path) -> Result<DesktopConfig, String> {
+    load_config_unlocked(&dir.join("config.json"))
 }
 
 /// 设置页提交：在同一配置事务内合并壳自有偏好、生成引擎派生文件，最后

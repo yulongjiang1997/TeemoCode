@@ -160,6 +160,9 @@ fn main() {
                 // 技能库 git 导入(git.rs)
                 "skills_import_git",
                 "skill_analyze",
+                // 系统通知开关(get/set)
+                "get_notification_enabled",
+                "set_notification_enabled",
             ]),
         ),
     )

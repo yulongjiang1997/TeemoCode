@@ -126,9 +126,26 @@ export function soundAssetUrl(path: string): string {
   return g.core.convertFileSrc(path);
 }
 
+/** 订阅系统通知开关变更;非壳环境 no-op。 */
+export function onNotificationEnabled(cb: (enabled: boolean) => void): () => void {
+  return listen<boolean>("notification-enabled", (on) => cb(on !== false));
+}
+
 /** 订阅提示音开关变更(设置页与托盘/桌宠双向同步);非壳环境 no-op。 */
 export function onSoundEnabled(cb: (enabled: boolean) => void): () => void {
   return listen<boolean>("sound-enabled", (on) => cb(on !== false));
+}
+
+/** 系统通知开关当前值;浏览器模式(无桌面 Shell)返回开,设置页不渲染。 */
+export async function getNotificationEnabled(): Promise<boolean> {
+  if (!inDesktopShell()) return true;
+  return invoke<boolean>("get_notification_enabled");
+}
+
+/** 切换系统通知:点一下即生效并落盘,不进保存条。 */
+export async function setNotificationEnabled(enabled: boolean): Promise<void> {
+  if (!inDesktopShell()) return;
+  await invoke("set_notification_enabled", { enabled });
 }
 
 /** 枚举 WSL 发行版(运行环境下拉)。非 Windows/未装 WSL/失败均空数组。 */

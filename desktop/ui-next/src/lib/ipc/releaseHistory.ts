@@ -16,6 +16,14 @@ export interface ReleaseNote {
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
     version: "0.1.27",
+    notes: "系统通知 + 任务标题栏 Git 分支徽标",
+  },
+  {
+    version: "0.1.27",
+    notes: "任务标题栏 Git 分支徽标 + 分支切换(含工作区干净检查)",
+  },
+  {
+    version: "0.1.27",
     notes: "任务标题栏 Git 分支徽标 + 分支切换(含工作区干净检查)",
   },
   {

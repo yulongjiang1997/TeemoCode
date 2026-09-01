@@ -387,6 +387,19 @@ impl Inner {
             self.push_frame(&psid, |seq| frame::tool_call_completed(&ptc, &result, &images, seq));
         }
         let label = agent_label(get("name"), get("description"), agent_id);
+        // 系统通知:子代理完成时弹窗(受 notification_enabled 开关控制)
+        if let Ok(cfg_dir) = self.app.config_dir() {
+            if let Ok(cfg) = crate::config::load_config_from_dir(&cfg_dir) {
+                if cfg.notification_enabled {
+                    let note_body = match status {
+                        "error" => format!("后台代理 {label} 执行失败"),
+                        "stopped" => format!("后台代理 {label} 已停止"),
+                        _ => format!("后台代理 {label} 已完成"),
+                    };
+                    self.app.show_notification("MonkeyCode", &note_body);
+                }
+            }
+        }
         let note = match status {
             "error" => format!("📌 后台代理 {label} 执行失败,详情见其任务卡"),
             "stopped" => format!("📌 后台代理 {label} 已停止"),

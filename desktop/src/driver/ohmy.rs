@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
+use tauri_plugin_notification::NotificationExt;
 
 use super::session::SessionsState;
 use super::subagent::SubagentState;
@@ -50,6 +51,9 @@ pub trait ShellCtx: Send + Sync + 'static {
     /// 因此不必知道 DriverHost 与 Tauri State 的存在。
     /// `instance` 标明是**哪一个**引擎进程退出了,壳据此忽略早已被弃用的实例。
     fn on_engine_exit(&self, _instance: u64, _detail: &str, _log_tail: &str) {}
+
+    /// 显示系统通知(后台静默;权限未授予时不报错)。
+    fn show_notification(&self, title: &str, body: &str);
 }
 
 impl ShellCtx for AppHandle {
@@ -69,6 +73,10 @@ impl ShellCtx for AppHandle {
     }
     fn skills_builtin_dir(&self) -> Option<PathBuf> {
         crate::skills::builtin_dir(self)
+    }
+    fn show_notification(&self, title: &str, body: &str) {
+        // notification plugin 未在 Builder 注册时 show() 静默失败,不需要处理
+        let _ = self.notification().builder().title(title).body(body).show();
     }
 }
 

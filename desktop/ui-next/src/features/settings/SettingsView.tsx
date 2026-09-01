@@ -16,6 +16,9 @@ import {
   listWslDistros,
   petRecreate,
   saveConfig,
+  getNotificationEnabled,
+  setNotificationEnabled,
+  onNotificationEnabled,
   type DesktopConfig,
 } from "@/lib/ipc/config";
 import { isWindowsShell } from "@/lib/ipc/host";
@@ -439,6 +442,14 @@ function GeneralSection({ petConfig }: { petConfig?: DesktopConfig | null }) {
   const [maskOpacity, setMaskOpacityState] = useState(readMaskOpacity);
   const [bgBlur, setBgBlurState] = useState(readBgBlur);
   const [taskExpandLimit, setTaskExpandLimit] = useState(readTaskExpandLimit);
+  // 系统通知开关(桌面壳特有)
+  const [notificationEnabled, setNotifEnabled] = useState(true);
+  useEffect(() => {
+    if (!inDesktopShell()) return;
+    let alive = true;
+    void getNotificationEnabled().then((on) => { if (alive) setNotifEnabled(on); });
+    return onNotificationEnabled((on) => setNotifEnabled(on));
+  }, []);
   // 桌宠缩放防抖:滑杆拖动中高频触发 onChange,每帧都重建窗口会卡死。
   // 用 setTimeout 防抖——松手后 400ms 才真正重建(用户拖动停止 → settle → 重建)。
   const petRecreateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -623,6 +634,18 @@ function GeneralSection({ petConfig }: { petConfig?: DesktopConfig | null }) {
             <span className="text-xs text-base-content/50">{t("settings.sound.moved")}</span>
           </SettingRow>
         )}
+        <SettingRow label={t("settings.general.notification")} hint={t("settings.general.notificationHint")}>
+          <input
+            type="checkbox"
+            className="toggle toggle-primary"
+            checked={notificationEnabled}
+            onChange={async (e) => {
+              const next = e.target.checked;
+              await setNotificationEnabled(next);
+              setNotifEnabled(next);
+            }}
+          />
+        </SettingRow>
         <SettingRow label={t("settings.general.taskExpandLimit")} hint={t("settings.general.taskExpandLimitHint")}>
           <div className="flex items-center gap-2">
             <input

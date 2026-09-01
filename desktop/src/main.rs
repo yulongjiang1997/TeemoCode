@@ -23,6 +23,7 @@ mod memory;
 mod import_mc;
 #[cfg(target_os = "windows")]
 mod native_pet;
+mod notification;
 mod repo;
 mod skills;
 mod stats;
@@ -1786,13 +1787,15 @@ fn main() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_updater::Builder::new().build());
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init());
     // 桌宠 NSPanel 转换(ensure_pet_window)依赖此插件注册的面板管理状态
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
     #[cfg(target_os = "windows")]
     let builder = builder.manage(native_pet::NativePetHost::new());
-    builder
+    // 系统通知开关状态(从 config 读取初始值,后续由 IPC 命令更新)
+    let builder = builder
         .manage(config::ConfigStore::new())
         .manage(DriverHost::new())
         .manage(TrayReady(AtomicBool::new(true)))
@@ -1920,6 +1923,8 @@ fn main() {
             gateway::gateway_delete_group,
             gateway::gateway_update_settings,
             gateway::gateway_regen_key,
+            notification::get_notification_enabled,
+            notification::set_notification_enabled,
             gateway::gateway_test_group,
             memory::memory_read,
             memory::memory_write,
@@ -1934,6 +1939,8 @@ fn main() {
             driver::usagestats
         ])
         .setup(|app| {
+            // 系统通知开关:从 config 读取初始值并注册状态
+            notification::init(app.handle());
             // 配置损坏且无有效备份时绝不能按默认值继续并覆写；仍创建错误页
             // 让用户看见可行动诊断。托盘/桌宠只使用内存中的安全默认值。
             let (cfg, config_error) = match load_config(app.handle()) {
