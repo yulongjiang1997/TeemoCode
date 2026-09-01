@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.29",
+    notes: "ACL权限修复(设置页通知开关) + 任务切换卡顿修复",
+  },
+  {
     version: "0.1.28",
     notes: "系统通知 + Git分支指示器 + 任务切换卡顿修复",
   },
