@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.27",
+    notes: "任务标题栏 Git 分支徽标 + 分支切换(含工作区干净检查)",
+  },
+  {
     version: "0.1.26",
     notes: "Git 技能库导入(克隆仓库扫描 SKILL.md) + 大模型解析技能摘要(并行 3 并发) + 摘要标签持久化到 frontmatter + 版本化 base_url 修复(智谱 /v4 不再错误拼接 /v1) + openai_responses 协议支持",
   },
