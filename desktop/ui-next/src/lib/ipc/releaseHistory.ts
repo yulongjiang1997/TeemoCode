@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.32",
+    notes: "系统通知 + Git分支指示器 + 任务切换性能优化 + 设置页通知开关",
+  },
+  {
     version: "0.1.31",
     notes: "Git分支弹窗性能优化(memorized组件) + 任务切换yield优化",
   },
