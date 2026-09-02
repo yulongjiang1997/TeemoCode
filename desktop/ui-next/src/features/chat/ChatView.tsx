@@ -7,7 +7,7 @@
 // 大纲跳转:锚(data-user-seq)不在 DOM 时按条目 offset 走 ensureLoaded
 // 精确补页(session_history 以 offset 为终点,不盲翻),补页提交前的空窗
 // 用短时重试兜；当前项由虚拟高度索引 O(1) 反查最近的用户行。
-import { IconDots, IconFolderOpen, IconPencil, IconX, IconGitBranch, IconCheck } from "@tabler/icons-react";
+import { IconDots, IconFolderOpen, IconPencil, IconX } from "@tabler/icons-react";
 import {
   useCallback,
   useEffect,
@@ -26,7 +26,6 @@ import { useI18n } from "@/lib/i18n";
 import { sessionOutline, sessionSetModel, type OutlineItem } from "@/lib/ipc/controls";
 import { getConfig } from "@/lib/ipc/config";
 import { repoChanges, repoReveal } from "@/lib/ipc/repo";
-import { gitBranch, gitBranchList, gitIsClean, gitCheckout } from "@/lib/ipc/git";
 import { sessionFrame, sessionPatch, sessionSend, type SessionMeta } from "@/lib/ipc/sessions";
 import { b64encode } from "@/lib/protocol/codec";
 import { buildSessionUsageMap, usageStats, type TokenUsage } from "@/lib/ipc/usageStats";
@@ -42,6 +41,7 @@ import { createImeGuard } from "@/lib/util/slash";
 import { useEscLayer } from "@/lib/util/escLayer";
 import { useDismiss } from "@/lib/util/useDismiss";
 import { LocalComposerHost, type LocalComposerHandle } from "./composer/LocalComposerHost";
+import { GitBranchBadge } from "./GitBranchBadge";
 import { MemoryDialog } from "./MemoryDialog";
 import { LogList, type LogListHandle } from "./LogList";
 import { OutlineNav, outlineEntriesOf } from "./OutlineNav";
@@ -190,8 +190,9 @@ export function ChatView({
   // ref 供逻辑用,state 供显示标记 + 主模型选择不变。
   const fallbackRef = useRef<{ primary: string; current: string } | null>(null);
   const [fallbackUse, setFallbackUse] = useState<{ primary: string; current: string } | null>(null);
-  // 任务级隔离:ChatView 以 epoch 为 key(不随会话重挂),切会话必须重置备用
-  // 状态(标记条/显示的主模型),并恢复上一个会话的主模型,不能跨任务泄漏。
+  // 任务级隔离:宿主通常以 epoch + 会话 id 重挂 ChatView;即使被直接复用,
+  // 切会话也必须重置备用状态(标记条/显示的主模型),并恢复上一个会话的主模型,
+  // 不能跨任务泄漏。
   const prevSidRef = useRef(meta.id);
   useEffect(() => {
     if (prevSidRef.current !== meta.id) {
@@ -205,6 +206,16 @@ export function ChatView({
       }
     }
   }, [meta.id]);
+  // 主区按会话 key 重挂时不会经过上面那次 prop 边沿,但备用模型仍已写进旧
+  // 会话配置;卸载前恢复它,避免用户切走后旧任务永久停在备用模型。
+  useEffect(() => {
+    return () => {
+      const fb = fallbackRef.current;
+      if (!fb) return;
+      fallbackRef.current = null;
+      void sessionSetModel(prevSidRef.current, fb.primary);
+    };
+  }, []);
 
   const rowNode = (rowKey: string): HTMLElement | null => {
     const root = scrollRef.current;
@@ -385,7 +396,7 @@ export function ChatView({
       // 大纲跳转的重试链/闪光同属旧会话:seq 是各会话独立的帧序号,跨会话
       // 必然撞号,残留的轮询会在新会话 DOM 里查到同号 [data-user-seq],把
       // 新会话的视口拽到无关消息上并打断它的锚点恢复(卸载专用 effect 只
-      // 管卸载,切会话是同一实例复用,必须在这里清)
+      // 管卸载,宿主即使复用实例切会话也必须在这里清)
       window.clearTimeout(jumpTimer.current);
       window.clearTimeout(flashTimer.current);
       setFlashSeq(null);
@@ -736,57 +747,7 @@ export function ChatView({
   }, [meta.id]);
 
   // ==== Git 分支显示与切换 ====
-  const [branch, setBranch] = useState("");
-  const [branches, setBranches] = useState<string[]>([]);
-  const [branchOpen, setBranchOpen] = useState(false);
-  const branchBoxRef = useRef<HTMLDivElement | null>(null);
-
-  const refreshBranches = useCallback(async () => {
-    if (!meta.workdir) return;
-    try {
-      const [cur, list] = await Promise.all([
-        gitBranch(meta.workdir),
-        gitBranchList(meta.workdir),
-      ]);
-      setBranch(cur);
-      setBranches(list);
-    } catch {
-      setBranch("");
-      setBranches([]);
-    }
-  }, [meta.workdir]);
-
-  const switchBranch = useCallback(
-    async (target: string) => {
-      if (!meta.workdir || target === branch) {
-        setBranchOpen(false);
-        return;
-      }
-      try {
-        const clean = await gitIsClean(meta.workdir);
-        if (!clean) {
-          window.alert(t("chat.git.branchHint"));
-          setBranchOpen(false);
-          return;
-        }
-        await gitCheckout(meta.workdir, target);
-        setBranch(target);
-        setBranchOpen(false);
-      } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        window.alert(t("chat.git.switchFailed", { reason: msg }));
-        setBranchOpen(false);
-      }
-    },
-    [meta.workdir, branch, t],
-  );
-
-  useEffect(() => {
-    void refreshBranches();
-  }, [refreshBranches]);
-
-  // 点击外部关闭分支下拉
-  useDismiss(branchOpen, branchBoxRef, () => setBranchOpen(false));
+  // Git 分支已提取为独立 memo 组件 GitBranchBadge,避免触发 ChatView 整体重渲染
 
   // ==== 子代理会话回放浮层(D2):工具卡「查看子会话」入口打开,只读 ====
   const [childId, setChildId] = useState<string | null>(null);
@@ -955,7 +916,7 @@ export function ChatView({
   useEffect(() => {
     setChangesCount(0); // 徽标属于会话,切走清零
     // 抽屉同属会话,切走一并收起(旧 UI App.tsx 五条切换路径一律 setDrawer(null))。
-    // ChatView 的 key 只取 epoch,切会话走的是**同一实例**,不复位就会:文件树
+    // ChatView 通常按会话重建,这里仍保留复位以覆盖直接复用组件的宿主;否则文件树
     // 停在上一个工作区(Tree 挂 loadedRef 守卫、根目录只在挂载时拉一次,且它
     // 没有 key),而「改动」页已经换成新会话的改动——同一块面板里两个项目的
     // 数据混在一起,旧树行上还标着新会话的改动徽标。点只在旧工作区存在的文件
@@ -1105,41 +1066,9 @@ export function ChatView({
               </button>
             </h1>
           )}
-          {/* Git 分支徽标 */}
-          {meta.workdir && branch && (
-            <div ref={branchBoxRef} className="relative shrink-0">
-              <button
-                type="button"
-                className="badge badge-ghost badge-sm cursor-pointer text-base-content/60 hover:text-base-content"
-                onClick={() => {
-                  setBranchOpen((o) => !o);
-                  if (!branchOpen) void refreshBranches();
-                }}
-              >
-                <IconGitBranch size={12} aria-hidden />
-                {branch}
-              </button>
-              {branchOpen && (
-                <div className="absolute left-0 top-full z-50 mt-1 min-w-[180px] rounded-box border border-base-300 bg-base-100 shadow-lg">
-                  <ul className="menu menu-sm">
-                    {branches.map((b) => (
-                      <li key={b}>
-                        <button
-                          type="button"
-                          className={b === branch ? "active" : ""}
-                          onClick={() => void switchBranch(b)}
-                        >
-                          {b === branch && <IconCheck size={12} />}
-                          {b}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
         </div>
+        {/* Git 分支徽标(独立 memo 组件,避免分支状态变化触发 ChatView 整体重渲染) */}
+        {meta.workdir && <GitBranchBadge workdir={meta.workdir} />}
         {/* 任务 token 用量:标题右侧,点击弹明细(输入/输出/调用 + 按模型) */}
         {usage && usage.input + usage.output > 0 && (
           <button

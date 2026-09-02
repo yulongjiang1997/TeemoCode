@@ -15,6 +15,18 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.31",
+    notes: "Git分支弹窗性能优化(memorized组件) + 任务切换yield优化",
+  },
+  {
+    version: "0.1.31",
+    notes: "修复任务切换时对话列表卡顿 + 修复 Git 分支切换弹窗 ACL 异常",
+  },
+  {
+    version: "0.1.30",
+    notes: "Git分支弹窗性能优化 + 按会话重建对话视图避免旧长列表重渲染",
+  },
+  {
     version: "0.1.29",
     notes: "ACL权限修复(设置页通知开关) + 任务切换卡顿修复",
   },

@@ -197,6 +197,11 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
         // reduceBatch 按 seq 水位去重,补投里与窗口批重叠的帧是无害空转
         const buffered = pendingRef.current ?? [];
         const usageSnapshot = openUsageFrame(win.context_used, win.context_window);
+        // 大批量时先 yield 一下,让 React 有机会处理当前帧再开始巨型归约
+        // 否则 startTransition 会被 reduceBatch 同步阻塞直到归约结束
+        if (win.frames.length > 500) {
+          await new Promise((r) => setTimeout(r, 0));
+        }
         startTransition(() => {
           setState((s) => reduceBatch(s, [...(win.frames as Frame[]), ...usageSnapshot, ...buffered]));
           // 窗口落地后 running 才可信:composer 的排队补投闸门等这一下;

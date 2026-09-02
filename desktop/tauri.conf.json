@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "TeemoCode",
   "mainBinaryName": "TeemoCode",
-  "version": "0.1.29",
+  "version": "0.1.31",
   "identifier": "com.teemocode.desktop",
   "build": {
     "frontendDist": "uidist",
@@ -176,6 +176,7 @@
             "core:window:allow-toggle-maximize",
             "dialog:allow-open",
             "dialog:allow-save",
+            "dialog:allow-message",
             "opener:allow-default-urls",
             "opener:allow-open-url",
             "opener:allow-reveal-item-in-dir",
