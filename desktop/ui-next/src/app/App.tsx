@@ -253,7 +253,7 @@ function MainArea({
     };
   }, []);
 
-  // key={epoch}:引擎自愈信号一变就整棵重建。epoch 本身已经喂给 useSessionFeed
+  // key 中的 epoch:引擎自愈信号一变就整棵重建。epoch 本身已经喂给 useSessionFeed
   // 做幂等重连,但**模型清单挂在 Composer 自己的挂载期 effect 上**(deps 是
   // []),不重建就永远是旧引擎那份——保存设置触发的重启碰巧自愈(SettingsView
   // 把 ChatView 整个卸掉了),崩溃自愈与浏览器扩展配对却不会,模型菜单一直
@@ -262,11 +262,14 @@ function MainArea({
   // 重来。代价可控:epoch 只在引擎真的掉过之后自增(不是每帧),而那时
   // ChatView 的数据面本就要整份重放;草稿/排队/附件按会话存在 composer stash
   // 里,卸载即留档、重挂即恢复,不会丢。
-  // 注意 key **只取 epoch**:切会话仍走同一实例(与此前行为一致),不牵连
+  // key 同时包含 epoch 和会话 id。切会话时如果复用 ChatView，React 会先用
+  // 新 meta 渲染旧 ChatState；长会话的 LogList 会在 state 清空前整列重投影，
+  // 造成切换卡顿。Composer 会在卸载时把草稿/队列/附件写入按会话 stash，
+  // 因此重建 ChatView 不会丢输入；epoch 仍负责引擎自愈。
   if (current)
     return (
       <ChatView
-        key={epoch}
+        key={`${epoch}:${current.id}`}
         meta={current}
         epoch={epoch}
         focusRequest={focusRequest}

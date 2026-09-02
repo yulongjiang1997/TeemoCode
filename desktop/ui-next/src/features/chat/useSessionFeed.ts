@@ -7,7 +7,13 @@ import { startTransition, useCallback, useEffect, useRef, useState } from "react
 
 import type { Frame } from "@/lib/protocol/types";
 import { afterEngineReady } from "@/lib/ipc/engine";
-import { createChatState, patchLastAgentUsage, prependHistory, reduceBatch } from "@/lib/protocol/reduce";
+import {
+  createChatState,
+  createReduceBatchContext,
+  patchLastAgentUsage,
+  prependHistory,
+  reduceBatch,
+} from "@/lib/protocol/reduce";
 import type { ChatState } from "@/lib/protocol/types";
 import { readTaskExpandLimit } from "@/lib/util/prefs";
 import {
@@ -28,6 +34,15 @@ const HISTORY_PAGE = 1; // 每次"显示更多会话"补读的轮数(壳侧 curs
  *  = 20 次串行 IPC,每次都完整跑一遍归约 + React 提交 + markdown 解析」
  *  ——2026-08-10 用户 profile 里那一串 0.5~2.6s 的 message handler 正是它。 */
 const JUMP_PAGE = 50;
+
+/** 单次回放归约的上限。React transition 只负责调度，不能保证一次
+ * `setState` 内的纯函数和后续布局会被切片；把历史拆成小批次并在批次间
+ * 交还事件循环，release WebView 也能在加载长任务期间响应点击和输入。 */
+const HISTORY_BATCH_SIZE = 120;
+
+function yieldToBrowser(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 0));
+}
 
 /** session_open 的独立用量快照转成普通协议帧，复用 reducer 的单一状态
  * 写入口。无 seq = 不抬水位；顺序放在回放窗口之后、等待期间实时帧之前：
@@ -122,6 +137,10 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
    *  running/usage/model/think/permMode/commands 会被一起丢掉。按到达顺序
    *  「窗口在前、缓冲在后」一次归约,状态与条目都是对的。 */
   const pendingRef = useRef<Frame[] | null>(null);
+  // 用量事件不走 frames 缓冲,但回放期间直接 setState 会打断 transition 并
+  // 让 concrete history snapshot 覆盖补丁。先记最后一份,historyLoaded 后
+  // 与实时帧一起补投,既保留最新计数也避免切换期的紧急重渲染。
+  const pendingUsageRef = useRef<{ input: number; output: number } | null>(null);
 
   useEffect(() => {
     setState(createChatState());
@@ -134,6 +153,7 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
     hasMoreRef.current = false;
     liveIdRef.current = id;
     pendingRef.current = []; // 本轮重新开始攒:窗口未落地前的实时帧一律入缓冲
+    pendingUsageRef.current = null;
     if (!id) return;
 
     let alive = true;
@@ -161,20 +181,24 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
       if (!alive || e.type !== "session-usage" || e.id !== id) return;
       const input = e.input ?? 0;
       const output = e.output ?? 0;
-      if (input > 0 || output > 0) setState((s) => patchLastAgentUsage(s, input, output));
+      if (input > 0 || output > 0) {
+        if (pendingRef.current) pendingUsageRef.current = { input, output };
+        else setState((s) => patchLastAgentUsage(s, input, output));
+      }
     });
     void (async () => {
       try {
         await Promise.all([framesP, connP]);
         if (!alive) return;
-        // 退避重试:引擎重启后 Ready 与壳的 apply 闸门有重叠窗口,首发必被拒
-        // (afterEngineReady 头注记了壳侧契约)。不重试的话浏览器配对后这次
-        // 重开就静默失败,对话继续挂在旧引擎上、拿不到新 MCP 工具集
+        const t0 = performance.now();
         const win = await afterEngineReady(() => sessionOpen(id, readTaskExpandLimit()));
         if (!alive) return;
+        const t1 = performance.now();
+        if (import.meta.env.DEV) {
+          console.log(`[perf] session_open IPC: ${(t1 - t0).toFixed(0)}ms, frames: ${win.frames.length}`);
+        }
         cursorRef.current = win.cursor;
         hasMoreRef.current = !!win.has_more;
-        setHasMore(hasMoreRef.current);
         // 窗口在前、等待期间攒下的实时帧在后,一次归约按真实先后落地。
         // 窗口与实时流在壳侧按 opened 切分、互不重叠,seq 严格递增,
         // reduceBatch 的批内去重顺带兜住壳偶发重推
@@ -197,17 +221,51 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
         // reduceBatch 按 seq 水位去重,补投里与窗口批重叠的帧是无害空转
         const buffered = pendingRef.current ?? [];
         const usageSnapshot = openUsageFrame(win.context_used, win.context_window);
-        // 大批量时先 yield 一下,让 React 有机会处理当前帧再开始巨型归约
-        // 否则 startTransition 会被 reduceBatch 同步阻塞直到归约结束
-        if (win.frames.length > 500) {
-          await new Promise((r) => setTimeout(r, 0));
+        // 复制当前缓冲:之后到达的实时帧继续留在 pendingRef,等完整回放提交
+        // 后再一次补投。不能在每个 chunk 里读取同一个可变数组,否则切换期
+        // 新到的实时帧会被重复拼进多个 concrete state。
+        const historyFrames = [...(win.frames as Frame[]), ...usageSnapshot, ...buffered];
+        // 归约在 React 状态更新之外完成:state updater 可能被并发 reconciler
+        // 重放,而 reducer 的去重上下文是有意跨 chunk 延续的,不能放进 updater
+        // 里修改。上下文同时保留折叠回放中非单调 seq 的批内语义。
+        const dedupe = createReduceBatchContext(createChatState());
+        let historyState = createChatState();
+        let offset = 0;
+        if (historyFrames.length === 0) {
+          // 空会话也要经过同一条 concrete-state 路径,否则 historyLoaded 永远
+          // 不会变真,composer 的首条消息会被无期限挡住。
+          startTransition(() => {
+            setState(historyState);
+            setHasMore(hasMoreRef.current);
+            setLoadedHistory({ id, epoch });
+          });
+        } else {
+          while (offset < historyFrames.length) {
+            await yieldToBrowser();
+            if (!alive) return;
+            const end = Math.min(historyFrames.length, offset + HISTORY_BATCH_SIZE);
+            const chunk = historyFrames.slice(offset, end);
+            const t2 = performance.now();
+            historyState = reduceBatch(historyState, chunk, dedupe);
+            const done = end >= historyFrames.length;
+            const committed = historyState;
+            startTransition(() => {
+              // concrete state 而非 updater:同一回放的每个中间快照已经在上面
+              // 顺序算好,React 可中断/重试渲染而不会重复执行归约副作用。
+              setState(committed);
+              if (done) {
+                setHasMore(hasMoreRef.current);
+                setLoadedHistory({ id, epoch });
+              }
+            });
+            if (import.meta.env.DEV) {
+              console.log(
+                `[perf] history chunk: ${(performance.now() - t2).toFixed(0)}ms, frames ${offset}-${end}/${historyFrames.length}`,
+              );
+            }
+            offset = end;
+          }
         }
-        startTransition(() => {
-          setState((s) => reduceBatch(s, [...(win.frames as Frame[]), ...usageSnapshot, ...buffered]));
-          // 窗口落地后 running 才可信:composer 的排队补投闸门等这一下;
-          // 与 items 同一个 transition,可见即可信
-          setLoadedHistory({ id, epoch });
-        });
       } catch (e) {
         // 壳只在**成功**路径 emit conn-status(driver/session.rs::open),失败
         // 时 conn 恒为 null、连接条根本不渲染——不外显就是一个不解释的空会话
@@ -217,7 +275,14 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
         // 永不渲染——壳侧会话其实可能还在跑,界面却是个一动不动的空屏
         const buffered = pendingRef.current;
         pendingRef.current = null;
-        if (buffered?.length) setState((s) => reduceBatch(s, buffered));
+        const usage = pendingUsageRef.current;
+        pendingUsageRef.current = null;
+        if (buffered?.length || usage) {
+          setState((s) => {
+            const next = buffered?.length ? reduceBatch(s, buffered) : s;
+            return usage ? patchLastAgentUsage(next, usage.input, usage.output) : next;
+          });
+        }
         setOpenError(e instanceof Error ? e.message : String(e));
       }
     })();
@@ -238,7 +303,14 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
     if (!historyLoaded) return;
     const buffered = pendingRef.current;
     pendingRef.current = null;
-    if (buffered?.length) setState((s) => reduceBatch(s, buffered));
+    const usage = pendingUsageRef.current;
+    pendingUsageRef.current = null;
+    if (buffered?.length || usage) {
+      setState((s) => {
+        const next = buffered?.length ? reduceBatch(s, buffered) : s;
+        return usage ? patchLastAgentUsage(next, usage.input, usage.output) : next;
+      });
+    }
   }, [historyLoaded]);
 
   const loadEarlier = useCallback(async (beforeApply?: () => void, turns = HISTORY_PAGE) => {

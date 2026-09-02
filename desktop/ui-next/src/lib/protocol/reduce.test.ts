@@ -10,6 +10,7 @@ import {
   answerAsk,
   answerPerm,
   createChatState,
+  createReduceBatchContext,
   itemKey,
   permAnchors,
   permStateKey,
@@ -903,6 +904,21 @@ describe("seq 去重(云端重连会重放)", () => {
     expect(s.items.map((it) => it.kind)).toEqual(["thought", "tool"]);
     expect(s.usage).toEqual({ used: 9, size: 100 });
     expect(s.lastSeq).toBe(39);
+  });
+
+  it("回放分片仍保留批内非单调 seq 语义,结果与一次归约一致", () => {
+    const folded = [
+      withSeq(acp({ sessionUpdate: "agent_thought_chunk", content: { text: "想" } }), 3),
+      withSeq(acp({ sessionUpdate: "usage_update", used: 9, size: 100 }), 39),
+      withSeq(acp({ sessionUpdate: "tool_call", toolCallId: "t1", title: "读取" }), 22),
+    ];
+    const expected = reduceBatch(createChatState(), folded);
+    const first = createChatState();
+    const context = createReduceBatchContext(first);
+    const partial = reduceBatch(first, folded.slice(0, 2), context);
+    const actual = reduceBatch(partial, folded.slice(2), context);
+
+    expect(actual).toEqual(expected);
   });
 
   it("批内完全相同的 seq 只归约一次(同批里既回放又直播)", () => {

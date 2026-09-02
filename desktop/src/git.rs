@@ -254,9 +254,14 @@ pub fn git_branch_list(workdir: String) -> Vec<String> {
     if dir.is_empty() {
         return Vec::new();
     }
-    let out = git(dir, &["branch", "--format=%(refname:short)"]);
+    // --format 在部分 Windows git 上不稳定;用 --list + 逐行 trim 最稳妥
+    let out = git(dir, &["branch", "--list"]);
     match out {
-        Ok(s) => s.lines().filter(|l| !l.is_empty()).map(String::from).collect(),
+        Ok(s) => s.lines()
+            .map(|l| l.trim_start_matches("* ").trim().trim_start_matches(' '))
+            .filter(|l| !l.is_empty())
+            .map(String::from)
+            .collect(),
         Err(_) => Vec::new(),
     }
 }

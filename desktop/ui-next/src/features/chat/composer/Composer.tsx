@@ -337,8 +337,8 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
   }, [sessionId, warehouseItems]);
   const toggleWarehouse = useCallback(() => setWarehouseOpen((o) => !o), []);
 
-  // 切会话后焦点落到输入框:sessionId 处理同实例内切换;focusRequest 处理
-  // 设置/新建/云端视图切回时的重挂载。请求消费后由 App 清零,避免引擎
+  // 切会话后焦点落到输入框:sessionId 处理宿主复用实例的切换;focusRequest 处理
+  // 按会话重挂载以及设置/新建/云端视图切回。请求消费后由 App 清零,避免引擎
   // epoch 自愈重挂载重复抢焦点。启动时两者都没有变化,不抢焦点。
   const prevSidRef = useRef(sessionId);
   useEffect(() => {
@@ -354,12 +354,12 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
   // [],把 afterEngineReady 的重试变成了死代码),而引擎重启期这一拉必然
   // 撞上壳的「配置应用中」闸门——清空就是"重启一次模型菜单就空了";
   // 且未处理拒绝会被 index.html 的兜底画成满屏红框。
-  // afterEngineReady 不可省:ChatView 挂 `key={epoch}`,引擎 Ready 且此前掉过
+  // afterEngineReady 不可省:ChatView 挂 `key={epoch:sessionId}`,引擎 Ready 且此前掉过
   // 时整棵树重建,于是这一拉与 useSessionFeed 的 session_open 在**同一次
   // commit 里同刻**打到壳上——后者有 4 次退避、前者一次都没有,只有它会被
   // 「配置应用中」闸门拒掉。而 Composer 是全新实例、models 从 [] 起,上面
   // 那句"失败保留上一份"在挂载这一次是空话:结果就是模型下拉只剩「尚未配置
-  // 模型」,且本实例活着期间换不了模型(key 只认 epoch,切会话也不重建),
+  // 模型」,且本实例活着期间换不了模型(切会话时会重建,引擎恢复仍须重试),
   // 顺带 models.find(...)?.think 恒 undefined、思考档触发器回落「低」给错读数。
   useEffect(() => {
     let alive = true;

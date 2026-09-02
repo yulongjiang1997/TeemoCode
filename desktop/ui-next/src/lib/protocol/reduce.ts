@@ -24,6 +24,24 @@ export interface TimelineDelta {
   changed: readonly number[];
 }
 
+/**
+ * 跨多个时间片归约同一份回放批次时使用的去重上下文。
+ *
+ * 折叠帧的 seq 在一个回合内允许非单调(覆盖语义帧会被收敛到后面的
+ * seq,而流式帧保留首片 seq)。普通 reduceBatch 每次调用都把批首的
+ * lastSeq 当水位，因此不能把回放帧任意切开后直接多次调用。历史渐进
+ * 回放在 React 状态更新之外持有这个上下文，跨片保留批首水位和已见 seq，
+ * 最终结果与一次性 reduceBatch 完全一致。
+ */
+export interface ReduceBatchContext {
+  readonly baseSeq: number;
+  readonly seenSeqs: Set<number>;
+}
+
+export function createReduceBatchContext(s: ChatState): ReduceBatchContext {
+  return { baseSeq: s.lastSeq, seenSeqs: new Set<number>() };
+}
+
 // UI 派生缓存的非持久 sidecar：不污染 ChatState 的协议/全等语义，也会随
 // snapshot 被 GC。消费者只有拿到精确的 from snapshot 才可走增量快路。
 const timelineDeltas = new WeakMap<ChatState, TimelineDelta>();
@@ -740,10 +758,11 @@ export function reduceFrame(s: ChatState, f: Frame): ChatState {
  * - 批内:顺序可信,只丢**完全相同 seq** 的重复(同批里既回放又直播);
  * - 缺 seq/seq=0 的帧(云端旧帧)不参与去重,照常归约。
  * 水位单调抬升,永不回落;重连要重放全量时应从 createChatState() 重来。 */
-export function reduceBatch(s: ChatState, batch: readonly Frame[]): ChatState {
+export function reduceBatch(s: ChatState, batch: readonly Frame[], context?: ReduceBatchContext): ChatState {
   let next = s;
   let watermark = s.lastSeq;
-  const seenInBatch = new Set<number>();
+  const seenInBatch = context?.seenSeqs ?? new Set<number>();
+  const baseSeq = context?.baseSeq ?? s.lastSeq;
   // 壳约 30ms 推一批，常含多个连续文本碎片。逐帧 appendStream 会为每片
   // slice 整个历史数组；先合并同类连续碎片后，一批流式文本只复制一次。
   let stream: { kind: "agent" | "thought"; parts: string[]; timestamp?: number; usage?: { input_tokens?: number; output_tokens?: number } } | null = null;
@@ -757,7 +776,7 @@ export function reduceBatch(s: ChatState, batch: readonly Frame[]): ChatState {
   for (const f of batch) {
     const seq = typeof f.seq === "number" && f.seq > 0 ? f.seq : null;
     if (seq !== null) {
-      if (seq <= s.lastSeq || seenInBatch.has(seq)) continue;
+      if (seq <= baseSeq || seenInBatch.has(seq)) continue;
       seenInBatch.add(seq);
       if (seq > watermark) watermark = seq;
     }
