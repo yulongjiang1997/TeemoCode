@@ -53,7 +53,11 @@ pub trait ShellCtx: Send + Sync + 'static {
     fn on_engine_exit(&self, _instance: u64, _detail: &str, _log_tail: &str) {}
 
     /// 显示系统通知(后台静默;权限未授予时不报错)。
-    fn show_notification(&self, title: &str, body: &str);
+    ///
+    /// 测试壳和其它不需要系统通知的 ShellCtx 实现默认忽略；生产壳
+    /// 在下方覆写为 Tauri 通知。这样新增壳依赖不会让已有替身在编译
+    /// 测试时突然失效。
+    fn show_notification(&self, _title: &str, _body: &str) {}
 }
 
 impl ShellCtx for AppHandle {

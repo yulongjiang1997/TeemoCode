@@ -277,6 +277,22 @@ debug 版 TeemoCode 正在运行锁住了 exe。**先关掉运行中的 TeemoCod
 
 更新仓库已超过配额，不能再依赖 `git push` 发布安装包或 `latest.json`。本次使用现有 `v0.1.32` Release 的 `attach_files` 接口上传 0.1.34 的 exe/sig，再用 Contents API 以 **base64** 更新 `latest.json`；最后必须从 raw URL 和 Release 下载地址做端到端校验。新版本不应为了附件创建新的 tag 或直接向更新仓库推送大文件。
 
+### 2.13 release 版切换任务卡顿（2026-09-03）
+
+**现象**: release 版切换工作区/任务时 UI 停顿 10–20 秒，debug 版不明显；即使 `session_open` 只回放最近几轮，卡顿仍会出现。
+
+**定位**:
+
+1. `session_open → replay_open` 原来会等待全局 `journal_barrier`。所有会话共用一个 journal 写线程，且 `events.jsonl` 每帧直接对 `std::fs::File` 做一次 `writeln!`。
+2. release 引擎产帧更快，切换时更容易把大量 `Append` 排在屏障前；debug 的调试器/开发调度改变了产帧节奏，所以会掩盖这个竞争。卡顿不等于 UI 收到了整份历史，不能只看 `session_open` 的返回帧数判断。
+3. debug 与 release 默认不是同一份 WebView/应用数据：`com.teemocode.debug` 与 `com.teemocode.desktop` 的标识、origin 和数据目录不同。复现或验收前必须分别记录数据根目录、`events.jsonl` 总量、`replay.jsonl` 尾部偏移和屏障耗时；当前 release 会话目录约 1.64GB。
+
+**固定做法**:
+
+- journal append 句柄使用 `BufWriter` 批量写；`Sync`、`Close` 和正常轮末计算 `src_end` 前必须显式 flush，不能为了提速直接取消一致性屏障。
+- release 验收要用与用户相同的数据目录连续切换正在产帧和历史任务；仅用空数据的 debug 包或只测前端 reducer 不算通过。
+- 任何新的回放/日志改动都要同时检查：屏障是否仍为全局、长会话是否会触发全量补录、`src_end` 是否落在已 flush 的文件长度上。
+
 ---
 
 ## 3. 版本记录速查

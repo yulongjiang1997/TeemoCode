@@ -6,7 +6,7 @@
 // stop 的优雅退出。共享状态定义见 ohmy.rs::Inner。
 
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
@@ -103,7 +103,25 @@ pub(super) fn spawn_journal_writer(data_dir: PathBuf) -> mpsc::UnboundedSender<J
     let (tx, mut rx) = mpsc::unbounded_channel::<JournalMsg>();
     std::thread::spawn(move || {
         const MAX_HANDLES: usize = 16;
-        let mut handles: HashMap<String, (u64, std::fs::File)> = HashMap::new();
+        // 事件日志是一帧一行。直接对 std::fs::File 做 writeln! 会让每帧
+        // 都落成一次 Windows 文件写调用；release 引擎产帧更快，切换任务
+        // 时很容易把大量 Append 堵在这个单线程队列里，session_open 随后的
+        // journal barrier 就会表现成 UI 卡住十几秒。按会话缓冲写，barrier /
+        // close / materialize 需要读文件长度时再显式 flush，既保留原来的
+        // 持久化顺序，又把文件 I/O 从“每帧一次”降到“每个缓冲区一次”。
+        let mut handles: HashMap<String, (u64, BufWriter<std::fs::File>)> = HashMap::new();
+
+        fn flush_handle(handles: &mut HashMap<String, (u64, BufWriter<std::fs::File>)>, sid: &str) {
+            if let Some((_, file)) = handles.get_mut(sid) {
+                let _ = file.flush();
+            }
+        }
+
+        fn close_handle(handles: &mut HashMap<String, (u64, BufWriter<std::fs::File>)>, sid: &str) {
+            if let Some((_, mut file)) = handles.remove(sid) {
+                let _ = file.flush();
+            }
+        }
         let mut tick: u64 = 0; // 最近使用刻度(简易 LRU)
         while let Some(msg) = rx.blocking_recv() {
             // 写线程是帧落盘的文件系统边界:它自己 create_dir_all + 追加文件。
@@ -131,7 +149,7 @@ pub(super) fn spawn_journal_writer(data_dir: PathBuf) -> mpsc::UnboundedSender<J
                             let oldest =
                                 handles.iter().min_by_key(|(_, (t, _))| *t).map(|(k, _)| k.clone());
                             if let Some(k) = oldest {
-                                handles.remove(&k); // drop 即关闭
+                                close_handle(&mut handles, &k);
                             }
                         }
                         let dir = data_dir.join(&sid);
@@ -142,7 +160,7 @@ pub(super) fn spawn_journal_writer(data_dir: PathBuf) -> mpsc::UnboundedSender<J
                             .open(dir.join("events.jsonl"))
                         {
                             Ok(f) => {
-                                handles.insert(sid.clone(), (tick, f));
+                                handles.insert(sid.clone(), (tick, BufWriter::new(f)));
                             }
                             Err(e) => {
                                 eprintln!("[desktop] 打开帧日志失败({sid}): {e}");
@@ -162,6 +180,12 @@ pub(super) fn spawn_journal_writer(data_dir: PathBuf) -> mpsc::UnboundedSender<J
                     // 截断只发生在写进 replay.jsonl 的这一刻(见 Turn::guard)
                     turn.guard();
                     let dir = data_dir.join(&sid);
+                    // 正常轮末的 src_end 由当前 events 文件长度推导。Append
+                    // 现在经过 BufWriter，必须先 flush，否则 src_end 会落在
+                    // 上一批缓冲的尾部，下一次打开会重复补录这轮。
+                    if src_end.is_none() {
+                        flush_handle(&mut handles, &sid);
+                    }
                     let end = match src_end {
                         Some(v) => v,
                         None => std::fs::metadata(dir.join("events.jsonl"))
@@ -183,12 +207,15 @@ pub(super) fn spawn_journal_writer(data_dir: PathBuf) -> mpsc::UnboundedSender<J
                     }
                 }
                 JournalMsg::Close { sid, ack } => {
-                    handles.remove(&sid);
+                    close_handle(&mut handles, &sid);
                     if let Some(a) = ack {
                         let _ = a.send(());
                     }
                 }
                 JournalMsg::Sync { ack } => {
+                    for (_, file) in handles.values_mut() {
+                        let _ = file.flush();
+                    }
                     let _ = ack.send(());
                 }
             }
