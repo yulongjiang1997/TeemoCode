@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.35",
+    notes: "修复 release 版本切换工作区/任务时 UI 长时间无响应",
+  },
+  {
     version: "0.1.34",
     notes: "进一步修复 release 版本切换工作区/任务时右侧对话列表卡顿",
   },
