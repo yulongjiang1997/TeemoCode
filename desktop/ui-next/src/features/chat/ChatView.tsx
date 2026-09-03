@@ -910,6 +910,18 @@ export function ChatView({
   onJumpRef.current = onJumpImpl;
   const onJump = useCallback((seq: number, offset?: number) => onJumpRef.current(seq, offset), []);
 
+  // ==== ChatView 渲染计时 ====
+  const renderStartRef = useRef(performance.now());
+  useEffect(() => {
+    renderStartRef.current = performance.now();
+  }, [meta.id]);
+  useEffect(() => {
+    const t = renderStartRef.current;
+    requestAnimationFrame(() => {
+      console.log(`[perf-chat] ChatView 渲染完成: ${(performance.now() - t).toFixed(0)}ms, meta=${meta.id.slice(0,8)}, items=${state.items.length}`);
+    });
+  }, [meta.id, state.items.length]);
+
   // ==== 拖拽附件:HTML5 事件(dragenter/leave 计数配对)+ Linux 壳原生事件 ====
   const [dragging, setDragging] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);

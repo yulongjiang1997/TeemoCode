@@ -143,7 +143,10 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
   const pendingUsageRef = useRef<{ input: number; output: number } | null>(null);
 
   useEffect(() => {
+    const t0 = performance.now();
+    console.log(`[perf] === 会话切换开始 id=${id.slice(0,8)} epoch=${epoch} ===`);
     setState(createChatState());
+    console.log(`[perf] setState(createChatState) done: ${(performance.now() - t0).toFixed(1)}ms`);
     setConn(null);
     setLoadedHistory(null);
     setOpenError(null);
@@ -190,13 +193,12 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
       try {
         await Promise.all([framesP, connP]);
         if (!alive) return;
-        const t0 = performance.now();
+        const t_ipc_start = performance.now();
+        console.log(`[perf] 等待引擎就绪...`);
         const win = await afterEngineReady(() => sessionOpen(id, readTaskExpandLimit()));
         if (!alive) return;
-        const t1 = performance.now();
-        if (import.meta.env.DEV) {
-          console.log(`[perf] session_open IPC: ${(t1 - t0).toFixed(0)}ms, frames: ${win.frames.length}`);
-        }
+        const t_ipc_done = performance.now();
+        console.log(`[perf] session_open 完成: ${(t_ipc_done - t_ipc_start).toFixed(0)}ms, frames=${win.frames.length}, cursor=${win.cursor}, has_more=${win.has_more}`);
         cursorRef.current = win.cursor;
         hasMoreRef.current = !!win.has_more;
         // 窗口在前、等待期间攒下的实时帧在后,一次归约按真实先后落地。
@@ -227,39 +229,45 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
         // 后再一次补投。不能在每个 chunk 里读取同一个可变数组,否则切换期
         // 新到的实时帧会被重复拼进多个 concrete state。
         const historyFrames = [...(win.frames as Frame[]), ...usageSnapshot, ...buffered];
-        // 归约在 React 状态更新之外完成:state updater 可能被并发 reconciler
-        // 重放,而 reducer 的去重上下文是有意跨 chunk 延续的,不能放进 updater
-        // 里修改。上下文同时保留折叠回放中非单调 seq 的批内语义。
+        console.log(`[perf] 帧组装: win=${win.frames.length} usage=${usageSnapshot.length} buffered=${buffered.length} total=${historyFrames.length}`);
         const dedupe = createReduceBatchContext(createChatState());
         let historyState = createChatState();
         let offset = 0;
+        const t_reduce_start = performance.now();
         if (historyFrames.length === 0) {
-          // 空会话也要经过同一条 concrete-state 路径,否则 historyLoaded 永远
-          // 不会变真,composer 的首条消息会被无期限挡住。
+          console.log(`[perf] 空会话:直接 startTransition`);
           startTransition(() => {
             setState(historyState);
             setHasMore(hasMoreRef.current);
             setLoadedHistory({ id, epoch });
           });
+          console.log(`[perf] 空会话 startTransition 提交耗时: ${(performance.now() - t_reduce_start).toFixed(1)}ms`);
         } else {
+          let chunkCount = 0;
           while (offset < historyFrames.length) {
+            const t_chunk_start = performance.now();
             await yieldToBrowser();
             if (!alive) return;
             const end = Math.min(historyFrames.length, offset + HISTORY_BATCH_SIZE);
             const chunk = historyFrames.slice(offset, end);
             historyState = reduceBatch(historyState, chunk, dedupe);
+            const t_chunk_done = performance.now();
+            chunkCount++;
+            console.log(`[perf] chunk ${chunkCount}: offset=${offset}-${end} frames=${chunk.length} reduceBatch=${(t_chunk_done - t_chunk_start).toFixed(1)}ms items=${historyState.items.length}`);
             offset = end;
           }
+          console.log(`[perf] 归约完成: ${chunkCount} chunks, 总耗时=${(performance.now() - t_reduce_start).toFixed(1)}ms`);
           if (!alive) return;
           const committed = historyState;
+          const t_commit = performance.now();
           startTransition(() => {
-            // concrete state 而非 updater:归约已经在 React 状态之外完成,
-            // React 可中断/重试这次渲染而不会重复执行归约副作用。
             setState(committed);
             setHasMore(hasMoreRef.current);
             setLoadedHistory({ id, epoch });
           });
+          console.log(`[perf] startTransition 提交: ${(performance.now() - t_commit).toFixed(1)}ms, items=${committed.items.length}`);
         }
+        console.log(`[perf] === 会话切换完成 id=${id.slice(0,8)} 总耗时=${(performance.now() - t_ipc_start).toFixed(0)}ms ===`);
       } catch (e) {
         // 壳只在**成功**路径 emit conn-status(driver/session.rs::open),失败
         // 时 conn 恒为 null、连接条根本不渲染——不外显就是一个不解释的空会话

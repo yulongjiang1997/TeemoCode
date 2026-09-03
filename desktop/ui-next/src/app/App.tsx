@@ -660,6 +660,7 @@ export function App() {
   }, [current, settingsOpen, creating, space, cloudTask, t]);
 
   const select = (meta: SessionMeta) => {
+    console.log(`[perf] select: id=${meta.id.slice(0,8)} title="${meta.title?.slice(0,20)}"`);
     if (meta.id !== currentId || settingsOpen || creating || space === "cloud") requestComposerFocus();
     setCurrentId(meta.id);
     writeLastSession(meta.id);
