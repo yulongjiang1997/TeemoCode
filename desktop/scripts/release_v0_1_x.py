@@ -158,16 +158,23 @@ def main():
     # ---------- 5. 签名(必须 cmd.exe)----------
     step(5, total, "签名(cmd.exe 内执行,bash 会转义坏密码)")
     # 正斜杠路径(Path 的反斜杠形式经 subprocess 传给 cmd 后偶发
-    # InvalidFilename;正斜杠 Windows API 全程接受)
+    # InvalidFilename;正斜杠 Windows API 全程接受)。
+    #
+    # 这里不能给路径再套一层引号: subprocess 把整个 sign_cmd 作为
+    # cmd.exe 的 /c 参数传递时, Tauri CLI 会把带引号的路径解析成错误
+    # 的私钥上下文,最后表现为误导性的 "Wrong password"。当前发布路径
+    # 都不含空格,保留为裸路径; /v:off 防止密码里的 ! 被 cmd 展开。
     key_str = str(PRIVATE_KEY).replace("\\", "/")
     exe_str = str(exe_path).replace("\\", "/")
+    if " " in key_str or " " in exe_str:
+        raise SystemExit("签名路径包含空格,请改用不经过 cmd.exe /c 的参数数组调用")
     sign_cmd = (
         f'npx --yes @tauri-apps/cli@2 signer sign '
-        f'-f "{key_str}" '
+        f'-f {key_str} '
         f'-p "{SIGN_PASSWORD}" '
-        f'"{exe_str}"'
+        f'{exe_str}'
     )
-    r = subprocess.run(["cmd.exe", "/c", sign_cmd], cwd=str(DESKTOP), capture_output=True, text=True, encoding="utf-8", errors="replace")
+    r = subprocess.run(["cmd.exe", "/d", "/v:off", "/c", sign_cmd], cwd=str(DESKTOP), capture_output=True, text=True, encoding="utf-8", errors="replace")
     if r.returncode != 0 or not sig_path.exists():
         print(r.stdout[-1500:], r.stderr[-1500:])
         raise SystemExit("签名失败")
