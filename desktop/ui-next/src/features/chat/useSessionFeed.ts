@@ -206,10 +206,12 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
         // 一次性挂载——同步提交就是切会话 3.8s 冻结的主体(2026-08-10 Safari
         // 时间线:click 事件里 3.6s 微任务;彼时每条消息的 markdown 还随挂载
         // 全量解析,现已改视口懒渲染,见 Markdown.tsx::useNearViewport)。
-        // startTransition 让 React 时间切片地渲染它:打字/点击随时插队,
-        // 内容仍一次性出现,但主线程不再被整口锅压住。历史帧属于"过去",
-        // 天然是非紧急更新;实时帧批(下方 onFrames)保持紧急,流式尾部
-        // 的延迟不能加。
+        // 归约可以在事件循环之间分片,但**不能每片提交一个 React 快照**:
+        // 每个快照都会让时间线投影、HeightIndex、ResizeObserver 和滚动锚点
+        // 重跑一次,长窗口反而变成 N 次全量布局。debug WebView 往往只是因为
+        // 调试器/开发服务器改变了调度节奏而不明显,release 才会暴露这个问题。
+        // 所以历史回放期间只在内存里推进 concrete state,完成后只提交一次
+        // transition;分片之间仍交还事件循环,点击/输入不会被归约长任务饿死。
         // ⚠️ 缓冲态必须**延续到这次 transition 提交落地**(下方 historyLoaded
         // effect 才置 null 放行):同一个 state 上的任何紧急 setState 都会作废
         // 进行中的 transition 渲染,处理完紧急更新后**从头重跑**。此前这里先
@@ -245,26 +247,18 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
             if (!alive) return;
             const end = Math.min(historyFrames.length, offset + HISTORY_BATCH_SIZE);
             const chunk = historyFrames.slice(offset, end);
-            const t2 = performance.now();
             historyState = reduceBatch(historyState, chunk, dedupe);
-            const done = end >= historyFrames.length;
-            const committed = historyState;
-            startTransition(() => {
-              // concrete state 而非 updater:同一回放的每个中间快照已经在上面
-              // 顺序算好,React 可中断/重试渲染而不会重复执行归约副作用。
-              setState(committed);
-              if (done) {
-                setHasMore(hasMoreRef.current);
-                setLoadedHistory({ id, epoch });
-              }
-            });
-            if (import.meta.env.DEV) {
-              console.log(
-                `[perf] history chunk: ${(performance.now() - t2).toFixed(0)}ms, frames ${offset}-${end}/${historyFrames.length}`,
-              );
-            }
             offset = end;
           }
+          if (!alive) return;
+          const committed = historyState;
+          startTransition(() => {
+            // concrete state 而非 updater:归约已经在 React 状态之外完成,
+            // React 可中断/重试这次渲染而不会重复执行归约副作用。
+            setState(committed);
+            setHasMore(hasMoreRef.current);
+            setLoadedHistory({ id, epoch });
+          });
         }
       } catch (e) {
         // 壳只在**成功**路径 emit conn-status(driver/session.rs::open),失败

@@ -11,7 +11,7 @@
 // 行交互:右键 = 行菜单(重命名/归档/删除二段确认)。
 // 行/组头/小节折叠的呈现件收口在 listKit(三列表统一,不做两套)。
 import { IconArchive, IconChevronDown, IconChevronLeft, IconChevronRight, IconChevronUp, IconDownload, IconFolder, IconFolderOpen, IconInbox, IconMessages, IconPin, IconPlus, IconRefresh, IconX } from "@tabler/icons-react";
-import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import { CloudTaskList, useCloudProjects, useCloudTasks, type CloudTasksFeed } from "@/features/cloud/CloudTaskList";
@@ -86,7 +86,7 @@ interface RowPlumbing {
   usage: ReadonlyMap<string, TokenUsage>;
 }
 
-function SessionRow({ meta, p, level }: { meta: SessionMeta; p: RowPlumbing; level?: number }) {
+const SessionRow = memo(function SessionRow({ meta, p, level }: { meta: SessionMeta; p: RowPlumbing; level?: number }) {
   const { t } = useI18n();
   const attention = p.attentionIds?.has(meta.id) ?? false;
 
@@ -171,7 +171,25 @@ function SessionRow({ meta, p, level }: { meta: SessionMeta; p: RowPlumbing; lev
       menuItems={menuItems}
     />
   );
-}
+}, (prev, next) => {
+  // currentId 改变时只有「旧选中行」和「新选中行」的 active 几何/颜色
+  // 真的变化。这里不能直接比较 p 对象(它按渲染新建),否则每次切任务
+  // 仍会把侧栏所有行重新跑一遍；稳定 actions 代理见 Sidebar 内部。
+  const prevActive = prev.meta.id === prev.p.currentId;
+  const nextActive = next.meta.id === next.p.currentId;
+  return (
+    prev.meta === next.meta &&
+    prev.level === next.level &&
+    prevActive === nextActive &&
+    prev.p.space === next.p.space &&
+    prev.p.attentionIds === next.p.attentionIds &&
+    prev.p.renamingId === next.p.renamingId &&
+    prev.p.usage === next.p.usage &&
+    prev.p.actions === next.p.actions &&
+    prev.p.onRenameStart === next.p.onRenameStart &&
+    prev.p.onRenameEnd === next.p.onRenameEnd
+  );
+});
 
 /** level:缩进级(listKit.LEVELS——层级缩进进行内、行底满宽,行左缘的警示条
  * 也跟着这一级走;嵌套 margin 会把 hover/选中底压窄错位,旧 UI 即行满宽 +
@@ -180,8 +198,11 @@ function rows(list: SessionMeta[], p: RowPlumbing, level?: number) {
   return list.map((meta) => <SessionRow key={meta.id} meta={meta} p={p} level={level} />);
 }
 
+const groupContainsSession = (group: ProjectGroup, id: string | null): boolean =>
+  !!id && (group.sessions.some((s) => s.id === id) || group.archivedSessions.some((s) => s.id === id));
+
 /** 一个项目分组(daisyUI menu 的 details 折叠;含「已归档任务 · N」小节)。 */
-function ProjectDetails({
+const ProjectDetails = memo(function ProjectDetails({
   group,
   p,
   collapsed,
@@ -389,13 +410,48 @@ function ProjectDetails({
       </details>
     </li>
   );
-}
+}, (prev, next) => {
+  if (
+    prev.group !== next.group ||
+    prev.collapsed !== next.collapsed ||
+    prev.archOpen !== next.archOpen ||
+    prev.archivedProject !== next.archivedProject ||
+    prev.nested !== next.nested ||
+    prev.drag !== next.drag ||
+    prev.dropTarget !== next.dropTarget ||
+    prev.customGroups !== next.customGroups ||
+    prev.projectGroups !== next.projectGroups ||
+    prev.assignProject !== next.assignProject ||
+    prev.pinnedProjects !== next.pinnedProjects ||
+    prev.toggleProjectPin !== next.toggleProjectPin ||
+    prev.onToggleCollapsed !== next.onToggleCollapsed ||
+    prev.onToggleArchOpen !== next.onToggleArchOpen ||
+    prev.onProjectArchiveToggle !== next.onProjectArchiveToggle
+  ) {
+    return false;
+  }
+  if (
+    prev.p.space !== next.p.space ||
+    prev.p.attentionIds !== next.p.attentionIds ||
+    prev.p.renamingId !== next.p.renamingId ||
+    prev.p.usage !== next.p.usage ||
+    prev.p.actions !== next.p.actions
+  ) {
+    return false;
+  }
+  // 只有当前任务属于这个项目时,切换 currentId 才会改变「始终可见」规则;
+  // 其他项目的折叠列表保持原树,连子节点 reconciliation 也跳过。
+  return (
+    prev.p.currentId === next.p.currentId ||
+    (!groupContainsSession(prev.group, prev.p.currentId) && !groupContainsSession(next.group, next.p.currentId))
+  );
+});
 
 /** 项目组任务列表 + 折叠:默认只直接展开最后 N 个任务(prefs
  *  taskExpandLimit,设置页可改),更早的折叠成一行「显示更多 · M」,
  *  点击整组铺开。当前选中/等待提问的任务始终直接可见——正在交互的
  *  任务被折起来会让人以为列表丢了。 */
-function TaskListWithMore({
+const TaskListWithMore = memo(function TaskListWithMore({
   group,
   p,
   level,
@@ -449,7 +505,27 @@ function TaskListWithMore({
       </ul>
     </>
   );
-}
+}, (prev, next) => {
+  if (prev.group !== next.group || prev.level !== next.level) return false;
+  if (
+    prev.p.space !== next.p.space ||
+    prev.p.attentionIds !== next.p.attentionIds ||
+    prev.p.renamingId !== next.p.renamingId ||
+    prev.p.usage !== next.p.usage ||
+    prev.p.actions !== next.p.actions
+  ) {
+    return false;
+  }
+  // 只有当前任务属于这个项目时,切换 currentId 才会改变「始终可见」规则；
+  // 其他项目的折叠列表保持原树,连子节点 reconciliation 也跳过。
+  if (
+    prev.p.currentId !== next.p.currentId &&
+    (groupContainsSession(prev.group, prev.p.currentId) || groupContainsSession(next.group, next.p.currentId))
+  ) {
+    return false;
+  }
+  return true;
+});
 
 /** 自定义分组折叠块:组头 = 文件夹图标 + 名称 + token 合计 + 菜单;
  *  成员是「项目」,以普通行样式展示(非完整项目头,展开看任务)。 */
@@ -1151,6 +1227,26 @@ export function Sidebar({
   const [pinnedProjects, setPinnedProjects] = useState<Set<string>>(readPinnedProjects);
   const [creatingGroup, setCreatingGroup] = useState(false);
 
+  // App 每次选中任务都会重渲染并重新创建 actions 对象。侧栏行的菜单回调
+  // 不依赖当前选中项本身,若把这个对象原样塞进每一行,React.memo 会被
+  // 每次选择击穿。代理保持引用稳定,调用时再转发到最新 actions,因此既
+  // 不触发整表重渲染,也不会把旧的删除/改名回调留在菜单里。
+  const actionsRef = useRef(actions);
+  actionsRef.current = actions;
+  const stableActions = useMemo<SidebarActions>(
+    () => ({
+      onSelect: (meta) => actionsRef.current.onSelect(meta),
+      onDelete: (meta) => actionsRef.current.onDelete(meta),
+      onToggleArchive: (meta) => actionsRef.current.onToggleArchive(meta),
+      onRename: (meta, title) => actionsRef.current.onRename(meta, title),
+      onNewTask: () => actionsRef.current.onNewTask(),
+      onNewTaskIn: (workdir) => actionsRef.current.onNewTaskIn(workdir),
+    }),
+    [],
+  );
+  const onRenameStart = useCallback((id: string) => setRenamingId(id), []);
+  const onRenameEnd = useCallback(() => setRenamingId(null), []);
+
   const commitCustomGroups = (next: CustomGroup[]) => {
     setCustomGroups(next);
     writeCustomGroups(next);
@@ -1167,33 +1263,44 @@ export function Sidebar({
     for (const [key, gid] of Object.entries(nextMap)) if (gid === id) delete nextMap[key];
     setProjectGroups(nextMap);
     writeProjectGroups(nextMap);  };
-  const assignProject = (key: string, gid: string | null) => {
-    const nextMap = { ...projectGroups };
-    if (gid === null) delete nextMap[key];
-    else nextMap[key] = gid;
-    setProjectGroups(nextMap);
-    writeProjectGroups(nextMap);
-  };
+  const assignProject = useCallback((key: string, gid: string | null) => {
+    setProjectGroups((previous) => {
+      const nextMap = { ...previous };
+      if (gid === null) delete nextMap[key];
+      else nextMap[key] = gid;
+      writeProjectGroups(nextMap);
+      return nextMap;
+    });
+  }, []);
   // 分组置顶/拖动排序(与项目同一语义:置顶在前,其余按手动序)
-  const toggleGroupPin = (id: string) => {
-    commitCustomGroups(customGroups.map((g) => (g.id === id ? { ...g, pinned: !g.pinned } : g)));
-  };
-  const reorderGroups = (from: number, to: number) => {
+  const toggleGroupPin = useCallback((id: string) => {
+    setCustomGroups((previous) => {
+      const next = previous.map((g) => (g.id === id ? { ...g, pinned: !g.pinned } : g));
+      writeCustomGroups(next);
+      return next;
+    });
+  }, []);
+  const reorderGroups = useCallback((from: number, to: number) => {
     // 渲染用排序序(置顶在前);拖动索引是排序后的,存储也按排序后的序
-    const sorted = sortCustomGroups(customGroups);
-    const m = sorted[from];
-    if (m === undefined) return;
-    sorted.splice(from, 1);
-    sorted.splice(to, 0, m);
-    commitCustomGroups(sorted);
-  };
-  const toggleProjectPin = (key: string) => {
-    const next = new Set(pinnedProjects);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    setPinnedProjects(next);
-    writePinnedProjects(next);
-  };
+    setCustomGroups((previous) => {
+      const sorted = sortCustomGroups(previous);
+      const m = sorted[from];
+      if (m === undefined) return previous;
+      sorted.splice(from, 1);
+      sorted.splice(to, 0, m);
+      writeCustomGroups(sorted);
+      return sorted;
+    });
+  }, []);
+  const toggleProjectPin = useCallback((key: string) => {
+    setPinnedProjects((previous) => {
+      const next = new Set(previous);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      writePinnedProjects(next);
+      return next;
+    });
+  }, []);
   // 会话列表变化时重拉一次用量(usage 事件由壳记账,聚合后按会话给徽标)
   const [usageMap, setUsageMap] = useState<ReadonlyMap<string, TokenUsage>>(new Map());
   useEffect(() => {
@@ -1216,18 +1323,62 @@ export function Sidebar({
   const cloudFeed = useCloudTasks(cloud?.reloadKey ?? 0, cloudEnabled);
   const cloudProjects = useCloudProjects(cloud?.reloadKey ?? 0, cloudEnabled);
 
+  // 当前任务变化不会改变 sessions。把空间过滤/项目分组从 body() 中移出并
+  // 缓存，避免每次点侧栏任务都重新扫描全部会话、重建所有 ProjectGroup；
+  // 真实数据变化或用户调整项目结构时才重新计算。
+  const pool = useMemo(
+    () => sessions.filter((m) => (space === "chat" ? m.kind === "chat" : m.kind !== "chat")),
+    [sessions, space],
+  );
+  const localGrouped = useMemo(
+    () =>
+      space === "local"
+        ? groupLocalSessions(pool, order, archivedProjects, customGroups, projectGroups, pinnedProjects)
+        : null,
+    [space, pool, order, archivedProjects, customGroups, projectGroups, pinnedProjects],
+  );
+  const visibleKeys = useMemo(() => localGrouped?.projects.map((g) => g.key) ?? [], [localGrouped]);
+  const onDragStart = useCallback((key: string) => setDraggedKey(key), []);
+  const onDragOver = useCallback((key: string) => setDragOverKey((prev) => (prev === key ? prev : key)), []);
+  const onDragEnd = useCallback(() => {
+    setDraggedKey(null);
+    setDragOverKey(null);
+  }, []);
+  const onDropBefore = useCallback(
+    (before: string | null) => {
+      setDragOverKey(null);
+      if (!draggedKey || draggedKey === before) return;
+      // 拖的是分组内项目 → 落到顶部项目区 = 移出分组
+      if (!visibleKeys.includes(draggedKey)) {
+        assignProject(draggedKey, null);
+        setDraggedKey(null);
+        return;
+      }
+      const next = reorderKeys(visibleKeys, draggedKey, before);
+      setDraggedKey(null);
+      if (next.length === visibleKeys.length && next.every((k, i) => k === visibleKeys[i])) return;
+      setOrder(next);
+      writeProjectOrder(next);
+    },
+    [assignProject, draggedKey, visibleKeys],
+  );
+  const drag = useMemo(
+    () => ({ onDragStart, onDragOver, onDragEnd, onDropBefore }),
+    [onDragEnd, onDragOver, onDragStart, onDropBefore],
+  );
+
   const p: RowPlumbing = {
     space,
     currentId,
-    actions,
+    actions: stableActions,
     attentionIds,
     renamingId,
-    onRenameStart: setRenamingId,
-    onRenameEnd: () => setRenamingId(null),
+    onRenameStart,
+    onRenameEnd,
     usage: usageMap,
   };
 
-  const toggleCollapsed = (key: string, open: boolean) => {
+  const toggleCollapsed = useCallback((key: string, open: boolean) => {
     setCollapsed((prev) => {
       const next = new Set(prev);
       if (open) next.delete(key);
@@ -1235,9 +1386,9 @@ export function Sidebar({
       writeCollapsedGroups(next);
       return next;
     });
-  };
+  }, []);
 
-  const toggleSessionArchOpen = (key: string) => {
+  const toggleSessionArchOpen = useCallback((key: string) => {
     setSessionArchOpen((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
@@ -1245,9 +1396,9 @@ export function Sidebar({
       writeSessionArchivesOpen(next);
       return next;
     });
-  };
+  }, []);
 
-  const toggleProjectArchive = (key: string) => {
+  const toggleProjectArchive = useCallback((key: string) => {
     setArchivedProjects((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
@@ -1255,7 +1406,7 @@ export function Sidebar({
       writeArchivedProjects(next);
       return next;
     });
-  };
+  }, []);
 
   const body = () => {
     if (space === "stats") return null;
@@ -1286,7 +1437,6 @@ export function Sidebar({
       />
     );
 
-    const pool = sessions.filter((m) => (space === "chat" ? m.kind === "chat" : m.kind !== "chat"));
     if (pool.length === 0) {
       const chat = space === "chat";
       const EmptyIcon = chat ? IconMessages : IconInbox;
@@ -1318,35 +1468,9 @@ export function Sidebar({
       );
     }
 
-    const grouped = groupLocalSessions(pool, order, archivedProjects, customGroups, projectGroups, pinnedProjects);
-    const visibleKeys = grouped.projects.map((g) => g.key);
-    const drag = {
-      onDragStart: (key: string) => setDraggedKey(key),
-      onDragOver: (key: string) => setDragOverKey((prev) => (prev === key ? prev : key)),
-      onDragEnd: () => {
-        setDraggedKey(null);
-        setDragOverKey(null);
-      },
-      /** before=null → 移到末尾(列表底部的收尾落区)。 */
-      onDropBefore: (before: string | null) => {
-        setDragOverKey(null);
-        if (!draggedKey || draggedKey === before) return;
-        // 拖的是分组内项目 → 落到顶部项目区 = 移出分组
-        if (!visibleKeys.includes(draggedKey)) {
-          assignProject(draggedKey, null);
-          setDraggedKey(null);
-          return;
-        }
-        const next = reorderKeys(visibleKeys, draggedKey, before);
-        setDraggedKey(null);
-        // 结果与原序相同就什么都不做:拖到自己正下方那个组头时,
-        // 「移到它之前」恰好等于原位——落点线照画、松手却不动,看起来像坏了
-        // (旧 UI 有专门的 settled 判定,注释原话「避免『看起来会动其实不动』」)
-        if (next.length === visibleKeys.length && next.every((k, i) => k === visibleKeys[i])) return;
-        setOrder(next);
-        writeProjectOrder(next);
-      },
-    };
+    // space === "local" 已在上面的分支排除,此处只为类型收窄兜底。
+    const grouped = localGrouped;
+    if (!grouped) return null;
     /** 落点是否**真的会改变顺序**(不会就不画线)。 */
     const willMove = (before: string | null): boolean => {
       if (!draggedKey || draggedKey === before) return false;

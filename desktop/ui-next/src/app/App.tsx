@@ -8,7 +8,7 @@
 // - D8 增量自愈:session-event/意图指向未知 id → 重拉全表再选中;
 // - H9 意图消费:open-* 事件送达即 takeUiIntent 消费壳侧副本,防刷新重放。
 import { IconAlertCircle, IconChartBar, IconCircleCheck, IconCloud, IconFolderCode, IconHelpCircle, IconMessages, IconPlayerStop, IconSend, IconSettings, IconWorld, IconX } from "@tabler/icons-react";
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import { ChatView } from "@/features/chat/ChatView";
 import { UsageStatsView } from "@/features/stats/UsageStatsView";
@@ -644,7 +644,7 @@ export function App() {
     };
   }, []);
 
-  const current = sessions.find((m) => m.id === currentId) ?? null;
+  const current = useMemo(() => sessions.find((m) => m.id === currentId) ?? null, [sessions, currentId]);
 
   // 标题跟随**主区实际渲染的那个视图**,各状态都要进依赖(见
   // shellChrome.windowContextLabel 头注:此前只认 current,切设置/新建/云端
@@ -686,12 +686,15 @@ export function App() {
 
   // 空间导轨徽标:按空间分账。cloud 的数据不在壳的会话表里(CloudTaskView
   // 自己拉),没有等待确认这一态,恒 0
-  const waiting: Record<Space, number> = {
-    local: sessions.filter((m) => m.kind !== "chat" && m.waiting_ask).length,
-    cloud: 0,
-    chat: sessions.filter((m) => m.kind === "chat" && m.waiting_ask).length,
-    stats: 0,
-  };
+  const waiting = useMemo<Record<Space, number>>(
+    () => ({
+      local: sessions.filter((m) => m.kind !== "chat" && m.waiting_ask).length,
+      cloud: 0,
+      chat: sessions.filter((m) => m.kind === "chat" && m.waiting_ask).length,
+      stats: 0,
+    }),
+    [sessions],
+  );
 
   // 新建弹窗的最近目录:非 chat、未归档(会话与项目两级),按最近活跃排,项目 key 去重
   const recentDirs = (() => {

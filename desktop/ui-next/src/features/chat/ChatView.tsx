@@ -170,6 +170,11 @@ export function ChatView({
   // 头部 token 用量:会话切换时抓一次(usage 事件由壳记账;子代理已归并进父任务)
   const [usage, setUsage] = useState<TokenUsage | null>(null);
   useEffect(() => {
+    // session_open 的历史回放与主时间线共用 WebView 主线程。用量只影响
+    // header 的一个徽标,不能在长历史尚未落地时插入第二次 ChatView render;
+    // 等 concrete history snapshot 提交后再查,避免 release 版切换期被旁路
+    // 的 usageStats 结果打断。
+    if (!historyLoaded) return;
     let alive = true;
     void usageStats()
       .then((data) => {
@@ -180,7 +185,7 @@ export function ChatView({
     return () => {
       alive = false;
     };
-  }, [meta.id]);
+  }, [historyLoaded, meta.id]);
 
   // ===== 备用模型链:key 失败 → 切下一个备用模型 → 重发该指令 =====
   const rotatingRef = useRef(false);
@@ -761,6 +766,12 @@ export function ChatView({
     let alive = true;
     setOutline([]);
     outlineOffsetsRef.current = new Map();
+    // 大纲计算会扫描整份 state.items,而首份历史正在进入时间线时它没有
+    // 可见收益。延后到 historyLoaded 后,避免它与切换期的最后一次投影/布局
+    // 竞争主线程,尤其是 release WebView 的同步 layout 阶段。
+    if (!historyLoaded) return () => {
+      alive = false;
+    };
     void sessionOutline(meta.id).then((items) => {
       if (alive) {
         outlineOffsetsRef.current = new Map(items.map((item) => [item.seq, item.offset]));
@@ -770,7 +781,7 @@ export function ChatView({
     return () => {
       alive = false;
     };
-  }, [meta.id]);
+  }, [historyLoaded, meta.id]);
   const prevRunning = useRef(false);
   useEffect(() => {
     const was = prevRunning.current;
