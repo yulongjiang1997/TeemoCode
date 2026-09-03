@@ -222,7 +222,7 @@ with urllib.request.urlopen(req, timeout=30) as r:
 
 **现状与对策**:
 - 任何 git push(master/tag)都会被拒;
-- exe 统一挂 **v0.1.22 的 Release** 下(文件名带版本不冲突);
+- exe 统一挂现有稳定 Release 下(当前使用 **v0.1.32**,文件名带版本不冲突);
 - latest.json 走 **Contents API** 更新;
 - ~~filter-branch 重写历史瘦身~~ 也没用——push 本身就被拒,历史瘦身后的对象传不上去。除非升 Gitee 付费版或换更新源,否则现状就是终态。
 
@@ -254,12 +254,36 @@ debug 版 TeemoCode 正在运行锁住了 exe。**先关掉运行中的 TeemoCod
 
 刚传完的 asset 下载 404 是正常的,等几十秒再验证(脚本里的重试循环已覆盖)。
 
+### 2.11 0.1.34 签名报“密码错误”(2026-09-03)
+
+**现象**: `tauri signer sign` 报 `incorrect updater private key password`，但密码本身没有更换。
+
+**根因**:
+
+1. `signer sign` 不能假设会用 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 环境变量代替 `-p`;只传环境变量时会进入错误的密码路径。
+2. 如果同时存在空的 `TAURI_SIGNING_PRIVATE_KEY`，它会和 `-f/--private-key-path` 冲突；删除变量，不要把它设为空字符串。
+3. Python 把整条命令交给 `cmd.exe /c` 时，路径再套引号会被 Tauri CLI 解析成错误的私钥/文件上下文，最终被误报成“密码错误”。密码中的 `!` 还可能被 cmd 的 delayed expansion 改写。
+
+**固定做法**:
+
+- 使用 `cmd.exe /d /v:off /c`，密码显式通过 `-p` 传入。
+- 私钥使用 `-f`，同时确保 `TAURI_SIGNING_PRIVATE_KEY` 和 `TAURI_SIGNING_PRIVATE_KEY_PATH` 未设置。
+- 路径统一使用 `/`;当前发布路径不含空格时，`/c` 命令里的路径不要再套引号。发布脚本遇到含空格路径会直接提示，不要自行加引号绕过。
+- 签名后检查 `.sig` 存在，并核对签名使用的公钥与 `tauri.conf.json` 一致；再做远端下载、字节数、SHA-256 和签名回读校验。
+
+已将上述规则固化到 `scripts/release_v0_1_x.py`，后续发布直接使用脚本，不要手工重新拼接签名命令。
+
+### 2.12 Gitee 配额下的 0.1.34 发布
+
+更新仓库已超过配额，不能再依赖 `git push` 发布安装包或 `latest.json`。本次使用现有 `v0.1.32` Release 的 `attach_files` 接口上传 0.1.34 的 exe/sig，再用 Contents API 以 **base64** 更新 `latest.json`；最后必须从 raw URL 和 Release 下载地址做端到端校验。新版本不应为了附件创建新的 tag 或直接向更新仓库推送大文件。
+
 ---
 
 ## 3. 版本记录速查
 
 | 版本 | 主要内容 |
 |---|---|
+| 0.1.34 | 工作区切换任务卡顿修复 + 发布签名命令修复 |
 | 0.1.26 | Git 技能库导入 + 大模型解析(并行) + 摘要标签持久化 + 版本化 base_url 修复 |
 | 0.1.25 | 指令仓库 + confirm 崩溃修复 + 队列持久化 + 团队注入 |
 | 0.1.24 | 团队模式编排注入 + 队列弹窗 + GIF 桌宠动画 |
