@@ -2,12 +2,12 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "TeemoCode",
   "mainBinaryName": "TeemoCode",
-  "version": "0.1.33",
+  "version": "0.1.36",
   "identifier": "com.teemocode.desktop",
   "build": {
     "frontendDist": "uidist",
     "beforeBuildCommand": {
-      "script": "npm ci && npm run build",
+      "script": "echo skip-frontend-already-built",
       "cwd": "ui-next"
     }
   },

@@ -31,6 +31,41 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
 
 ## 条目
 
+[任务修改记录(用户要求:每次修改任务都记录标题与大纲)]
+- Date: 2026-09-05
+- Context: 用户要求从现在起在记忆文件中记录每次修改任务的标题和大纲
+- Instructions:
+  - 每完成一个修改任务,在「任务修改记录」下追加一条:标题 + 大纲(做了什么/改了哪些文件/结果)。
+  - 该记录是版本回溯与"代码丢失事故"排查的依据,必须持续维护。
+
+---
+
+### 任务:release 版切换任务工作区卡 6-10 秒 + cmd 黑框闪烁(定位与修复)
+- Date: 2026-09-04 ~ 2026-09-05
+- Context: 用户报告 0.1.27 切任务工作区渲染慢(6-10s)且卡住 UI;0.1.25/26 及官方 0.1.26 安装包不卡;debug 版不卡
+- Category: 排错调试|构建方法
+- 大纲:
+  1. **排查过程**:用 git worktree 在独立目录依次构建 v0.1.25(不卡)、v0.1.26(不卡)、v0.1.27(卡)锁定范围;对比官方 0.1.26 安装包(8/30)与今日重打包发现 .text 段差 7.2KB,官方包含从未提交的代码(allow-todo-parse/allow-usage-stats 权限证明),该代码随 0.1.27 重打包永久丢失。
+  2. **根因确认**:0.1.27 新增的 4 个 git 命令(git_branch/git_branch_list/git_is_clean/git_checkout)是同步 #[tauri::command] pub fn——Tauri 同步命令在主线程执行,切任务时 ChatView useEffect 必触发 git 子进程 spawn,大仓库+杀软下冻结 UI 数秒。
+  3. **修复三处**(已提交 wip-local,commit dd6193a):
+     - desktop/src/git.rs:4 个命令改 async + spawn_blocking(修卡顿)
+     - desktop/src/git.rs::git():加 CREATE_NO_WINDOW(复用 wsl::no_console,修 cmd 黑框闪烁)
+     - desktop/ui-next/src/features/chat/GitBranchBadge.tsx:切任务后分支查询延迟 600ms 防抖
+     - 顺带修 useSessionFeed.ts:147 perf 日志 id 判空(wip-local 自带 typecheck 错误)
+  4. **结果**:用户实测最新代码(wip-local v0.1.33 + 修复)不卡、无黑框,功能验证完整(0.1.26→0.1.33 全部功能在位:git 分支/系统通知/automation/plan mode/memory 面板/技能市场/MCP 一键装/team v2/model gateway)。
+  5. **教训**:①官方安装包 ≠ git 代码,8/30 打包时的未提交改动已永久丢失;②新增命令必须 async 化(有 git/fs 子进程的),同步命令会冻结 UI;③新命令要动三处:main.rs invoke_handler、build.rs 命令表、tauri.conf.json capability。
+
+### 任务:打包发布提速分析
+- Date: 2026-09-04
+- Context: 用户问打包为什么慢、有没有更快方法
+- Category: 构建方法
+- 大纲:
+  - 慢的主因是 Cargo.toml release profile 的 lto = true(full LTO),链接期占大头。
+  - 建议:①正式发版可改 lto = "thin"(快 2-5 倍);②测试版用 tauri build --no-bundle(不出 NSIS 安装包,实测每次 6-10 分钟);③新 worktree 首次构建需全量编译依赖,后续增量只有 6-10 分钟。
+  - 构建命令参考(分离式后台进程):powershell Start-Process cmd /c "set PATH=C:\Users\12090\.cargo\bin;%PATH%&& npx @tauri-apps/cli@2 build --no-bundle > build.log 2>&1";资源布局:target/release/ 下需 browser-extension/(dist 内容平铺)、skills/、ohmyagent.exe、WebView2Loader.dll。
+
+---
+
 [Online 预览构建与验证码验收]
 - Date: 2026-07-26
 - Context: Agent 在排查 online 构建后登录验证码失败时发现
