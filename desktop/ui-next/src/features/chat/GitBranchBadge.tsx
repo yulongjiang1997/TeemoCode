@@ -48,7 +48,12 @@ export const GitBranchBadge = memo(function GitBranchBadge({ workdir, onSwitched
     }
   }, [workdir]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    // 切任务渲染优先:分支查询延迟 600ms,等回放窗口 transition 跑完再拉,
+    // 不让 git 子进程排队与切换渲染抢时间(release 下同步 git 查询曾冻结 UI 数秒)。
+    const timer = setTimeout(() => void refresh(), 600);
+    return () => clearTimeout(timer);
+  }, [refresh]);
 
   const switchTo = useCallback(async (target: string) => {
     if (!workdir || target === branch) { setOpen(false); return; }

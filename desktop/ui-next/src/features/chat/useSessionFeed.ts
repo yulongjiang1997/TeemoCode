@@ -144,7 +144,7 @@ export function useSessionFeed(id: string | null, epoch = 0): SessionFeed {
 
   useEffect(() => {
     const t0 = performance.now();
-    console.log(`[perf] === 会话切换开始 id=${id.slice(0,8)} epoch=${epoch} ===`);
+    console.log(`[perf] === 会话切换开始 id=${id?.slice(0,8) ?? "null"} epoch=${epoch} ===`);
     setState(createChatState());
     console.log(`[perf] setState(createChatState) done: ${(performance.now() - t0).toFixed(1)}ms`);
     setConn(null);

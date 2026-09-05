@@ -9,12 +9,13 @@ use crate::config::config_dir;
 /// 依赖系统 git 命令;身份统一用 TeemoCode 本地配置(不改用户全局 git 配置)。
 
 fn git(dir: &str, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
-        .args(args)
+    let mut cmd = Command::new("git");
+    cmd.args(args)
         .current_dir(dir)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .map_err(|e| format!("无法执行 git: {e}"))?;
+        .env("GIT_TERMINAL_PROMPT", "0");
+    // Windows 下不闪 cmd 控制台窗口(切任务刷新分支每次都会 spawn git)
+    crate::wsl::no_console(&mut cmd);
+    let out = cmd.output().map_err(|e| format!("无法执行 git: {e}"))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {
@@ -234,63 +235,84 @@ fn write_json(p: &Path, v: &serde_json::Value) -> Result<(), String> {
 }
 
 /// 查询当前分支名。返回 branch name 或空字符串(无 git 仓库)。
+/// ⚠ async + spawn_blocking:git 子进程是阻塞重活,同步命令会在主线程
+/// 执行并冻结 WebView(切任务时此命令必触发,大仓库/杀慢时数秒卡死)。
 #[tauri::command]
-pub fn git_branch(workdir: String) -> String {
-    let dir = workdir.trim();
-    if dir.is_empty() {
-        return String::new();
-    }
-    let out = git(dir, &["rev-parse", "--abbrev-ref", "HEAD"]);
-    match out {
-        Ok(s) => s.trim().to_string(),
-        Err(_) => String::new(),
-    }
+pub async fn git_branch(workdir: String) -> String {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = workdir.trim();
+        if dir.is_empty() {
+            return String::new();
+        }
+        let out = git(dir, &["rev-parse", "--abbrev-ref", "HEAD"]);
+        match out {
+            Ok(s) => s.trim().to_string(),
+            Err(_) => String::new(),
+        }
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// 列出所有本地分支名。返回 Vec<String>。
 #[tauri::command]
-pub fn git_branch_list(workdir: String) -> Vec<String> {
-    let dir = workdir.trim();
-    if dir.is_empty() {
-        return Vec::new();
-    }
-    // --format 在部分 Windows git 上不稳定;用 --list + 逐行 trim 最稳妥
-    let out = git(dir, &["branch", "--list"]);
-    match out {
-        Ok(s) => s.lines()
-            .map(|l| l.trim_start_matches("* ").trim().trim_start_matches(' '))
-            .filter(|l| !l.is_empty())
-            .map(String::from)
-            .collect(),
-        Err(_) => Vec::new(),
-    }
+pub async fn git_branch_list(workdir: String) -> Vec<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = workdir.trim();
+        if dir.is_empty() {
+            return Vec::new();
+        }
+        // --format 在部分 Windows git 上不稳定;用 --list + 逐行 trim 最稳妥
+        let out = git(dir, &["branch", "--list"]);
+        match out {
+            Ok(s) => s.lines()
+                .map(|l| l.trim_start_matches("* ").trim().trim_start_matches(' '))
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// 检查工作区是否干净(无未提交更改)。
 #[tauri::command]
-pub fn git_is_clean(workdir: String) -> bool {
-    let dir = workdir.trim();
-    if dir.is_empty() {
-        return true;
-    }
-    // git status --porcelain:无输出=干净
-    git(dir, &["status", "--porcelain"])
-        .map(|s| s.trim().is_empty())
-        .unwrap_or(true)
+pub async fn git_is_clean(workdir: String) -> bool {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = workdir.trim();
+        if dir.is_empty() {
+            return true;
+        }
+        // git status --porcelain:无输出=干净
+        git(dir, &["status", "--porcelain"])
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true)
+    })
+    .await
+    .unwrap_or(true)
 }
 
 /// 切换分支。失败返回错误信息。
 #[tauri::command]
-pub fn git_checkout(workdir: String, branch: String) -> Result<(), String> {
-    let dir = workdir.trim();
-    if dir.is_empty() {
-        return Err("工作目录为空".into());
-    }
-    // 先检查是否干净
-    if !git_is_clean(dir.to_string()) {
-        return Err("工作区有未提交的更改,请先提交或丢弃后再切换分支".into());
-    }
-    git(dir, &["checkout", &branch]).map(|_| ()).map_err(|e| format!("切换失败: {e}"))
+pub async fn git_checkout(workdir: String, branch: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = workdir.trim();
+        if dir.is_empty() {
+            return Err("工作目录为空".into());
+        }
+        // 先检查是否干净(内联跑 porcelain,不再调用同步版 git_is_clean)
+        let clean = git(dir, &["status", "--porcelain"])
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true);
+        if !clean {
+            return Err("工作区有未提交的更改,请先提交或丢弃后再切换分支".into());
+        }
+        git(dir, &["checkout", &branch]).map(|_| ()).map_err(|e| format!("切换失败: {e}"))
+    })
+    .await
+    .map_err(|e| format!("切换任务失败: {e}"))?
 }
 
 /// 重启应用(任务数据迁移后让用户重启重新加载)。
