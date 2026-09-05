@@ -66,6 +66,17 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
 
 ---
 
+### 任务:发布 0.1.36 到 Gitee(含仓库大小检查)
+- Date: 2026-09-05
+- Context: 用户要求打包 0.1.36 并发布到 Gitee,发布前检查仓库大小、超限删最早发布文件
+- Category: 运维部署
+- 大纲:
+  1. 版本号 bump: Cargo.toml + tauri.conf.json → 0.1.36, releaseHistory.ts 头部追加 0.1.36 条目(commit b3ffec3, tag v0.1.36)。
+  2. 打包: 前端 vite build(20s) + tauri build --config bundle.windows.conf.json(NSIS),产物 57.8MB;签名用 Cmd 工具内联执行(私钥 C:\Users\12090\sdk\mc-release-keys-new),sig 第一行 base64 解码含 "signature from tauri secret key" 验证通过。
+  3. Gitee 容量检查: HEAD 实测旧附件 ~564MB(0.1.22-0.1.31 共11版 + 0.1.34/35),加 0.1.36 后 ~622MB,未超 1GB,用户确认不删旧版本直接上传。注意 RELEASE.md 记载 Gitee 后台统计可能含历史对象(~1205MB 超 1024MB 配额),git push 到更新仓库会被拒,所以 exe 全部走 API 上传。
+  4. 发布流程(按 RELEASE.md 已验证流程): exe+sig 用 attach_files 端点挂到 v0.1.35 release(id=1121225, HTTP 201);latest.json 改本地后 base64 走 Contents API PUT(旧版本 0.1.35 滚入 history 头部);端到端验证 raw URL 版本号正确、下载 URL HEAD 200 且字节数一致(57802425)。
+  5. 主仓库 fork: tag v0.1.36 + wip-local 分支均已推送成功。
+
 [Online 预览构建与验证码验收]
 - Date: 2026-07-26
 - Context: Agent 在排查 online 构建后登录验证码失败时发现
