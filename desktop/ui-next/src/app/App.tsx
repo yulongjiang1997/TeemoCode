@@ -815,7 +815,18 @@ export function App() {
           }}
         />
         {settingsOpen ? (
-          <SettingsView onClose={() => setSettingsOpen(false)} hasRunningTask={sessions.some((s) => s.status === "running")} />
+          // 独立弹窗形态(2026-09-07 用户需求:设置不再占据右侧工作区):
+          // fixed 全屏浮层盖住整个应用,rail/侧栏/会话区都还在下面不受影响,
+          // 关闭即回到原工作区。SettingsView 本体(main.flex-1)在浮层里
+          // 撑满,内部布局与导航逻辑零改动。
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("settings.title")}
+            className="fixed inset-0 z-40 flex min-h-0 min-w-0 bg-mask-100"
+          >
+            <SettingsView onClose={() => setSettingsOpen(false)} hasRunningTask={sessions.some((s) => s.status === "running")} />
+          </div>
         ) : creating ? (
           <NewTaskModal
             open
