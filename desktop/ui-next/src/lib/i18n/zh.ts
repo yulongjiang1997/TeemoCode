@@ -886,6 +886,7 @@ export const zh = {
   "model.badge.paid": "消耗积分",
   "model.source.member": "会员",
   "model.source.baizhi": "百智云",
+  "model.source.gateway": "本地网关",
   "model.source.custom": "自定义",
   "chat.mode.default": "默认权限",
   "chat.mode.yolo": "YOLO",

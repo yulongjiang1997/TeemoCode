@@ -11,6 +11,8 @@ import type { ModelInfo } from "@/lib/ipc/sessions";
 /** 同步条目来源标记(壳侧 baizhi/monkeycode.rs 的 SOURCE_* 同值)。 */
 export const SOURCE_BAIZHI = "baizhi";
 export const SOURCE_MONKEYCODE = "monkeycode";
+/** 本地网关模型组(driver/session.rs models_list 注入的 source 值)。 */
+export const SOURCE_GATEWAY = "gateway";
 
 const LAST_TASK_MODEL_KEY = "mc.lastTaskModel";
 /** 模型少时过滤框是噪音(几乎复述整个菜单),超过该数才显示。 */
@@ -132,9 +134,17 @@ export function modelDisplayByName(models: readonly ModelInfo[], name: string): 
 }
 
 /** 来源固定优先级(tab 序与设置页分组排序的单一出处):会员 → 百智云 →
- * 未知来源(彼此按首现)→ 自定义恒尾。 */
+ * 本地网关 → 未知来源(彼此按首现)→ 自定义恒尾。 */
 export const modelSourceRank = (source?: string): number =>
-  source === SOURCE_MONKEYCODE ? 0 : source === SOURCE_BAIZHI ? 1 : source ? 2 : 3;
+  source === SOURCE_MONKEYCODE
+    ? 0
+    : source === SOURCE_BAIZHI
+      ? 1
+      : source === SOURCE_GATEWAY
+        ? 2
+        : source
+          ? 3
+          : 4;
 
 export interface ModelMenuTab {
   key: string;
@@ -154,7 +164,9 @@ export function modelMenuTabs(models: ModelInfo[]): ModelMenuTab[] {
         ? t("model.source.member")
         : m.source === SOURCE_BAIZHI
           ? t("model.source.baizhi")
-          : m.source || t("model.source.custom");
+          : m.source === SOURCE_GATEWAY
+            ? t("model.source.gateway")
+            : m.source || t("model.source.custom");
     tabs.push({ key, label, rank: modelSourceRank(m.source) });
   }
   tabs.sort((a, b) => a.rank - b.rank);

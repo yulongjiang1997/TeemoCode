@@ -662,6 +662,37 @@ fn write_ohmyagent_config(
         }
     }
 
+    // 本地网关模型组 → 引擎模型条目(2026-09-07 用户需求:工作区选择模型时
+    // 可选本地网关组)。每个启用的组物化为一条 openai-chat 条目,指向本机
+    // 网关服务(127.0.0.1:<port>/v1),Bearer = 组 Key;组名即别名 = 选择键。
+    // 网关关闭时条目消失——选过网关组的老会话恢复走 model_id_of_any,未知
+    // 名会报错外显,属可接受(与删掉一条手编模型同语义)。
+    // 注意:网关服务自身从权威 config.json 读 settings 启停;这里只物化
+    // "引擎 → 网关"的模型条目,端口以权威配置为准。
+    let gw = &cfg.gateway;
+    if gw.enabled {
+        for g in &gw.groups {
+            if !g.enabled || g.name.is_empty() || g.key.is_empty() {
+                continue;
+            }
+            // 组名与已有条目重名时跳过(手编条目优先;网关组名撞车属配置错误)
+            if models_out.contains_key(&g.name) {
+                continue;
+            }
+            let entry = serde_json::json!({
+                "type": "openai-chat",
+                "model": g.name,
+                "base_url": format!("http://127.0.0.1:{}/v1", gw.port),
+                "api_key": g.key,
+                "context_window": g.context_window.max(1),
+                "max_output": g.max_output.max(1),
+                "supports_images": false,
+                "thinking": { "enabled": false },
+            });
+            models_out.insert(g.name.clone(), entry);
+        }
+    }
+
     let mut settings = serde_json::json!({
         "default_model": default_model,
         "permission_mode": "auto",

@@ -869,6 +869,7 @@ export const en: Record<MessageKey, string> = {
   "model.badge.paid": "Uses credits",
   "model.source.member": "Member",
   "model.source.baizhi": "Baizhi Cloud",
+  "model.source.gateway": "Local Gateway",
   "model.source.custom": "Custom",
   "chat.mode.default": "Default permissions",
   "chat.mode.yolo": "YOLO",

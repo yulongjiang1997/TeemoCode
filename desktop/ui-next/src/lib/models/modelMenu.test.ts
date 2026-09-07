@@ -18,6 +18,7 @@ import {
   shouldShowModelExtras,
   stripTierPrefix,
   SOURCE_BAIZHI,
+  SOURCE_GATEWAY,
   SOURCE_MONKEYCODE,
 } from "./modelMenu";
 
@@ -82,17 +83,19 @@ describe("会员长名的展示投影(对齐 Web 前缀口径,纯展示层)", ()
 });
 
 describe("modelMenuTabs(无「全部」,tab 即来源导航)", () => {
-  it("来源序:会员 → 百智云 → 未知透传 → 自定义恒尾,会员缩写", () => {
+  it("来源序:会员 → 百智云 → 本地网关 → 未知透传 → 自定义恒尾,会员缩写", () => {
     const tabs = modelMenuTabs([
       m("a"),
       m("b", "mystery"),
       m("c", SOURCE_BAIZHI),
       m("d", SOURCE_MONKEYCODE),
+      m("e", SOURCE_GATEWAY),
     ]);
     expect(tabs).toEqual([
       { key: "monkeycode", label: "会员" },
       { key: "baizhi", label: "百智云" },
-      { key: "mystery", label: "mystery" }, // 未知来源透传,不硬编码三来源
+      { key: "gateway", label: "本地网关" },
+      { key: "mystery", label: "mystery" }, // 未知来源透传,不硬编码来源清单
       { key: "", label: "自定义" },
     ]);
   });

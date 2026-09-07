@@ -1293,13 +1293,60 @@ impl OhmyDriver {
     }
 
     pub async fn models_list(&self) -> Result<Value, String> {
-        Ok(Value::Array(
-            self.0
-                .models
-                .iter()
-                .map(|m| json!({ "name": m.name, "default": m.default, "source": m.source, "think": m.think, "model": m.model, "locked": m.locked, "owner": m.owner }))
-                .collect(),
-        ))
+        let mut out: Vec<Value> = self
+            .0
+            .models
+            .iter()
+            .map(|m| json!({ "name": m.name, "default": m.default, "source": m.source, "think": m.think, "model": m.model, "locked": m.locked, "owner": m.owner }))
+            .collect();
+        // 本地网关模型组注入(2026-09-07 用户需求:工作区模型菜单可选网关组):
+        // 组条目不在壳清单(cfg.models)里,是物化时按 cfg.gateway 动态生成的
+        // (config.rs write_ohmyagent_config),所以这里从权威 config.json 读
+        // enabled 的组追加。引擎 settings 已物化同名单条目,选择即可用;
+        // 读取失败静默跳过(菜单少网关节,不影响手编/同步条目)。
+        if let Ok(dir) = self.0.app.config_dir() {
+            if let Ok(raw) = std::fs::read(dir.join("config.json")) {
+                if let Ok(cfg) = serde_json::from_slice::<Value>(&raw) {
+                    let gw = &cfg["gateway"];
+                    let enabled = gw["enabled"].as_bool().unwrap_or(false);
+                    let port = gw["port"].as_u64().unwrap_or(0);
+                    if enabled && port > 0 {
+                        if let Some(groups) = gw["groups"].as_array() {
+                            // 先收集已有名字再改 out,避免借用冲突
+                            let existing: std::collections::HashSet<String> = out
+                                .iter()
+                                .filter_map(|m| m["name"].as_str().map(str::to_string))
+                                .collect();
+                            for g in groups {
+                                let (gname, gkey, gctx, gout) = (
+                                    g["name"].as_str().unwrap_or(""),
+                                    g["key"].as_str().unwrap_or(""),
+                                    g["context_window"].as_i64().unwrap_or(0),
+                                    g["max_output"].as_i64().unwrap_or(0),
+                                );
+                                let g_enabled = g["enabled"].as_bool().unwrap_or(false);
+                                if gname.is_empty() || gkey.is_empty() || !g_enabled
+                                    || existing.contains(gname)
+                                {
+                                    continue;
+                                }                                out.push(json!({
+                                    "name": gname,
+                                    "default": false,
+                                    "source": "gateway",
+                                    "think": "",
+                                    "model": gname,
+                                    "locked": false,
+                                    "owner": "",
+                                    "context_window": gctx,
+                                    "max_output": gout,
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(Value::Array(out))
     }
 
     pub async fn session_workdir(&self, id: &str) -> Result<String, String> {
