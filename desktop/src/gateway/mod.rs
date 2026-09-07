@@ -568,6 +568,17 @@ pub fn reload(app: &AppHandle) {
     *host.0.snapshot.lock_ok() = Arc::new(snapshot);
 }
 
+/// 网关配置变更后同步物化引擎模型条目(组名 → 引擎 settings.models):
+/// 引擎在跑时 settings 不随 config.json 自动刷新,不物化则工作区切到
+/// 新组报「未知模型」。失败仅记日志——网关自身照常工作,模型条目下次
+/// 保存设置/重启时补齐。
+fn rematerialize_engine_models(app: &AppHandle) {
+    let Ok(cfg) = crate::config::load_config(app) else { return };
+    if let Err(e) = crate::config::materialize_engine_config(app, &cfg, crate::browser::mcp_endpoint(app)) {
+        eprintln!("[desktop] 网关变更后物化引擎配置失败: {e}");
+    }
+}
+
 // ==================== IPC 命令 ====================
 
 fn status_payload(host: &GatewayHost) -> serde_json::Value {
@@ -681,6 +692,10 @@ pub async fn gateway_save_group(app: AppHandle, group: ModelGroup) -> Result<Mod
         // 用归一化 id 回查(新建组的 UI 侧 id 为空,拿它找必然扑空——
         // 那正是"保存后未找到模型组"的根因)
         let saved = saved.ok_or_else(|| "保存后未找到模型组(内部错误)".to_string())?;
+        // 组变更要同步进引擎 settings(write_ohmyagent_config 把启用的组物化为
+        // 引擎模型条目),否则工作区模型菜单能看到(实时读 config.json)但
+        // 切换报「未知模型」
+        rematerialize_engine_models(&app);
         reload(&app);
         let host = app.state::<GatewayHost>();
         let snapshot = host.snapshot();
@@ -710,6 +725,7 @@ pub async fn gateway_delete_group(app: AppHandle, id: String) -> Result<(), Stri
         if let Some(e) = err {
             return Err(e);
         }
+        rematerialize_engine_models(&app);
         reload(&app);
         Ok(())
     })
@@ -728,6 +744,7 @@ pub async fn gateway_update_settings(app: AppHandle, enabled: bool, port: u16) -
             cfg.gateway.enabled = enabled;
             cfg.gateway.port = port;
         })?;
+        rematerialize_engine_models(&app);
         reload(&app);
         Ok(())
     })
@@ -748,6 +765,7 @@ pub async fn gateway_regen_key(app: AppHandle, id: String) -> Result<String, Str
         if let Some(e) = err {
             return Err(e);
         }
+        rematerialize_engine_models(&app);
         reload(&app);
         Ok(key)
     })
