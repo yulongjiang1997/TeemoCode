@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -383,6 +383,49 @@ describe("聊天视图", () => {
       },
     ]);
     await waitFor(() => expect(screen.queryByText(/任务 \d\/\d/)).toBeNull());
+  });
+
+  it("任务面板:手动消除持久化,重开会话(回放重放 plan)不再弹(2026-09-07 报障)", async () => {
+    const { emit } = stubShell();
+    const planFrame = (status: "in_progress" | "pending", seq: number) => ({
+      type: "task-running",
+      kind: "acp_event",
+      data: { update: { sessionUpdate: "plan", entries: [{ content: "老清单", status }] } },
+      timestamp: seq,
+      seq,
+    });
+    render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    emit("frames:s1", [planFrame("in_progress", 5)]);
+    await waitFor(() => expect(screen.getByText("任务 0/1")).toBeTruthy());
+    // 手动勾掉 → 面板消失 → 持久标记已写
+    await userEvent.click(screen.getByRole("checkbox", { name: "老清单" }));
+    await waitFor(() => expect(screen.queryByText(/任务 \d\/\d/)).toBeNull());
+    const written = Object.keys(localStorage).filter((k) => k.startsWith("mc.planDone.s1."));
+    expect(written.length).toBe(1);
+
+    // 卸载重开(模拟重开会话,回放重放同一 plan 帧):自动恢复全勾,面板不弹
+    // stub 的 unlisten 是 Promise 包的 microtask:cleanup 后先让旧实例的
+    // listeners.delete 落地,否则它会迟到地删掉新实例刚注册的监听
+    const tick = async () => { await Promise.resolve(); await Promise.resolve(); };
+    await tick();
+    cleanup();
+    await tick();
+    render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    emit("frames:s1", [planFrame("in_progress", 5)]);
+    await waitFor(() => expect(screen.queryByText(/任务 \d\/\d/)).toBeNull());
+
+    // 反悔:摘除持久标记,再重开面板应回来(标记不被自动全勾恢复路径复活——
+    // 恢复的前提是标记存在,标记没了就不会再全勾)
+    localStorage.removeItem(written[0]!);
+    expect(localStorage.getItem(written[0]!)).toBeNull();
+    cleanup();
+    await tick();
+    render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    emit("frames:s1", [planFrame("in_progress", 5)]);
+    await waitFor(() => expect(screen.getByText("任务 0/1")).toBeTruthy());
   });
 
   it("任务面板:新一轮新清单(plan 内容变化)复位手动标记", async () => {

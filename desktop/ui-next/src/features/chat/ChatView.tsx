@@ -103,6 +103,16 @@ const PIN_THRESHOLD = 40; // 距底多少像素内算"贴底"(scroll 只做进�
 const SCROLLBAR_EDGE = 18; // 视口右缘按下算滚动条拖拽意图,解除跟随
 const RESTORE_POLLS = 15; // 锚点恢复的轮询校准次数(200ms 一次,3s 内收敛)
 const RESTORE_WAIT_POLLS = 150; // 历史补页/大窗口 transition 最多等 30s,随后回退尾部
+
+/** FNV-1a 32 位字符串指纹(plan 消除标记的 localStorage 键成分)。 */
+function fnv1a(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
+}
 const FLASH_MS = 1100; // 与 chrome.css mc-flash 动画时长对齐(略长于 1s)
 
 // 各会话的滚动位置记忆:切走再切回仍在原位;贴底离开的会话回来仍贴底。
@@ -616,11 +626,24 @@ export function ChatView({
   // 进度推进(plan 帧整体重发、只改 status)必须保留用户的勾——漏标步骤
   // 正是模型反复重发都不改的那几条,重置了标记就白勾了
   const planKeyRef = useRef("");
+  // 手动消除的持久化(2026-09-07 用户报障:重开会话大纲又回来了):
+  // plan 帧在会话回放时整体重放,planOverrides 是组件内存态,重开即丢。
+  // 按「会话 id + 清单指纹」记到 localStorage:同一清单恢复时自动重新
+  // 应用全勾(视为已处理);清单内容变化(新一轮)自然失效重新出现。
+  const planDoneKey = (key: string): string => `mc.planDone.${meta.id}.${fnv1a(key)}`;
   useEffect(() => {
     const key = state.plan.map((e) => e.id ?? e.content).join("\n");
     if (planKeyRef.current !== key) {
       planKeyRef.current = key;
-      setPlanOverrides(new Set());
+      // 清单变化:若该指纹已被持久标记为「全部手动完成」,恢复全勾
+      // (面板不弹);否则复位。旧键不清理——每会话最多几条,量级无害。
+      let restored: Set<number> | null = null;
+      try {
+        if (key && localStorage.getItem(planDoneKey(key)) === "1" && state.plan.length > 0) {
+          restored = new Set(state.plan.map((_, i) => i));
+        }
+      } catch { /* 存储不可用按无标记处理 */ }
+      setPlanOverrides(restored ?? new Set());
     }
   }, [state.plan]);
   const titleIme = useRef(createImeGuard());
@@ -1330,10 +1353,18 @@ export function ChatView({
         <div className="mx-auto flex chat-measure flex-col gap-2">
           {(() => {
             // 手动标记完成的行覆盖为 completed;全部完成即整面板消失
-            // (2026-08-25 用户报障:模型漏标步骤,面板赖着不走)
+            // (2026-08-25 用户报障:模型漏标步骤,面板赖着不走)。
+            // 全勾的瞬间持久化「已处理」标记:重开会话回放重放 plan 帧时
+            // 据此自动恢复全勾,面板不再弹(2026-09-07 用户报障)。
             if (state.plan.length > 0 && planOverrides.size > 0) {
               const all = state.plan.every((e, i) => e.status === "completed" || planOverrides.has(i));
-              if (all) return null;
+              if (all) {
+                const key = planKeyRef.current;
+                if (key) {
+                  try { localStorage.setItem(planDoneKey(key), "1"); } catch { /* 只丢持久化 */ }
+                }
+                return null;
+              }
             }
             const entries =
               planOverrides.size > 0
@@ -1343,14 +1374,21 @@ export function ChatView({
               <TaskPanel
                 entries={entries}
                 onDismiss={() => setPlanDismissed(true)}
-                onToggleEntry={(i, checked) =>
+                onToggleEntry={(i, checked) => {
                   setPlanOverrides((prev) => {
                     const next = new Set(prev);
                     if (checked) next.add(i);
                     else next.delete(i);
                     return next;
-                  })
-                }
+                  });
+                  // 反悔(取消勾)即摘除持久标记,面板回来且重开不再自动全勾
+                  if (!checked) {
+                    const key = planKeyRef.current;
+                    if (key) {
+                      try { localStorage.removeItem(planDoneKey(key)); } catch { /* 只丢持久化 */ }
+                    }
+                  }
+                }}
               />
             ) : null;
           })()}

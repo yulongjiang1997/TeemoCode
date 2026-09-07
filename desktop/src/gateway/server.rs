@@ -132,6 +132,12 @@ enum ReadError {
 fn read_request(conn: &mut TcpStream) -> Result<HttpReq, ReadError> {
     let _ = conn.set_read_timeout(Some(Duration::from_secs(30)));
     let mut reader = std::io::BufReader::new(conn.try_clone().map_err(|_| ReadError::Abandoned)?);
+    // 头阶段用 take(32KB) 限幅防无界头;**读体必须脱离 take**:
+    // take 是包在 reader 外的适配器,沿用 head 读 119KB 的引擎请求体会在
+    // 32KB 处假 EOF → Abandoned → 静默关连接(实测:引擎 41 条消息 + 82
+    // 工具的请求 14ms 内被重置,引擎重试 12 次全挂)。头解析完即 drop
+    // take 适配器,体从裸 reader 读(BufReader 缓冲里的预读不丢——同一条
+    // reader 链)。
     let mut head = (&mut reader).take(MAX_HEADER_BYTES as u64);
     let mut line = String::new();
     head.read_line(&mut line).map_err(|_| ReadError::Abandoned)?;
@@ -168,6 +174,8 @@ fn read_request(conn: &mut TcpStream) -> Result<HttpReq, ReadError> {
             expect_continue = true;
         }
     }
+    // drop take 适配器(head 移动进 drop 就此结束),后续读体不再受限幅
+    drop(head);
     if chunked {
         return Err(ReadError::Status(411, "暂不支持 chunked 请求体"));
     }
@@ -181,7 +189,7 @@ fn read_request(conn: &mut TcpStream) -> Result<HttpReq, ReadError> {
     }
     let mut body = vec![0u8; len];
     // 体必须从**同一个** reader 读(头读多了会吃掉体的前段)
-    head.read_exact(&mut body).map_err(|_| ReadError::Abandoned)?;
+    reader.read_exact(&mut body).map_err(|_| ReadError::Abandoned)?;
     Ok(HttpReq { method, path, bearer, body })
 }
 
@@ -908,6 +916,17 @@ Connection: close
         let text = String::from_utf8_lossy(&body);
         assert!(text.contains("hello"), "上游应答透传: {text}");
         assert!(text.contains("chat.completion"));
+
+        // 大请求体(> MAX_HEADER_BYTES 的 take 限幅,回归 2026-09-07 引擎
+        // 119KB 请求被网关静默重置的 bug):体读取必须不受头限幅影响
+        let mut big = incoming_body(false);
+        let filler = "x".repeat(64 * 1024);
+        big["messages"][0]["content"] = Value::String(format!("长上下文 {filler}"));
+        let big_bytes = big.to_string().into_bytes();
+        assert!(big_bytes.len() > MAX_HEADER_BYTES);
+        let (status, _, body) = call("POST", "/v1/chat/completions", Some("tgk-e2e"), Some(big_bytes));
+        assert_eq!(status, 200, "大 body 请求必须完整读取并转发(不再 14ms 重置)");
+        assert!(String::from_utf8_lossy(&body).contains("hello"));
 
         // 流式对话:SSE chunk 词汇 + [DONE]
         let (status, _, body) = call(
