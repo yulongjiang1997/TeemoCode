@@ -49,7 +49,7 @@ import {
 } from "@/lib/ipc/sessions";
 import { noticeForQueuedDelivery, noticeForSessionEvent, type NoticeKind, type SessionNotice } from "@/lib/notices";
 import { deliverQueued, dropStash } from "@/features/chat/composer/stash";
-import { readLastSession, writeLastSession, writeSpace, readBgImage, readBgOpacity, readMaskOpacity, readBgBlur, type Space } from "@/lib/util/prefs";
+import { readLastSession, writeLastSession, writeSpace, readBgImage, readBgOpacity, readMaskOpacity, readBgBlur, readSettingsMaskOpacity, type Space } from "@/lib/util/prefs";
 import { projectKey, readArchivedProjects } from "@/lib/util/projects";
 
 // 统一图标族:@tabler/icons-react(2026-08-07 由 lucide 换过来;组件名
@@ -814,38 +814,7 @@ export function App() {
             },
           }}
         />
-        {settingsOpen ? (
-          // 独立弹窗形态(2026-09-07 用户需求:设置不再占据右侧工作区):
-          // fixed 全屏浮层盖住整个应用,rail/侧栏/会话区都还在下面不受影响,
-          // 关闭即回到原工作区。SettingsView 本体(main.flex-1)在浮层里
-          // 撑满,内部布局与导航逻辑零改动。
-          <div
-            role="presentation"
-            className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-6"
-            onClick={(e) => {
-              // 点遮罩空白处关闭(点击内容区不冒泡触发)
-              if (e.target === e.currentTarget) setSettingsOpen(false);
-            }}
-          >
-            {/* 固定尺寸 = 父窗口初始的 70%:不随父窗口缩放(用户报障:跟随
-                inset-0 时父窗口缩小会挤压变形)。开窗后固定,关闭重开按当时
-                父窗口重新计 70%。 */}
-            <div
-              role="dialog"
-              aria-modal="true"
-              aria-label={t("settings.title")}
-              className="flex overflow-hidden rounded-box border border-base-300 shadow-2xl"
-              style={{
-                width: `${Math.round(window.innerWidth * 0.7)}px`,
-                height: `${Math.round(window.innerHeight * 0.7)}px`,
-                maxWidth: "calc(100vw - 3rem)",
-                maxHeight: "calc(100vh - 3rem)",
-              }}
-            >
-              <SettingsView onClose={() => setSettingsOpen(false)} hasRunningTask={sessions.some((s) => s.status === "running")} />
-            </div>
-          </div>
-        ) : creating ? (
+        {creating ? (
           <NewTaskModal
             open
             initialDir={creating.dir}
@@ -913,6 +882,16 @@ export function App() {
           />
         )}
       </div>
+      {/* 设置弹窗(2026-09-07):**独立于主区条件链**——主区(ChatView 等)
+          永远保持挂载,弹窗只是浮层叠加。放条件链里会让 MainArea 整个卸载
+          → ChatView unmount 触发 session_close → 对话数据没了(2026-09-07
+          用户报障「打开设置右侧对话区数据关闭」)。 */}
+      {settingsOpen && (
+        <SettingsDialog
+          onClose={() => setSettingsOpen(false)}
+          hasRunningTask={sessions.some((s) => s.status === "running")}
+        />
+      )}
       {/* D3 后台会话提醒:可叠多条(每会话取最新一条),点击跳转、可关闭。
           壳级提示(浏览器工具装载等)与会话提醒共用同一角落栈,只是不可跳转。
           纵向起点是算出来的:daisyUI .toast-top 自带 top:1rem(16px),头部基线
@@ -1013,5 +992,97 @@ export function App() {
       </div>
     </div>
     </McTransportProvider>
+  );
+}
+
+
+/** 设置弹窗:70% 固定尺寸 + 标题栏拖动 + 遮罩透明度可调。
+ * 透明度是壳级外观偏好(localStorage mc.settings.maskOpacity,0~0.9),
+ * GeneralSection 里也有调节项,两处读写同一偏好。 */
+function SettingsDialog({ onClose, hasRunningTask }: {
+  onClose: () => void;
+  hasRunningTask: boolean;
+}) {
+  const { t } = useI18n();
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  const dragRef = useRef<{ dx: number; dy: number } | null>(null);
+  const [maskOpacity, setMaskOpacityState] = useState(() => readSettingsMaskOpacity());
+  // 设置页调透明度时实时跟随(mc-settings-mask-changed)
+  useEffect(() => {
+    const refresh = () => setMaskOpacityState(readSettingsMaskOpacity());
+    window.addEventListener("mc-settings-mask-changed", refresh);
+    return () => window.removeEventListener("mc-settings-mask-changed", refresh);
+  }, []);
+
+  // 开窗居中;窗口缩放时不跟随(固定,与尺寸策略一致)
+  useEffect(() => {
+    if (pos === null) {
+      setPos({
+        x: Math.max(0, Math.round((window.innerWidth - window.innerWidth * 0.7) / 2)),
+        y: Math.max(0, Math.round((window.innerHeight - window.innerHeight * 0.7) / 2)),
+      });
+    }
+  }, [pos]);
+
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      setPos({
+        x: Math.max(0, Math.min(window.innerWidth - 200, e.clientX - d.dx)),
+        y: Math.max(0, Math.min(window.innerHeight - 80, e.clientY - d.dy)),
+      });
+    };
+    const onUp = () => { dragRef.current = null; };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, []);
+
+  const size = {
+    width: Math.round(window.innerWidth * 0.7),
+    height: Math.round(window.innerHeight * 0.7),
+  };
+
+  return (
+    <div
+      role="presentation"
+      className="fixed inset-0 z-40"
+      style={{ background: `rgba(0,0,0,${maskOpacity})` }}
+      onClick={(e) => {
+        // 点遮罩空白处关闭(点击内容区不冒泡触发)
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("settings.title")}
+        className="absolute flex flex-col overflow-hidden rounded-box border border-base-300 shadow-2xl"
+        style={{
+          left: pos?.x ?? 0,
+          top: pos?.y ?? 0,
+          width: `${Math.min(size.width, window.innerWidth - 24)}px`,
+          height: `${Math.min(size.height, window.innerHeight - 24)}px`,
+        }}
+      >
+        {/* 拖动把手:占满弹窗顶部的细条,双击复位居中。SettingsView 自己
+            的 header 还有拖主窗口的区域语义,两者并存不冲突。 */}
+        <div
+          className="absolute inset-x-0 top-0 z-10 h-8 cursor-move"
+          title={t("settings.dialog.dragHint")}
+          onPointerDown={(e) => {
+            if (e.button !== 0) return;
+            const box = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
+            dragRef.current = { dx: e.clientX - box.left, dy: e.clientY - box.top };
+          }}
+          onDoubleClick={() => setPos(null)}
+        />
+        <SettingsView onClose={onClose} hasRunningTask={hasRunningTask} />
+      </div>
+    </div>
   );
 }

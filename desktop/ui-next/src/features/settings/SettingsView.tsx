@@ -24,7 +24,7 @@ import {
 import { isWindowsShell } from "@/lib/ipc/host";
 import { inDesktopShell } from "@/lib/ipc/ipc";
 import { readCustomTheme, readTheme, setCustomTheme, setTheme, THEMES, CUSTOM_THEME, type CustomTheme, type Theme } from "@/lib/theme";
-import { readBgBlur, readBgImage, readBgOpacity, readMaskOpacity, readTaskExpandLimit, writeBgBlur, writeBgImage, writeBgOpacity, writeMaskOpacity, writeTaskExpandLimit } from "@/lib/util/prefs";
+import { readBgBlur, readBgImage, readBgOpacity, readMaskOpacity, readSettingsMaskOpacity, readTaskExpandLimit, writeBgBlur, writeBgImage, writeBgOpacity, writeMaskOpacity, writeSettingsMaskOpacity, writeTaskExpandLimit } from "@/lib/util/prefs";
 import { customThemeVars, randomTheme, roleHex, COLOR_ROLES, DEFAULT_CUSTOM, BORDER_RANGE, RADIUS_RANGE, SIZE_RANGE, type ColorRole } from "@/lib/customTheme";
 import { useDismiss } from "@/lib/util/useDismiss";
 import { useEscLayer } from "@/lib/util/escLayer";
@@ -440,6 +440,8 @@ function GeneralSection({ petConfig }: { petConfig?: DesktopConfig | null }) {
   const [bgImage, setBgImageState] = useState(readBgImage);
   const [bgOpacity, setBgOpacityState] = useState(readBgOpacity);
   const [maskOpacity, setMaskOpacityState] = useState(readMaskOpacity);
+  // 设置弹窗遮罩透明度(0~90%;独立于上面的工作区背景遮罩)
+  const [settingsMaskOpacity, setSettingsMaskOpacityState] = useState(readSettingsMaskOpacity);
   const [bgBlur, setBgBlurState] = useState(readBgBlur);
   const [taskExpandLimit, setTaskExpandLimit] = useState(readTaskExpandLimit);
   // 系统通知开关(桌面壳特有)
@@ -603,6 +605,26 @@ function GeneralSection({ petConfig }: { petConfig?: DesktopConfig | null }) {
               }}
             />
             <span className="w-8 text-right text-xs tabular-nums text-base-content/60">{maskOpacity}%</span>
+          </div>
+        </SettingRow>
+        <SettingRow label={t("settings.appearance.settingsMaskOpacity")} hint={t("settings.appearance.settingsMaskOpacityHint")}>
+          <div className="flex items-center gap-2">
+            <input
+              type="range"
+              min={0}
+              max={90}
+              className="range range-xs w-40"
+              aria-label={t("settings.appearance.settingsMaskOpacity")}
+              value={Math.round(settingsMaskOpacity * 100)}
+              onChange={(e) => {
+                const v = Number(e.target.value) / 100;
+                setSettingsMaskOpacityState(v);
+                writeSettingsMaskOpacity(v);
+                // SettingsDialog 实时跟随:自定义事件驱动重读偏好
+                window.dispatchEvent(new Event("mc-settings-mask-changed"));
+              }}
+            />
+            <span className="w-8 text-right text-xs tabular-nums text-base-content/60">{Math.round(settingsMaskOpacity * 100)}%</span>
           </div>
         </SettingRow>
         <SettingRow label={t("settings.appearance.bgBlur")} hint={t("settings.appearance.bgBlurHint")}>

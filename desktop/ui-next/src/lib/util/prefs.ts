@@ -407,3 +407,26 @@ export function writeComposerQueue(sid: string, val: ComposerPersisted | null): 
     // 只丢持久化
   }
 }
+
+/** 设置弹窗遮罩透明度(0~0.9;缺省 0.4)。GeneralSection 调节项与
+ * SettingsDialog 共用同一键,双端实时生效。 */
+const SETTINGS_MASK_OPACITY_KEY = "mc.settingsMaskOpacity";
+const DEFAULT_SETTINGS_MASK_OPACITY = 0.4;
+
+export function readSettingsMaskOpacity(): number {
+  try {
+    const v = Number(localStorage.getItem(SETTINGS_MASK_OPACITY_KEY));
+    if (Number.isFinite(v) && v >= 0 && v <= 0.9) return v;
+  } catch {
+    // 只丢持久化
+  }
+  return DEFAULT_SETTINGS_MASK_OPACITY;
+}
+
+export function writeSettingsMaskOpacity(v: number): void {
+  try {
+    localStorage.setItem(SETTINGS_MASK_OPACITY_KEY, String(Math.min(0.9, Math.max(0, v))));
+  } catch {
+    // 只丢持久化
+  }
+}
