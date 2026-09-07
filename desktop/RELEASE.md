@@ -10,8 +10,8 @@
 | 项 | 值 |
 |---|---|
 | 更新源 latest.json | `https://gitee.com/xiaotimor/teemo-code-update/raw/master/latest.json` |
-| 下载 URL 模式 | `https://gitee.com/xiaotimor/teemo-code-update/releases/download/v0.1.22/TeemoCode_<版本>_x64-setup.exe` |
-| **exe 附件挂载点** | **v0.1.22 的 Release**(仓库超配额,无法建新 tag/Release,exe 统一挂老 Release 下) |
+| 下载 URL 模式 | `https://gitee.com/xiaotimor/teemo-code-update/releases/download/v<版本>/TeemoCode_<版本>_x64-setup.exe` |
+| **exe 附件挂载点** | **每次发布新建自己的 Release 节点**(tag = v<版本>);发布前查配额,不足则删最老的 2 个 release |
 | Gitee token | `6413249386ee049a45469c7957b5d336` |
 | 签名私钥 | `C:\Users\12090\sdk\mc-release-keys-new` |
 | 签名密码 | `R3l3ase!K3y#2026x` |
@@ -19,9 +19,10 @@
 | 更新仓库工作区 | `C:\Users\12090\sdk\mc-update`(基本不再需要 git 操作,latest.json 走 API) |
 
 **核心认知(为什么流程长这样):**
-1. **Gitee 更新仓库已超配额(~1205MB > 1024MB)**:任何 git push(master/tag)都会被 pre-receive hook 拒绝。所以 exe 不能再 commit 进仓库,latest.json 也不能 git push 更新,只能走 **Gitee API**。
-2. **`releases/download/<tag>/<file>` 只解析 Release 附件**:exe 必须上传成 Release asset。由于不能建新 Release,统一把新版本 exe 挂到 **v0.1.22 的 Release** 下(文件名带版本号,不会冲突)。
+1. **git push 大文件被配额拒(pre-receive hook declined)**,但 **Release 附件不受影响**:每次发布用 API **新建自己的 Release 节点**(tag = v<版本>),exe/sig 挂在它下面,下载 URL 即标准 `releases/download/v<版本>/<文件>` 格式。
+2. **发布前必须查配额**:Gitee 无配额查询 API,脚本遍历所有 release 的附件做 HEAD 累计大小。若 `已用 + 新包*1.1 > 1024MB`,**自动删除最老的 2 个 release**(连附件),再新建。
 3. **latest.json 通过 Contents API 更新**,且**必须用 base64 编码方式上传**——直接传字符串内容会被 Gitee API 破坏(历史 3 次检查更新失败全是这个原因)。
+4. **统一使用 `scripts/publish_gitee.py`**(2026-09-07 固化,含上述全部规则+重试+双端验证),不要手工拼 API 调用。
 
 ---
 
@@ -96,95 +97,26 @@ cmd /c package_windows.bat
 - Python `subprocess.run(..., shell=True)` 同样会破坏;
 - **唯一可靠:Cmd 工具直接内联**。输出里 `Your file was signed successfully` + `Public signature:` 即成功,同时生成 `.sig` 文件。
 
-### 步骤 4: 发布到 Gitee(一个 Python 脚本完成)
+### 步骤 4: 发布到 Gitee(统一脚本,已固化全部规则)
 
-**这是最容易出错的环节,脚本必须包含以下全部要点**(实战验证模板,v0.1.26 验证通过):
+**2026-09-07 起使用 `scripts/publish_gitee.py`**,它实现了完整规则并经过实战验证(v0.1.37 发布通过):
 
-```python
-# publish.py — 发版后执行
-import json, urllib.request, uuid, base64, subprocess, time
-from datetime import datetime, timezone
-from pathlib import Path
-
-VER = "0.1.27"
-TOKEN = "6413249386ee049a45469c7957b5d336"
-API = "https://gitee.com/api/v5/repos/xiaotimor/teemo-code-update"
-EXE = Path(rf"D:\works\ziji\MonkeyCode\desktop\target\release\bundle\nsis\TeemoCode_{VER}_x64-setup.exe")
-SIG = Path(str(EXE) + ".sig")
-
-# ---- 1) 找 v0.1.22 release(仓库超配额,所有版本统一挂这里) ----
-rels = json.loads(urllib.request.urlopen(f"{API}/releases?access_token={TOKEN}", timeout=60).read().decode())
-rel = next((x for x in rels if x["tag_name"] == "v0.1.22"), None)
-print(f"Using v0.1.22 release id={rel['id']}")
-
-# ---- 2) 上传 exe + sig(multipart,必须用 attach_files 端点) ----
-for f in (EXE, SIG):
-    b = uuid.uuid4().hex
-    body = (f"--{b}\r\nContent-Disposition: form-data; name=\"access_token\"\r\n\r\n{TOKEN}\r\n"
-            f"--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{f.name}\"\r\n"
-            f"Content-Type: application/octet-stream\r\n\r\n").encode() + f.read_bytes() + f"\r\n--{b}--\r\n".encode()
-    req = urllib.request.Request(f"{API}/releases/{rel['id']}/attach_files", data=body,
-        headers={"Content-Type": f"multipart/form-data; boundary={b}"}, method="POST")
-    with urllib.request.urlopen(req, timeout=1800) as r:
-        print(f"upload {f.name}: HTTP {r.status}")   # 期望 201
-
-# ---- 3) 更新 latest.json:先改本地文件 → base64 编码上传(必须!) ----
-lp = Path(r"C:\Users\12090\sdk\mc-update\latest.json")
-data = json.loads(lp.read_text(encoding="utf-8"))
-data["version"] = VER
-data["notes"] = "更新说明"
-data["pub_date"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-data["platforms"]["windows-x86_64"]["url"] = f"https://gitee.com/xiaotimor/teemo-code-update/releases/download/v0.1.22/TeemoCode_{VER}_x64-setup.exe"
-data["platforms"]["windows-x86_64"]["signature"] = SIG.read_text(encoding="utf-8").strip()
-data["history"] = [{"version": "0.1.26", "notes": "..."}, ...]  # 旧版本记录,最新在上
-lp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-local_content = lp.read_text(encoding="utf-8")
-json.loads(local_content)  # 上传前先验证本地内容是合法 JSON
-
-req = urllib.request.Request(f"{API}/contents/latest.json?access_token={TOKEN}")
-with urllib.request.urlopen(req, timeout=30) as r:
-    sha = json.loads(r.read().decode())['sha']   # PUT 更新必须带 sha
-payload = {'access_token': TOKEN, 'sha': sha,
-           'content': base64.b64encode(local_content.encode('utf-8')).decode(),
-           'branch': 'master', 'message': f'update latest.json for v{VER}', 'encoding': 'base64'}
-req = urllib.request.Request(f"{API}/contents/latest.json", data=json.dumps(payload).encode(),
-    headers={'Content-Type': 'application/json'}, method='PUT')
-urllib.request.urlopen(req, timeout=30)
-print("latest.json uploaded (base64)")
-
-# ---- 4) 强制验证 raw URL(不做这步 = 重演"检查更新失败"事故) ----
-ok = False
-for i in range(6):
-    time.sleep(5)  # 等 CDN 缓存刷新
-    try:
-        with urllib.request.urlopen(f"https://gitee.com/xiaotimor/teemo-code-update/raw/master/latest.json?t={time.time()}", timeout=30) as r:
-            parsed = json.loads(r.read())
-        assert parsed["version"] == VER, f"version mismatch: {parsed['version']}"
-        ok = True
-        break
-    except Exception as e:
-        print(f"verify attempt {i+1} failed: {e}")
-if not ok:
-    raise SystemExit("raw URL verification FAILED - latest.json may be corrupted")
-
-# ---- 5) 验证下载链接(200 且字节数一致) ----
-req = urllib.request.Request(data["platforms"]["windows-x86_64"]["url"], method='HEAD')
-with urllib.request.urlopen(req, timeout=30) as r:
-    assert r.status == 200 and int(r.headers['Content-Length']) == EXE.stat().st_size
-
-# ---- 6) 主仓库打 tag + 推送(GitHub SSL 偶发失败,重试 3 次) ----
-subprocess.run(f'git tag -a v{VER} -m "TeemoCode_v{VER}"', cwd=r"D:\works\ziji\MonkeyCode", shell=True)
-for i in range(3):
-    r = subprocess.run("git push fork v" + VER, cwd=r"D:\works\ziji\MonkeyCode", shell=True, capture_output=True, text=True)
-    if r.returncode == 0: break
-    time.sleep(3)
-r = subprocess.run("git push fork wip-local", cwd=r"D:\works\ziji\MonkeyCode", shell=True, capture_output=True, text=True)
-print("wip-local push:", "ok" if r.returncode == 0 else r.stderr[-200:])
-
-print(f"ALL CHECKS PASSED - v{VER} published")
+```bat
+cd /d D:\works\ziji\MonkeyCode
+python desktop\scripts\publish_gitee.py <版本号> "<更新说明>"
 ```
 
-脚本跑完打印 `ALL CHECKS PASSED` 才算发布成功。
+脚本自动完成(每步带重试,Gitee SSL 偶发断连已内置处理):
+
+1. **配额检查**:遍历所有 release 附件 HEAD 累计大小;若 `已用 + 新包*1.1 > 1024MB`,删除**最老的 2 个 release**腾空间;
+2. **新建 release 节点**(tag = v<版本>,不再复用旧 release);
+3. **上传 exe + sig**(`attach_files` 端点,multipart);
+4. **更新 latest.json**(Contents API + base64);
+5. **双端验证**:raw URL 回读版本号 + 下载 URL HEAD 200 且字节数一致(CDN 滞后重试 10 次)。
+
+输出 `ALL CHECKS PASSED - v<版本> published` 才算成功。
+
+> 历史模板(挂 v0.1.22/v0.1.32/v0.1.34 老 release 的做法)已废弃:那个方案要求 latest.json 的 URL tag 段与实际挂载 release 不一致,极易写错导致 404(2026-09-07 实际发生过)。
 
 ### 步骤 5: 发布后独立复核(可选但推荐)
 
@@ -299,6 +231,7 @@ debug 版 TeemoCode 正在运行锁住了 exe。**先关掉运行中的 TeemoCod
 
 | 版本 | 主要内容 |
 |---|---|
+| 0.1.37 | 工作统计面板(token/活跃天数/代码修改 + 热力图);发布规则改为每版新建 Release + 配额自动清理 |
 | 0.1.34 | 工作区切换任务卡顿修复 + 发布签名命令修复 |
 | 0.1.26 | Git 技能库导入 + 大模型解析(并行) + 摘要标签持久化 + 版本化 base_url 修复 |
 | 0.1.25 | 指令仓库 + confirm 崩溃修复 + 队列持久化 + 团队注入 |
