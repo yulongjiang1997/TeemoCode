@@ -820,12 +820,30 @@ export function App() {
           // 关闭即回到原工作区。SettingsView 本体(main.flex-1)在浮层里
           // 撑满,内部布局与导航逻辑零改动。
           <div
-            role="dialog"
-            aria-modal="true"
-            aria-label={t("settings.title")}
-            className="fixed inset-0 z-40 flex min-h-0 min-w-0 bg-mask-100"
+            role="presentation"
+            className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-6"
+            onClick={(e) => {
+              // 点遮罩空白处关闭(点击内容区不冒泡触发)
+              if (e.target === e.currentTarget) setSettingsOpen(false);
+            }}
           >
-            <SettingsView onClose={() => setSettingsOpen(false)} hasRunningTask={sessions.some((s) => s.status === "running")} />
+            {/* 固定尺寸 = 父窗口初始的 70%:不随父窗口缩放(用户报障:跟随
+                inset-0 时父窗口缩小会挤压变形)。开窗后固定,关闭重开按当时
+                父窗口重新计 70%。 */}
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label={t("settings.title")}
+              className="flex overflow-hidden rounded-box border border-base-300 shadow-2xl"
+              style={{
+                width: `${Math.round(window.innerWidth * 0.7)}px`,
+                height: `${Math.round(window.innerHeight * 0.7)}px`,
+                maxWidth: "calc(100vw - 3rem)",
+                maxHeight: "calc(100vh - 3rem)",
+              }}
+            >
+              <SettingsView onClose={() => setSettingsOpen(false)} hasRunningTask={sessions.some((s) => s.status === "running")} />
+            </div>
           </div>
         ) : creating ? (
           <NewTaskModal
