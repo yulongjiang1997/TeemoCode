@@ -72,7 +72,8 @@ fn main() {
                 "skills_delete",
                 "skills_set_default",
                 // 模型网关(gateway/mod.rs:统一大模型调度平台)
-                "gateway_status",
+                "gateway_ensure_running",
+    "gateway_status",
                 "gateway_log",
                 "gateway_save_group",
                 "gateway_delete_group",

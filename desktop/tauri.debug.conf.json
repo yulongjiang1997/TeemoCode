@@ -57,6 +57,7 @@
             "allow-gateway-log",
             "allow-gateway-regen-key",
             "allow-gateway-save-group",
+            "allow-gateway-ensure-running",
             "allow-gateway-status",
             "allow-gateway-test-group",
             "allow-gateway-update-settings",

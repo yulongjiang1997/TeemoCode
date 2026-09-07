@@ -1918,6 +1918,7 @@ fn main() {
             git::skills_import_git,
             git::skill_analyze,
             gateway::gateway_status,
+            gateway::gateway_ensure_running,
             gateway::gateway_log,
             gateway::gateway_save_group,
             gateway::gateway_delete_group,

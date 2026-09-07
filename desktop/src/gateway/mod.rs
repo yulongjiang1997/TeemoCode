@@ -526,6 +526,27 @@ pub fn shutdown_all(app: &AppHandle) {
     }
 }
 
+/// 幂等自愈:配置 enabled 但监听没在跑(启动竞态失败/意外停止)时按
+/// 当前配置重建。已在跑或未启用则原样返回。工作区拉模型列表时调用,
+/// 避免用户在设置页之外无从发现"网关停了"。
+pub fn ensure_running(app: &AppHandle) {
+    let host: GatewayHost = app.state::<GatewayHost>().inner().clone();
+    let snapshot = host.snapshot();
+    if !snapshot.settings.enabled {
+        return;
+    }
+    let up = host
+        .0
+        .server
+        .lock_ok()
+        .as_ref()
+        .map(|h| h.port == snapshot.settings.port && h.is_running())
+        .unwrap_or(false);
+    if !up {
+        reload(app);
+    }
+}
+
 /// 壳启动时挂载 managed state 并按配置起服务。挂在配置加载之后。
 pub fn manage(app: &AppHandle) {
     app.manage(GatewayHost::new());
@@ -565,14 +586,35 @@ pub fn reload(app: &AppHandle) {
     *host.0.server_error.lock_ok() = None;
     let handle = match (enabled, keep) {
         (true, Some(h)) => Some(h),
-        (true, None) => match server::start(host.clone(), port) {
-            Ok(h) => Some(h),
-            Err(e) => {
-                eprintln!("[desktop] 模型网关启动失败: {e}");
-                *host.0.server_error.lock_ok() = Some(e);
-                None
+        (true, None) => {
+            // 启动失败重试 3 次(间隔 300ms):上次进程的监听线程退出
+            // 与本次绑定存在竞态(退出钩子 stop 后线程最多 100ms 才真正
+            // 释放端口),重试兜住"重启即端口占用"的窗口期
+            let mut started = None;
+            let mut last_err = String::new();
+            for attempt in 0..3 {
+                match server::start(host.clone(), port) {
+                    Ok(h) => {
+                        started = Some(h);
+                        break;
+                    }
+                    Err(e) => {
+                        last_err = e;
+                        if attempt < 2 {
+                            std::thread::sleep(std::time::Duration::from_millis(300));
+                        }
+                    }
+                }
             }
-        },
+            match started {
+                Some(h) => Some(h),
+                None => {
+                    eprintln!("[desktop] 模型网关启动失败(重试 3 次): {last_err}");
+                    *host.0.server_error.lock_ok() = Some(last_err);
+                    None
+                }
+            }
+        }
         (false, _) => None,
     };
     *server_slot = handle;
@@ -719,6 +761,13 @@ pub async fn gateway_save_group(app: AppHandle, group: ModelGroup) -> Result<Mod
     })
     .await
     .map_err(|e| format!("保存失败: {e}"))?
+}
+
+/// 幂等自愈:enabled 但没在跑时按当前配置重建(工作区拉模型时调用)。
+#[tauri::command]
+pub async fn gateway_ensure_running(app: AppHandle) -> Result<(), String> {
+    ensure_running(&app);
+    Ok(())
 }
 
 /// 删除模型组。

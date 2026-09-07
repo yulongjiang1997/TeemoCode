@@ -124,3 +124,9 @@ export async function gatewayRegenKey(id: string): Promise<string> {
 export async function gatewayTestGroup(id: string): Promise<GatewayTestResult> {
   return invoke<GatewayTestResult>("gateway_test_group", { id });
 }
+
+/** 幂等自愈:enabled 但没在跑时按当前配置重建。工作区拉模型列表时调用,
+ * 避免网关意外停止后用户无从发现(发网关组请求会一直 connection refused)。 */
+export async function gatewayEnsureRunning(): Promise<void> {
+  return invoke<void>("gateway_ensure_running");
+}

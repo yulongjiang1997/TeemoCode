@@ -35,6 +35,7 @@ import { sessionSetMode, sessionSetModel, sessionSetSkills, sessionSetThink } fr
 import { afterEngineReady } from "@/lib/ipc/engine";
 import { gitImport, gitPush } from "@/lib/ipc/git";
 import { modelMenuList, resolveModelName } from "@/lib/models/modelMenu";
+import { gatewayEnsureRunning } from "@/lib/ipc/gateway";
 import { modelsList, type ModelInfo, type SessionMeta } from "@/lib/ipc/sessions";
 import { defaultEnabledSkills, skillsList, type SkillInfo } from "@/lib/ipc/skills";
 import { pickAttachmentPaths } from "@/lib/ipc/uploads";
@@ -363,6 +364,9 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
   // 顺带 models.find(...)?.think 恒 undefined、思考档触发器回落「低」给错读数。
   useEffect(() => {
     let alive = true;
+    // 幂等自愈:网关 enabled 但意外没在跑时拉起来(启动竞态/上次退出残留)。
+    // 不等结果、失败静默——没开网关时这是纯读检查,不该拖慢模型清单。
+    void gatewayEnsureRunning().catch(() => {});
     void afterEngineReady(modelsList)
       .then((list) => {
         if (alive && Array.isArray(list)) setModels(list);
