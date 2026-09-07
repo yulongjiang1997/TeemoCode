@@ -36,11 +36,15 @@ export function TaskPanel({
   entries,
   subagents,
   onDismiss,
+  onToggleEntry,
 }: {
   entries: PlanEntry[];
   /** 正在/已完成执行的子代理工具卡(并行编排:每卡 = 一个子代理) */
   subagents?: ToolItem[];
   onDismiss: () => void;
+  /** 手动标记完成(2026-08-25 用户报障:模型标漏步骤时面板赖着不走):
+   *  勾一条 = 视为 completed。缺省 = 只读面板(旧形态)。 */
+  onToggleEntry?: (index: number, checked: boolean) => void;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -122,9 +126,15 @@ export function TaskPanel({
               <li key={e.id ?? i} ref={isCurrent ? currentRef : undefined} className="flex items-start gap-2">
                 <input
                   type="checkbox"
-                  className="checkbox checkbox-xs mt-px shrink-0"
+                  className="checkbox checkbox-xs mt-px shrink-0 cursor-pointer"
                   checked={e.status === "completed"}
-                  readOnly
+                  disabled={!onToggleEntry}
+                  onChange={
+                    onToggleEntry
+                      ? (ev) => onToggleEntry(i, ev.target.checked)
+                      : undefined
+                  }
+                  title={e.status === "completed" ? undefined : t("chat.plan.markDone")}
                   aria-label={e.content}
                 />
                 {numbered && (

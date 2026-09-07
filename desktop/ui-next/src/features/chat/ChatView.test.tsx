@@ -307,6 +307,126 @@ describe("聊天视图", () => {
     expect(screen.getByText(/正在:改代码/)).toBeTruthy();
   });
 
+  it("任务面板手动标记完成:勾掉模型漏标的步骤,全部完成后面板消失(2026-08-25 报障)", async () => {
+    const { emit } = stubShell();
+    render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    emit("frames:s1", [
+      {
+        type: "task-running",
+        kind: "acp_event",
+        data: {
+          update: {
+            sessionUpdate: "plan",
+            entries: [
+              { content: "读代码", status: "completed" },
+              { content: "改代码", status: "in_progress" },
+              { content: "跑测试", status: "pending" },
+            ],
+          },
+        },
+        timestamp: 5,
+        seq: 5,
+      },
+    ]);
+    await waitFor(() => expect(screen.getByText("任务 1/3")).toBeTruthy());
+
+    // 手动勾掉模型漏标的"跑测试":计数前进
+    await userEvent.click(screen.getByRole("checkbox", { name: "跑测试" }));
+    await waitFor(() => expect(screen.getByText("任务 2/3")).toBeTruthy());
+
+    // 取消勾选:回到 1/3(标错了可反悔)
+    await userEvent.click(screen.getByRole("checkbox", { name: "跑测试" }));
+    await waitFor(() => expect(screen.getByText("任务 1/3")).toBeTruthy());
+    // 再勾上,计数 2/3
+    await userEvent.click(screen.getByRole("checkbox", { name: "跑测试" }));
+    await waitFor(() => expect(screen.getByText("任务 2/3")).toBeTruthy());
+
+    // 同一清单进度推进(模型重发,status 不变):手动勾保留
+    emit("frames:s1", [
+      {
+        type: "task-running",
+        kind: "acp_event",
+        data: {
+          update: {
+            sessionUpdate: "plan",
+            entries: [
+              { content: "读代码", status: "completed" },
+              { content: "改代码", status: "in_progress" },
+              { content: "跑测试", status: "pending" },
+            ],
+          },
+        },
+        timestamp: 6,
+        seq: 6,
+      },
+    ]);
+    await waitFor(() => expect(screen.getByText("任务 2/3")).toBeTruthy());
+
+    // 模型把"改代码"标完成 → 加上手动勾的"跑测试"全部完成 → 面板消失
+    emit("frames:s1", [
+      {
+        type: "task-running",
+        kind: "acp_event",
+        data: {
+          update: {
+            sessionUpdate: "plan",
+            entries: [
+              { content: "读代码", status: "completed" },
+              { content: "改代码", status: "completed" },
+              { content: "跑测试", status: "in_progress" },
+            ],
+          },
+        },
+        timestamp: 7,
+        seq: 7,
+      },
+    ]);
+    await waitFor(() => expect(screen.queryByText(/任务 \d\/\d/)).toBeNull());
+  });
+
+  it("任务面板:新一轮新清单(plan 内容变化)复位手动标记", async () => {
+    const { emit } = stubShell();
+    render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
+    emit("frames:s1", [
+      {
+        type: "task-running",
+        kind: "acp_event",
+        data: {
+          update: {
+            sessionUpdate: "plan",
+            entries: [{ content: "旧任务", status: "in_progress" }],
+          },
+        },
+        timestamp: 5,
+        seq: 5,
+      },
+    ]);
+    await waitFor(() => expect(screen.getByText("任务 0/1")).toBeTruthy());
+    await userEvent.click(screen.getByRole("checkbox", { name: "旧任务" }));
+    // 全部手动完成 → 面板消失
+    await waitFor(() => expect(screen.queryByText(/任务 \d\/\d/)).toBeNull());
+
+    // 新清单(不同内容) → 面板重新出现,手动标记已复位
+    emit("frames:s1", [
+      {
+        type: "task-running",
+        kind: "acp_event",
+        data: {
+          update: {
+            sessionUpdate: "plan",
+            entries: [{ content: "新任务", status: "in_progress" }],
+          },
+        },
+        timestamp: 6,
+        seq: 6,
+      },
+    ]);
+    await waitFor(() => expect(screen.getByText("任务 0/1")).toBeTruthy());
+    expect(screen.getByRole("checkbox", { name: "新任务" })).toBeTruthy();
+  });
+
   it("H1 浮层优先:抽屉开 + 待审批,一次 Esc 只关抽屉不发 permission-resp;再按才拒绝", async () => {
     const { ops, emit } = stubShell();
     render(<ChatView meta={META} />);

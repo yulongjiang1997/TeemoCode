@@ -607,6 +607,22 @@ export function ChatView({
   // 计划面板可手动关闭(onDismiss):关闭后本轮 plan 帧仍在就不会再弹,
   // 切会话/新 plan 帧到达时复位(见下方 effect)
   const [planDismissed, setPlanDismissed] = useState(false);
+  // 手动标记完成(2026-08-25 用户报障:模型标漏步骤,面板一直赖着):
+  // 覆盖层把勾掉的行视为 completed;全部完成(或被覆盖完成)即整面板消失,
+  // 下一轮 task-started 复位(与 plan 同生命周期,见 reduceFrame)。
+  // 键 = plan 数组下标(plan 帧按整体覆盖重发,下标即条目身份;id 缺省时无更稳的键)。
+  const [planOverrides, setPlanOverrides] = useState<Set<number>>(new Set());
+  // plan 条目指纹:内容变了(新一轮的新清单)才复位手动标记;同一清单的
+  // 进度推进(plan 帧整体重发、只改 status)必须保留用户的勾——漏标步骤
+  // 正是模型反复重发都不改的那几条,重置了标记就白勾了
+  const planKeyRef = useRef("");
+  useEffect(() => {
+    const key = state.plan.map((e) => e.id ?? e.content).join("\n");
+    if (planKeyRef.current !== key) {
+      planKeyRef.current = key;
+      setPlanOverrides(new Set());
+    }
+  }, [state.plan]);
   const titleIme = useRef(createImeGuard());
   // 提交/放弃后置位:Enter 提交会卸载输入框,随之而来的 blur 不能再提交一次
   const renameDoneRef = useRef(false);
@@ -638,6 +654,7 @@ export function ChatView({
     setEditingTitle(false);
     // 切会话复位计划面板关闭态(上一会话的关闭不该带到新会话)
     setPlanDismissed(false);
+    setPlanOverrides(new Set());
   }, [meta.id]);
 
   // ===== 备用模型链切换效果 =====
@@ -1311,9 +1328,32 @@ export function ChatView({
           再压一条通栏线是双重描边;云端视图同款 */}
       <footer className="shrink-0 p-3">
         <div className="mx-auto flex chat-measure flex-col gap-2">
-          {state.plan.length > 0 && !planDismissed && (
-            <TaskPanel entries={state.plan} onDismiss={() => setPlanDismissed(true)} />
-          )}
+          {(() => {
+            // 手动标记完成的行覆盖为 completed;全部完成即整面板消失
+            // (2026-08-25 用户报障:模型漏标步骤,面板赖着不走)
+            if (state.plan.length > 0 && planOverrides.size > 0) {
+              const all = state.plan.every((e, i) => e.status === "completed" || planOverrides.has(i));
+              if (all) return null;
+            }
+            const entries =
+              planOverrides.size > 0
+                ? state.plan.map((e, i) => (planOverrides.has(i) ? { ...e, status: "completed" } : e))
+                : state.plan;
+            return state.plan.length > 0 && !planDismissed ? (
+              <TaskPanel
+                entries={entries}
+                onDismiss={() => setPlanDismissed(true)}
+                onToggleEntry={(i, checked) =>
+                  setPlanOverrides((prev) => {
+                    const next = new Set(prev);
+                    if (checked) next.add(i);
+                    else next.delete(i);
+                    return next;
+                  })
+                }
+              />
+            ) : null;
+          })()}
           <LocalComposerHost
             ref={composerRef}
             sessionId={meta.id}
