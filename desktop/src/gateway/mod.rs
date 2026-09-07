@@ -515,6 +515,17 @@ impl GatewayHost {
     }
 }
 
+/// 应用退出时停掉网关监听(2026-09-07 用户报障:关了程序端口还被占,
+/// 下次启动"端口占用")。监听线程是阻塞 accept 的普通线程,进程不退
+/// 它就不退;显式置 stop 让线程自然结束。
+pub fn shutdown_all(app: &AppHandle) {
+    let host: GatewayHost = app.state::<GatewayHost>().inner().clone();
+    let taken = host.0.server.lock_ok().take();
+    if let Some(h) = taken {
+        h.stop();
+    }
+}
+
 /// 壳启动时挂载 managed state 并按配置起服务。挂在配置加载之后。
 pub fn manage(app: &AppHandle) {
     app.manage(GatewayHost::new());

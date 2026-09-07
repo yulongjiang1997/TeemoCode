@@ -2222,12 +2222,44 @@ impl OhmyDriver {
             .models
             .iter()
             .find(|m| m.name == name)
-            .or_else(|| self.0.models.iter().find(|m| strip_source_suffix(&m.name) == strip_source_suffix(name)))
-            .ok_or_else(|| format!("未知模型 {name:?}"))?;
-        if m.locked && !allow_locked {
-            return Err(format!("模型 {name:?} 当前会员档不可用,升级后重新同步"));
+            .or_else(|| self.0.models.iter().find(|m| strip_source_suffix(&m.name) == strip_source_suffix(name)));
+        match m {
+            Some(m) => {
+                if m.locked && !allow_locked {
+                    return Err(format!("模型 {name:?} 当前会员档不可用,升级后重新同步"));
+                }
+                Ok(m.name.clone())
+            }
+            // 壳清单没中 → 本地网关组兜底(2026-09-07 用户需求):网关组不在
+            // 壳清单(cfg.models)里,是 config.gateway 的动态条目——引擎启动
+            // 后新建/启用的组 Inner.models 里没有,但引擎 settings 已物化
+            // (gateway 变更时 rematerialize),这里认组名即可放行切换。
+            // 读取失败/组不存在按原样报未知模型。
+            None => self.gateway_group_name(&name).ok_or_else(|| format!("未知模型 {name:?}")),
         }
-        Ok(m.name.clone())
+    }
+
+    /// 本地网关组名校验:名字命中 config.gateway 里启用的组(总开关开 +
+    /// 组 enabled + key 已生成)返回组名,否则 None。resolve_model 的兜底
+    /// 分支用——网关组不在壳清单里(见 models_list 注入处的说明)。
+    fn gateway_group_name(&self, name: &str) -> Option<String> {
+        let raw = std::fs::read(self.0.app.config_dir().ok()?.join("config.json")).ok()?;
+        let cfg = serde_json::from_slice::<Value>(&raw).ok()?;
+        let gw = cfg.get("gateway")?;
+        if !gw.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false) {
+            return None;
+        }
+        let name_trim = name.trim();
+        gw.get("groups")?
+            .as_array()?
+            .iter()
+            .find(|g| {
+                g.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false)
+                    && !g.get("key").and_then(|v| v.as_str()).unwrap_or("").is_empty()
+                    && g.get("name").and_then(|v| v.as_str()) == Some(name_trim)
+            })
+            .and_then(|g| g.get("name").and_then(|v| v.as_str()))
+            .map(str::to_string)
     }
 
     /// 会话思考档位(sidecar 持久;""=跟随模型默认)。畸形值按默认处理。

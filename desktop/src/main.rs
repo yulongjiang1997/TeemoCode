@@ -2099,6 +2099,9 @@ fn main() {
                 persist_main_window_state(app);
                 #[cfg(target_os = "windows")]
                 native_pet::shutdown(app);
+                // 停网关监听(阻塞 accept 的普通线程,不停则进程不退,
+                // 下次启动报端口占用——2026-09-07 用户报障)
+                gateway::shutdown_all(app);
                 if let Some(engine) = app.state::<DriverHost>().take() {
                     engine.stop();
                 }
