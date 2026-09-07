@@ -107,6 +107,72 @@ impl RepoCtx {
     }
 }
 
+/// git diff --numstat:返回每个变更文件的增删行数。
+/// 覆盖已跟踪修改(staged+unstaged)与未跟踪新文件(全新增计行),
+/// rename 记录折算成新路径(delta 行数),与 file_changes 同口径。
+/// 用于工作统计的代码修改量计算。
+fn diff_numstat(ctx: &RepoCtx) -> Result<Value, String> {
+    if !ctx.is_git_repo() {
+        return Ok(json!({ "files": [], "total_added": 0, "total_deleted": 0 }));
+    }
+    let mut files = Vec::new();
+    let mut total_added: u64 = 0;
+    let mut total_deleted: u64 = 0;
+
+    // 已跟踪变更(含 staged):diff HEAD --numstat
+    // rename 行是 4 字段(old→new),最后一列才是当前路径
+    let out = ctx.git(&["-c", "core.quotepath=false", "diff", "HEAD", "--numstat"])
+        .map_err(|e| format!("git diff 失败: {e}"))?;
+    for line in out.lines() {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() < 3 { continue; }
+        let (added, deleted) = match (parts[0].parse::<u64>(), parts[1].parse::<u64>()) {
+            (Ok(a), Ok(d)) => (a, d),
+            _ => continue, // binary file 显示 "-"
+        };
+        let path = parts[parts.len() - 1];
+        total_added += added;
+        total_deleted += deleted;
+        files.push(json!({ "path": path, "added": added, "deleted": deleted }));
+    }
+
+    // 未跟踪文件:git status porcelain 列出后逐个构造成全新增计数。
+    // 按 file_changes 的思路用 -z 解析,?? 开头即未跟踪。
+    let st = ctx.git_allow_fail(&["-z", "status", "--porcelain"]);
+    let mut untracked: Vec<String> = Vec::new();
+    for entry in st.split('\0').filter(|s| !s.is_empty()) {
+        let mut it = entry.chars();
+        if (it.next(), it.next()) == (Some('?'), Some('?')) {
+            let p = &entry[3..];
+            if !p.is_empty() {
+                untracked.push(p.to_string());
+            }
+        }
+    }
+    if !untracked.is_empty() {
+        let mut args: Vec<&str> = vec!["-c", "core.quotepath=false", "diff", "--numstat", "--no-index", "--"];
+        for p in &untracked {
+            args.push(p);
+        }
+        if let Ok(out2) = ctx.run_git(&args, true) {
+            for line in out2.lines() {
+                let parts: Vec<&str> = line.split('\t').collect();
+                if parts.len() < 3 { continue; }
+                let (added, deleted) = match (parts[0].parse::<u64>(), parts[1].parse::<u64>()) {
+                    (Ok(a), Ok(d)) => (a, d),
+                    _ => continue,
+                };
+                let path = parts[parts.len() - 1];
+                total_added += added;
+                total_deleted += deleted;
+                files.push(json!({ "path": path, "added": added, "deleted": deleted }));
+            }
+        }
+    }
+
+    Ok(json!({ "files": files, "total_added": total_added, "total_deleted": total_deleted }))
+}
+
 /// 统一入口:kind 分派,返回 {result} 或 {error}(与内核 call-response 载荷同构)。
 pub fn dispatch(ctx: &RepoCtx, kind: &str, payload: &Value) -> Value {
     let path = payload.get("path").and_then(|v| v.as_str()).unwrap_or("");
@@ -121,6 +187,12 @@ pub fn dispatch(ctx: &RepoCtx, kind: &str, payload: &Value) -> Value {
     if kind == "repo_recent_files" {
         let since_min = payload.get("since_min").and_then(|v| v.as_u64()).unwrap_or(60);
         return json!({ "result": recent_files(ctx, since_min) });
+    }
+    if kind == "repo_diff_numstat" {
+        return match diff_numstat(ctx) {
+            Ok(v) => json!({ "result": v }),
+            Err(e) => json!({ "error": e }),
+        };
     }
     let r = match kind {
         "repo_file_list" => list_files(ctx, path),

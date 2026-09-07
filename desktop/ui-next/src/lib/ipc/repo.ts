@@ -92,3 +92,23 @@ export async function repoRecentFiles(id: string, sinceMin = 60): Promise<string
   const rows = unwrap(r, []);
   return rows.map((x) => x.path).filter((p): p is string => typeof p === "string");
 }
+
+/** git diff --numstat 结果:每个变更文件的增删行数。 */
+export interface DiffNumstatFile {
+  path: string;
+  added: number;
+  deleted: number;
+}
+
+export interface DiffNumstatResult {
+  files: DiffNumstatFile[];
+  total_added: number;
+  total_deleted: number;
+}
+
+/** 获取工作区相对 HEAD 的变更行数统计(未提交的修改)。 */
+export async function repoDiffNumstat(id: string): Promise<DiffNumstatResult> {
+  if (!inDesktopShell()) return { files: [], total_added: 0, total_deleted: 0 };
+  const r = await call<DiffNumstatResult>(id, "repo_diff_numstat", {});
+  return unwrap(r, { files: [], total_added: 0, total_deleted: 0 });
+}

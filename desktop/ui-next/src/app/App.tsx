@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 
 import { ChatView } from "@/features/chat/ChatView";
 import { UsageStatsView } from "@/features/stats/UsageStatsView";
+import { WorkStatsView, prefetchWorkStats } from "@/features/stats/WorkStatsView";
 import { CloudTaskView } from "@/features/cloud/CloudTaskView";
 import { DownloadsDock } from "@/features/downloads/DownloadsDock";
 import { EngineBanner } from "@/features/engine/EngineBanner";
@@ -321,6 +322,10 @@ export function App() {
     files?: File[];
   } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [statsTab, setStatsTab] = useState<"usage" | "work">("usage");
+
+  // 切到统计空间时后台预加载工作统计数据(模块级缓存 60s)
+  useEffect(() => { if (space === "stats") prefetchWorkStats(); }, [space]);
   // 自定义背景图(data URL + 透明度):通用设置里改,这里监听事件重读
   const [bgImage, setBgImage] = useState(readBgImage);
   const [bgOpacity, setBgOpacity] = useState(readBgOpacity);
@@ -856,7 +861,17 @@ export function App() {
             }}
           />
         ) : space === "stats" ? (
-          <UsageStatsView />
+          <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable] bg-mask-100">
+            <div className="flex flex-col">
+              <div className="flex gap-1 border-b border-base-300 px-6 pt-4">
+                <button type="button" className={`btn btn-ghost btn-sm ${statsTab === "usage" ? "text-primary" : ""}`} onClick={() => setStatsTab("usage")}>{t("stats.tab.usage") ?? "用量统计"}</button>
+                <button type="button" className={`btn btn-ghost btn-sm ${statsTab === "work" ? "text-primary" : ""}`} onClick={() => setStatsTab("work")}>{t("stats.tab.work") ?? "工作统计"}</button>
+              </div>
+              <div className="px-6 py-5">
+                {statsTab === "usage" ? <UsageStatsView /> : <WorkStatsView />}
+              </div>
+            </div>
+          </div>
         ) : (
           <MainArea
             current={space === "cloud" ? null : current}

@@ -556,8 +556,7 @@ export function UsageStatsView() {
   ];
 
   return (
-    <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable] bg-mask-100 px-6 py-5">
-      <div className="mx-auto flex max-w-3xl flex-col gap-4">
+    <div className="flex flex-col gap-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h1 className="text-lg font-semibold">{t("stats.title")}</h1>
@@ -663,7 +662,6 @@ export function UsageStatsView() {
             </section>
           </>
         )}
-      </div>
     </div>
   );
 }

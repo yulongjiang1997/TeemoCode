@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.37",
+    notes: "新增工作统计(token/活跃天数/代码修改行数 + 热力图,支持今日/7日/累计)",
+  },
+  {
     version: "0.1.36",
     notes: "彻底修复 release 切换任务工作区卡顿与 cmd 黑框闪烁:git 分支查询/切换命令移入后台线程执行 + 切任务分支刷新防抖",
   },
