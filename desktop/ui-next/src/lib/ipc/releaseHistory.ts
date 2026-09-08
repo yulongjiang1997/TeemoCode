@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.38",
+    notes: "工作区模型菜单接入本地网关分组;设置页改为独立弹窗(可拖动/透明度可调)",
+  },
+  {
     version: "0.1.37",
     notes: "新增工作统计(token/活跃天数/代码修改行数 + 热力图,支持今日/7日/累计)",
   },
