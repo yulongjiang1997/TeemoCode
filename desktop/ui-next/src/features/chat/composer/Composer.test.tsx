@@ -487,9 +487,12 @@ describe("运行态 / 停止 / 排队", () => {
     await waitFor(() => expect(screen.getByText("思考中")).toBeTruthy());
     await userEvent.type(box, "第一条{Enter}");
     await userEvent.type(box, "待移除的{Enter}");
-    // 折叠态只显示首条;展开才能移除(队首执行中锁定,只能删后面的待发送项)
+    // 折叠态只显示首条;展开才能移除。锁定按 state(执行中/失败锁,pending
+    // 全可编辑移除——2026-09-08 用户需求):执行中尚未收尾,队首此时仍
+    // pending,两条都可删,用 getAllByRole 取「待移除的」那条(index 1)
     await userEvent.click(screen.getByRole("button", { name: "展开队列" }));
-    await userEvent.click(screen.getByRole("button", { name: "移除" }));
+    const removes = screen.getAllByRole("button", { name: "移除" });
+    await userEvent.click(removes[1]!);
     expect(screen.queryByText("待移除的")).toBeNull();
     expect(screen.getByText("第一条")).toBeTruthy(); // 执行中条目保留
     act(() => emit("frames:s1", [{ type: "task-ended", timestamp: 7, seq: 7 }]));

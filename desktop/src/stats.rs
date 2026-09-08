@@ -32,7 +32,12 @@ pub(super) struct Record {
     pub(super) output_tokens: u64,
     /// 模型调用次数(即收到的 usage 事件数)
     pub(super) calls: u64,
+    /// 累计执行时长(毫秒,多次轮累加)。轮开始记 start_ms,轮结束时
+    /// now - start_ms 追加(2026-09-08 用户需求:工作统计活跃时长精确到秒)。
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(super) duration_ms: u64,
 }
+fn is_zero(v: &u64) -> bool { *v == 0 }
 
 type ModelBuckets = HashMap<String, Record>;
 type SessionBuckets = HashMap<String, ModelBuckets>;
@@ -53,6 +58,20 @@ impl UsageStats {
         let store = Self { path, days: StdMutex::new(days) };
         store.prune();
         store
+    }
+
+    /// 追加某会话的累计执行时长(轮收尾调用;记录到当天首条模型桶,
+    /// 展示层按会话归并所有模型的 duration)。
+    pub(super) fn add_duration(&self, date: &str, sid: &str, duration_ms: u64) {
+        let mut days = self.days.lock_ok();
+        let rec = days
+            .entry(date.to_string())
+            .or_default()
+            .entry(sid.to_string())
+            .or_default()
+            .entry("<duration>".to_string())
+            .or_default();
+        rec.duration_ms = rec.duration_ms.saturating_add(duration_ms);
     }
 
     /// 进程级共享实例(usage 事件记账入口)。首次调用时从 config_dir 读盘,
@@ -144,15 +163,19 @@ impl UsageStats {
                     d.1 += rec.output_tokens;
                     d.2 += rec.calls;
 
-                    let m = by_model.entry(model.clone()).or_default();
-                    m.0 += rec.input_tokens;
-                    m.1 += rec.output_tokens;
-                    m.2 += rec.calls;
+                    // <duration> 是时长记账占位桶(加时长专用),不是模型——
+                    // 不进模型维度汇总,否则"按模型"表会多一行 <duration>
+                    if model != "<duration>" {
+                        let m = by_model.entry(model.clone()).or_default();
+                        m.0 += rec.input_tokens;
+                        m.1 += rec.output_tokens;
+                        m.2 += rec.calls;
 
-                    let dm = by_day_model.entry(date.clone()).or_default().entry(model.clone()).or_default();
-                    dm.0 += rec.input_tokens;
-                    dm.1 += rec.output_tokens;
-                    dm.2 += rec.calls;
+                        let dm = by_day_model.entry(date.clone()).or_default().entry(model.clone()).or_default();
+                        dm.0 += rec.input_tokens;
+                        dm.1 += rec.output_tokens;
+                        dm.2 += rec.calls;
+                    }
 
                     let s = by_session.entry(sid.clone()).or_insert_with(|| SessionAgg {
                         title: rec.title.clone(),
@@ -172,10 +195,14 @@ impl UsageStats {
                     d2.0 += rec.input_tokens;
                     d2.1 += rec.output_tokens;
                     d2.2 += rec.calls;
-                    let m2 = s.by_model.entry(model.clone()).or_default();
-                    m2.0 += rec.input_tokens;
-                    m2.1 += rec.output_tokens;
-                    m2.2 += rec.calls;
+                    if model != "<duration>" {
+                        let m2 = s.by_model.entry(model.clone()).or_default();
+                        m2.0 += rec.input_tokens;
+                        m2.1 += rec.output_tokens;
+                        m2.2 += rec.calls;
+                    }
+                    s.duration_ms = s.duration_ms.saturating_add(rec.duration_ms);
+                    *s.by_day_duration.entry(date.clone()).or_default() = s.by_day_duration.get(date).copied().unwrap_or(0).saturating_add(rec.duration_ms);
                 }
             }
         }
@@ -195,8 +222,10 @@ impl UsageStats {
                 "input_tokens": s.total.0,
                 "output_tokens": s.total.1,
                 "calls": s.total.2,
+                "duration_ms": s.duration_ms,
                 "days": s.by_day.iter().rev().map(|(date, d)| json!({
                     "date": date,
+                    "duration_ms": s.by_day_duration.get(date).copied().unwrap_or(0),
                     "input_tokens": d.0,
                     "output_tokens": d.1,
                     "calls": d.2,
@@ -235,6 +264,10 @@ struct SessionAgg {
     total: (u64, u64, u64),
     by_day: BTreeMap<String, (u64, u64, u64)>,
     by_model: BTreeMap<String, (u64, u64, u64)>,
+    /// 累计执行时长(毫秒,所有模型桶 + <duration> 桶之和)
+    duration_ms: u64,
+    /// 按天时长(毫秒),范围过滤(今日/7日)时用
+    by_day_duration: BTreeMap<String, u64>,
 }
 
 fn bucket_json(b: (u64, u64, u64)) -> Value {

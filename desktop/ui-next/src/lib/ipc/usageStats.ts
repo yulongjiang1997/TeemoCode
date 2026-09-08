@@ -23,6 +23,8 @@ export interface Bucket {
 
 export interface DayRow extends Bucket {
   date: string;
+  /** 该日累计执行时长(毫秒;旧数据缺省 0) */
+  duration_ms?: number;
 }
 
 export interface ModelRow extends Bucket {
@@ -34,6 +36,8 @@ export interface SessionRow extends Bucket {
   title: string;
   /** 子代理会话的父会话 id;顶层任务为 null */
   parent: string | null;
+  /** 累计执行时长(毫秒) */
+  duration_ms?: number;
   days: (DayRow & Bucket)[];
   models: ModelRow[];
 }

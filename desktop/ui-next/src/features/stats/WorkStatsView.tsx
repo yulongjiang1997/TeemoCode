@@ -36,7 +36,7 @@ interface TaskRow {
   inputTokens: number;
   outputTokens: number;
   calls: number;
-  activeDays: number;
+  durationMs: number;
   days: string[]; // 活跃日期键(热力图用)
   codeAdded: number;
   codeDeleted: number;
@@ -88,19 +88,34 @@ const rangeDates = (range: Range): Set<string> | null => {
 };
 
 /** 范围内的天数(今天/近7日)对会话 days 求和——与 UsageStatsView.aggSessionInRange 同口径 */
-function aggInRange(s: SessionRow, dates: Set<string> | null): { input: number; output: number; calls: number; activeDates: string[] } | null {
+function aggInRange(s: SessionRow, dates: Set<string> | null): { input: number; output: number; calls: number; activeDates: string[]; durationMs: number } | null {
   if (!dates) {
     return {
       input: s.input_tokens, output: s.output_tokens, calls: s.calls,
       activeDates: s.days.map((d) => d.date),
+      durationMs: s.duration_ms ?? 0,
     };
   }
   const hit = s.days.filter((d) => dates.has(d.date));
   if (hit.length === 0) return null;
-  const out = { input: 0, output: 0, calls: 0, activeDates: hit.map((d) => d.date) };
-  for (const d of hit) { out.input += d.input_tokens; out.output += d.output_tokens; out.calls += d.calls; }
+  const out = { input: 0, output: 0, calls: 0, activeDates: hit.map((d) => d.date), durationMs: 0 };
+  for (const d of hit) { out.input += d.input_tokens; out.output += d.output_tokens; out.calls += d.calls; out.durationMs += d.duration_ms ?? 0; }
   return out;
 }
+
+/** 毫秒 → XhXmXs(全 0 隐藏单位,如 5s / 3m10s / 1h5m9s) */
+export const fmtDuration = (ms: number): string => {
+  if (!ms || ms <= 0) return "0s";
+  const totalSec = Math.round(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  const parts: string[] = [];
+  if (h > 0) parts.push(`${h}h`);
+  if (m > 0 || h === 0) parts.push(`${m}m`);
+  if (s > 0 || parts.length === 0) parts.push(`${s}s`);
+  return parts.join("");
+};
 
 export function WorkStatsView() {
   const { t } = useI18n();
@@ -157,12 +172,13 @@ export function WorkStatsView() {
       if (s.parent) continue; // 子代理:归并进父任务,不单独成行
       // 本会话 + 所有子会话的 days 按 range 过滤求和
       const members = [s, ...sessions.filter((x) => x.parent === s.session_id)];
-      const agg = { input: 0, output: 0, calls: 0, activeDates: new Set<string>(), any: false };
+      const agg = { input: 0, output: 0, calls: 0, activeDates: new Set<string>(), any: false, durationMs: 0 };
       for (const mbr of members) {
         const r = aggInRange(mbr, dates);
         if (!r) continue;
         agg.any = true;
         agg.input += r.input; agg.output += r.output; agg.calls += r.calls;
+        agg.durationMs += r.durationMs;
         for (const d of r.activeDates) agg.activeDates.add(d);
       }
       if (!agg.any) continue;
@@ -181,7 +197,7 @@ export function WorkStatsView() {
         inputTokens: agg.input,
         outputTokens: agg.output,
         calls: agg.calls,
-        activeDays: agg.activeDates.size,
+        durationMs: agg.durationMs,
         days: [...agg.activeDates].sort(),
         codeAdded: diff?.total_added ?? 0,
         codeDeleted: diff?.total_deleted ?? 0,
@@ -192,9 +208,9 @@ export function WorkStatsView() {
   }, [sessions, metas, diffs, range, pickedDate]);
 
   const totals = useMemo(() => {
-    let input = 0, output = 0, calls = 0, added = 0, deleted = 0;
-    for (const r of tasks) { input += r.inputTokens; output += r.outputTokens; calls += r.calls; added += r.codeAdded; deleted += r.codeDeleted; }
-    return { input, output, calls, added, deleted, activeDays: tasks.reduce((mx, r) => Math.max(mx, r.activeDays), 0) };
+    let input = 0, output = 0, calls = 0, added = 0, deleted = 0, durationMs = 0;
+    for (const r of tasks) { input += r.inputTokens; output += r.outputTokens; calls += r.calls; added += r.codeAdded; deleted += r.codeDeleted; durationMs += r.durationMs; }
+    return { input, output, calls, added, deleted, durationMs };
   }, [tasks]);
 
   const rangeLabel = range === "today" ? (t("stats.card.today") ?? "今日") : range === "last7" ? (t("stats.card.last7d") ?? "近 7 天") : (t("stats.card.total") ?? "累计");
@@ -235,7 +251,7 @@ export function WorkStatsView() {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <SumCard label={t("stats.card.tokens") ?? "Token 用量"} value={fmtCompact(totals.input + totals.output)} sub={`${fmtCompact(totals.input)} ${t("stats.input") ?? "输入"} · ${fmtCompact(totals.output)} ${t("stats.output") ?? "输出"}`} />
         <SumCard label={t("stats.card.calls") ?? "调用次数"} value={fmtCompact(totals.calls)} sub={`${tasks.length} ${t("stats.work.tasks") ?? "个任务"}`} />
-        <SumCard label={t("stats.work.activeDays") ?? "活跃天数"} value={`${totals.activeDays}`} sub={rangeLabel} />
+        <SumCard label={t("stats.work.duration") ?? "活跃时长"} value={fmtDuration(totals.durationMs)} sub={rangeLabel} />
         <SumCard label={t("stats.work.codeChanges") ?? "代码修改"} value={`+${fmtCompact(totals.added)} / -${fmtCompact(totals.deleted)}`} sub={`${totals.added + totals.deleted} ${t("stats.work.lines") ?? "行"}`} />
       </div>
 
@@ -263,7 +279,7 @@ export function WorkStatsView() {
                   <th>{t("stats.work.model") ?? "模型"}</th>
                   <th className="text-right">{t("stats.card.tokens") ?? "Token"}</th>
                   <th className="text-right">{t("stats.card.calls") ?? "调用"}</th>
-                  <th className="text-right">{t("stats.work.days") ?? "天数"}</th>
+                  <th className="text-right">{t("stats.work.duration") ?? "时长"}</th>
                   <th className="text-right">{t("stats.work.added") ?? "新增"}</th>
                   <th className="text-right">{t("stats.work.deleted") ?? "删除"}</th>
                 </tr>
@@ -275,7 +291,7 @@ export function WorkStatsView() {
                     <td className="max-w-[140px] truncate text-base-content/60" title={r.model}>{r.model}</td>
                     <td className="text-right tabular-nums" title={`${r.inputTokens + r.outputTokens} tokens`}>{fmtCompact(r.inputTokens + r.outputTokens)}</td>
                     <td className="text-right tabular-nums">{fmtCompact(r.calls)}</td>
-                    <td className="text-right tabular-nums">{r.activeDays}</td>
+                    <td className="text-right tabular-nums">{fmtDuration(r.durationMs)}</td>
                     <td className="text-right tabular-nums text-success/80">{r.codeAdded > 0 ? `+${fmtCompact(r.codeAdded)}` : "-"}</td>
                     <td className="text-right tabular-nums text-error/80">{r.codeDeleted > 0 ? `-${fmtCompact(r.codeDeleted)}` : "-"}</td>
                   </tr>

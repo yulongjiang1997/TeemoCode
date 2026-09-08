@@ -118,9 +118,10 @@ function QueueArea({ ctl }: { ctl: ComposerCtl }) {
       </div>
       <ul className="flex flex-col gap-0.5">
         {queue.map((item, i) => {
-          // 队首(执行中)锁住:不可拖动/删除/编辑;其余指令可排序/编辑/移除。
-          // 旧 UI QueueArea 以位置(i===0)判定锁定(队首恒为执行中项),这里保持一致。
-          const locked = i === 0;
+          // 按 state 锁:执行中/失败指令不可拖动/编辑(失败走重试,执行中
+          // 正在跑);**pending 全部可编辑,包括队首**(2026-09-08 用户报障:
+          // 旧逻辑 i===0 位置锁定,暂停时第一条未执行指令被锁无法编辑)。
+          const locked = item.state !== "pending";
           return (
           <li
             key={item.id}

@@ -378,6 +378,8 @@ impl OhmyDriver {
                 perm_tools: StdMutex::new(HashMap::new()),
                 resume: StdMutex::new(HashMap::new()),
                 badge_done_at: StdMutex::new(None),
+                turn_start_ms: StdMutex::new(None),
+
             },
             sub: SubagentState {
                 subagents: StdMutex::new(HashMap::new()),

@@ -15,17 +15,12 @@
 
 use std::sync::Mutex;
 
-use windows::core::PCWSTR;
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, RECT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateCompatibleDC, CreateDIBSection, CreateSolidBrush, DeleteDC, DeleteObject,
-    Ellipse, EndPaint, FillRect, GetDC, HBRUSH, HBITMAP, HGDIOBJ, PAINTSTRUCT, DIB_RGB_COLORS,
-    ReleaseDC, SelectObject,
+    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, HBITMAP, HGDIOBJ,
+    DIB_RGB_COLORS, ReleaseDC, SelectObject,
 };
-use windows::Win32::UI::WindowsAndMessaging::{
-    CreateIconIndirect, GetIconInfo, GetSystemMetrics, DestroyIcon, HICON, ICONINFO, ICON_BIG,
-    ICON_SMALL, SM_CXICON, SM_CYICON, WM_SETICON,
-};
+use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, HICON, ICON_BIG, WM_SETICON};
 use windows::Win32::UI::WindowsAndMessaging::SendMessageW;
 
 /// 角标种类:完成(绿)/待处理(橙)。当前只对外用 attention 橙,
@@ -46,39 +41,51 @@ struct BadgeState {
 
 /// HICON 裸指针不是 Send,包 ISend 包一层(句柄值进程内全局有效,
 /// 跨线程传递只是类型系统不认)。
-#[derive(Clone, Copy)]
-struct SendIcon(*mut std::ffi::c_void);
-unsafe impl Send for SendIcon {}
-
 static STATE: Mutex<Option<BadgeState>> = Mutex::new(None);
-static BASE_ICON: Mutex<Option<SendIcon>> = Mutex::new(None);
+/// 我们上一次 CreateIconIndirect 出来的 HICON(值不是 HICON 类型,
+/// 包 isize 免 Send 问题):只有它才被 DestroyIcon,换下的类图标句柄
+/// (WM_SETICON 首次返回的)绝不能销毁——那是 Shell 持有的。
+static LAST_ICON: Mutex<Option<isize>> = Mutex::new(None);
 
-/// 主窗口是否最小化(角标/通知只在用户没盯着时才弹,前台可见不骚扰)。
-/// 取不到按"未最小化"(返回 false)——宁可不弹也不在前台弹噪音。
+
+/// 主窗口是否"用户没盯着"(最小化 或 关到托盘隐藏)。角标/通知只在这种
+/// 状态才弹,前台可见时弹是噪音。取不到按 false——宁可不弹也不误报。
 pub fn is_minimized(hwnd_raw: isize) -> Option<bool> {
     let hwnd = HWND(hwnd_raw as *mut _);
-    Some(unsafe { windows::Win32::UI::WindowsAndMessaging::IsIconic(hwnd).as_bool() })
+    unsafe {
+        let iconic = windows::Win32::UI::WindowsAndMessaging::IsIconic(hwnd).as_bool();
+        // 关到托盘是 SW_HIDE(隐藏,非最小化):隐藏也视为"没盯着"
+        let hidden = windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(hwnd).as_bool() == false;
+        Some(iconic || hidden)
+    }
 }
 
-/// 记录窗口类原始大图标(首次 attach 时),clear 时恢复。
-/// HICON 句柄值跨进程内复用安全(窗口类 ICON 由 Shell/内核持有)。
-unsafe fn capture_base_icon(hwnd: HWND) {
-    let mut guard = BASE_ICON.lock().unwrap();
-    if guard.is_none() {
-        let h = windows::Win32::UI::WindowsAndMessaging::GetClassLongPtrW(
-            hwnd,
-            windows::Win32::UI::WindowsAndMessaging::GCLP_HICON,
-        );
-        if h != 0 {
-            *guard = Some(SendIcon(h as *mut _));
+/// 基础图标(RGBA 像素)缓存:从内嵌 32x32 应用图标解码(任务栏大图标
+/// 标准尺寸)。不用 GetClassLongPtrW 取类图标——Tauri 窗口的任务栏图标
+/// 来自 exe 资源,类图标句柄通常为 0,取不到整个角标路径就静默失效
+/// (2026-09-08 用户报障:角标永远不出现的根因)。
+fn base_pixels() -> Option<[u8; 32 * 32 * 4]> {
+    static BASE: std::sync::OnceLock<Option<[u8; 32 * 32 * 4]>> = std::sync::OnceLock::new();
+    let v = BASE.get_or_init(|| {
+        let Ok(rgb) = image::ImageReader::new(
+            std::io::Cursor::new(include_bytes!("../icons/32x32.png")),
+        )
+        .decode()
+        else {
+            return None;
+        };
+        let rgba = rgb.into_rgba8();
+        if rgba.width() != 32 || rgba.height() != 32 {
+            return None;
         }
-    }
+        rgba.into_raw().try_into().ok()
+    });
+    v.as_ref().copied()
 }
 
 /// 在任务栏图标上叠角标(Attention/Done)。重复同态幂等。
 pub fn set_badge(hwnd: HWND, kind: BadgeKind) {
     unsafe {
-        capture_base_icon(hwnd);
         let mut guard = STATE.lock().unwrap();
         let state = guard.get_or_insert_with(BadgeState::default);
         if state.active == Some(kind) {
@@ -105,37 +112,82 @@ pub fn clear_badge(hwnd: HWND) {
     }
 }
 
-/// GDI 合成:取当前大图标位图 → 复制 DIB → 右下角叠 12px 圆点(白描边)
-/// → CreateIconIndirect → WM_SETICON(ICON_BIG)。小图标同步换(Alt-Tab /
-/// 部分任务栏形态用小图)。
+/// GDI 合成:嵌入 32x32 应用图标(普通 RGBA)→ 叠角标圆点(纯色+白描边,
+/// 抗锯齿)→ 32bpp DIB → CreateIconIndirect → WM_SETICON(ICON_BIG)。
+/// 任务栏显示的就是 ICON_BIG;小图标不动(Alt-Tab 无角标可接受)。
 unsafe fn apply_icon(hwnd: HWND, kind: Option<BadgeKind>) {
-    let cx = GetSystemMetrics(SM_CXICON).max(16);
-    let cy = GetSystemMetrics(SM_CYICON).max(16);
-
-    // 原图标位图(彩色掩码两份)
-    let base = BASE_ICON.lock().unwrap();
-    let Some(icon) = *base else { return };
-    let base_hicon = HICON(icon.0);
-    let mut info = ICONINFO {
-        fIcon: true.into(),
-        ..Default::default()
+    const SZ: usize = 32;
+    let px = match base_pixels() {
+        Some(b) => b,
+        None => {
+            if kind.is_some() {
+                eprintln!("[badge] 内嵌图标解码失败,角标不可用");
+            }
+            return;
+        }
     };
-    if GetIconInfo(base_hicon, &mut info).is_err() {
-        return;
+
+    // 颜色(ARGB→RGB)
+    let color: [u8; 3] = match kind {
+        Some(BadgeKind::Attention) => [0xFF, 0xA5, 0x00], // 橙
+        Some(BadgeKind::Done) => [0x4C, 0xC2, 0x80],      // 绿
+        None => [0, 0, 0],
+    };
+
+    // Rust 侧叠角标圆点(抗锯齿):右下角,半径 8,白边 1px
+    let mut px = px.to_vec();
+    if let Some(_) = kind {
+        let r = 8.0;
+        let cx = (SZ - 10) as f32;
+        let cy = (SZ - 10) as f32;
+        for y in 0..SZ {
+            for x in 0..SZ {
+                let d = (((x as f32) - cx).powi(2) + ((y as f32) - cy).powi(2)).sqrt();
+                // 白描边环(半径 r..r+1)
+                let edge_a = if d <= r + 1.0 { r + 1.0 - d } else { 0.0 };
+                // 本体圆(半径 r,中心实心)
+                let fill_a = if d <= r { 1.0 } else { r - d + 1.0 };
+                let fill_a = fill_a.clamp(0.0, 1.0);
+                // 白边在 d 介于 (r, r+1] 时:外圈白,内圈本色;用 (r-d+1) 渐变
+                let white_a = if d > r { edge_a } else { 0.0 };
+                if fill_a <= 0.0 && white_a <= 0.0 {
+                    continue;
+                }
+                let idx = (y * SZ + x) * 4;
+                let base_a = px[idx + 3] as f32 / 255.0;
+                // 目标前景色:本色 or 白(取 alpha 更大的叠加)
+                let fg: [f32; 3] = {
+                    let cr = color[0] as f32;
+                    let cg = color[1] as f32;
+                    let cb = color[2] as f32;
+                    [
+                        if white_a > 0.0 { cr * (1.0 - white_a) + 255.0 * white_a } else { cr },
+                        if white_a > 0.0 { cg * (1.0 - white_a) + 255.0 * white_a } else { cg },
+                        if white_a > 0.0 { cb * (1.0 - white_a) + 255.0 * white_a } else { cb },
+                    ]
+                };
+                let fg_a = fill_a.max(white_a);
+                let out_a = (base_a + fg_a * (1.0 - base_a)).clamp(0.0, 1.0);
+                if out_a <= 0.0 {
+                    continue;
+                }
+                for ch in 0..3 {
+                    let src = px[idx + ch] as f32 * base_a;
+                    let top = fg[ch] * fg_a;
+                    px[idx + ch] = ((src + top) / out_a).min(255.0).round() as u8;
+                }
+                px[idx + 3] = (out_a * 255.0).round() as u8;
+            }
+        }
     }
-    // info.hbmColor/hbmMask 需要手动释放(GetIconInfo 交出的句柄)
-    let has_color = !info.hbmColor.is_invalid();
-    drop(base);
 
     let screen_dc = GetDC(None);
     let mem_dc = CreateCompatibleDC(Some(screen_dc));
-
-    // 目标 DIB:32bpp 预乘 alpha
     let mut bmi = windows::Win32::Graphics::Gdi::BITMAPINFO {
         bmiHeader: windows::Win32::Graphics::Gdi::BITMAPINFOHEADER {
             biSize: std::mem::size_of::<windows::Win32::Graphics::Gdi::BITMAPINFOHEADER>() as u32,
-            biWidth: cx,
-            biHeight: -cy, // top-down
+            biWidth: SZ as i32,
+            biHeight: -(SZ as i32), // top-down
             biPlanes: 1,
             biBitCount: 32,
             biCompression: windows::Win32::Graphics::Gdi::BI_RGB.0,
@@ -149,120 +201,47 @@ unsafe fn apply_icon(hwnd: HWND, kind: Option<BadgeKind>) {
         Err(_) => {
             let _ = DeleteDC(mem_dc);
             let _ = ReleaseDC(None, screen_dc);
-            if has_color {
-                let _ = DeleteObject(HGDIOBJ(info.hbmColor.0));
-            }
-            let _ = DeleteObject(HGDIOBJ(info.hbmMask.0));
             return;
         }
     };
-
-    // 原图标画到 DIB(有彩色位图 DrawIconEx;无彩色退化为纯色方块,可接受)
-    let old = SelectObject(mem_dc, HGDIOBJ(dib.0));
-    if has_color {
-        let _ = windows::Win32::UI::WindowsAndMessaging::DrawIconEx(
-            mem_dc,
-            0,
-            0,
-            base_hicon,
-            cx,
-            cy,
-            0,
-            None,
-            windows::Win32::UI::WindowsAndMessaging::DI_NORMAL,
-        );
-        // DrawIconEx 在 32bpp DIB 上可能清 alpha(同 native_pet 的经验):
-        // 拉回不透明。透明像素(alpha=0 且 RGB=0)保留透明。
-        let slice = std::slice::from_raw_parts_mut(bits.cast::<u8>(), (cx * cy * 4) as usize);
-        for px in slice.chunks_exact_mut(4) {
-            if px[3] == 0 && (px[0] != 0 || px[1] != 0 || px[2] != 0) {
-                px[3] = 255;
-            } else if px[3] != 0 && px[3] != 255 {
-                // 预乘修正:GDI 画的图标是未预乘,直接当 opaque 用
-                px[0] = px[0].min(255);
-                px[1] = px[1].min(255);
-                px[2] = px[2].min(255);
-                px[3] = 255;
-            }
-        }
-    } else {
-        // 兜底:纯色底(base-200 蓝灰),仍可辨
-        let brush = CreateSolidBrush(COLORREF(0x00E0E0E0)); // BGR 浅灰
-        let rc = RECT { left: 0, top: 0, right: cx, bottom: cy };
-        let _ = windows::Win32::Graphics::Gdi::FillRect(mem_dc, &rc, brush);
-        let _ = DeleteObject(HGDIOBJ(brush.0));
-    }
-
-    // 角标圆点:右下角,半径 = 尺寸 22%,白描边 1px
-    if let Some(kind) = kind {
-        let r = (cx as f64 * 0.22).round() as i32;
-        let cxp = cx - r - (cx as f64 * 0.08).round() as i32;
-        let cyp = cy - r - (cy as f64 * 0.08).round() as i32;
-        let color = match kind {
-            BadgeKind::Attention => COLORREF(0x0000A5FF), // BGR 橙 #FFA500
-            BadgeKind::Done => COLORREF(0x0080C24C),     // BGR 绿 #4CC280
-        };
-        // 白描边:先画大一号白圆,再画本色圆(GDI Ellipse 用当前选中的 brush)
-        let edge = CreateSolidBrush(COLORREF(0x00FFFFFF));
-        let prev_brush = SelectObject(mem_dc, HGDIOBJ(edge.0));
-        let _ = Ellipse(mem_dc, cxp - r - 1, cyp - r - 1, cxp + r + 1, cyp + r + 1);
-        let fill = CreateSolidBrush(color);
-        let _ = SelectObject(mem_dc, HGDIOBJ(fill.0));
-        let _ = Ellipse(mem_dc, cxp - r, cyp - r, cxp + r, cyp + r);
-        let _ = SelectObject(mem_dc, prev_brush);
-        let _ = DeleteObject(HGDIOBJ(edge.0));
-        let _ = DeleteObject(HGDIOBJ(fill.0));
-    }
-
-    SelectObject(mem_dc, old);
+    std::ptr::copy_nonoverlapping(px.as_ptr(), bits.cast::<u8>(), px.len());
+    let _ = SelectObject(mem_dc, HGDIOBJ(dib.0));
     let _ = DeleteDC(mem_dc);
     let _ = ReleaseDC(None, screen_dc);
 
-    // DIB → HICON:mask 透明处理(fIcon=TRUE 且 hbmMask 空=按 alpha)。
-    // CreateIconIndirect 对 32bpp DIB:hbmColor 位图带 alpha 时 mask 传 1x1
-    // 全零即可。
-    let icon_info = ICONINFO {
+    // DIB(带 alpha)→ HICON:32bpp 位图 + 1x1 空 mask(Windows Vista+ 按
+    // alpha 渲染,mask 只给旧系统降级)
+    // mask 给 null:32bpp 带 alpha,Vista+ 按 alpha 通道渲染,null mask 可接受
+    // (应用最低 Win10,WebView2 也要求 Win10+)
+    let hmask = HBITMAP(std::ptr::null_mut());
+    let icon_info = windows::Win32::UI::WindowsAndMessaging::ICONINFO {
         fIcon: true.into(),
         xHotspot: 0,
         yHotspot: 0,
-        hbmMask: if has_color {
-            HBITMAP(std::ptr::null_mut())
-        } else {
-            info.hbmMask
-        },
+        hbmMask: hmask,
         hbmColor: dib,
     };
-    let hicon = match CreateIconIndirect(&icon_info) {
+    let hicon = match windows::Win32::UI::WindowsAndMessaging::CreateIconIndirect(&icon_info) {
         Ok(h) => h,
-        Err(_) => {
+        Err(e) => {
             let _ = DeleteObject(HGDIOBJ(dib.0));
-            if has_color {
-                let _ = DeleteObject(HGDIOBJ(info.hbmColor.0));
+            if !hmask.is_invalid() {
+                let _ = DeleteObject(HGDIOBJ(hmask.0));
             }
-            let _ = DeleteObject(HGDIOBJ(info.hbmMask.0));
+            eprintln!("[badge] CreateIconIndirect 失败: {e}");
             return;
         }
     };
-
-    // 换窗口大图标(任务栏显示 ICON_BIG)+ 小图标(Alt-Tab)
-    // ICON_SMALL 也要换,否则部分形态的任务栏用小图标,角标看不出来。
-    // 换下来的旧 HICON 要销毁(我们自己 CreateIconIndirect 出来的句柄)。
-    let old_big = SendMessageW(hwnd, WM_SETICON, Some(WPARAM(ICON_BIG as usize)), Some(LPARAM(hicon.0 as isize)));
-    let old_small = SendMessageW(hwnd, WM_SETICON, Some(WPARAM(ICON_SMALL as usize)), Some(LPARAM(hicon.0 as isize)));
-    // 上一轮合成的 HICON 已被换下,销毁;首轮换下的是类图标句柄(Shell 持有),
-    // 不销毁——用 ORIGINAL_CLASS_ICON 哨兵跳过。简化:首轮 old 是类句柄,
-    // DestroyIcon 对类句柄是安全的 no-op(文档:仅销毁 CreateIcon 系创建的)。
-    if old_big.0 != 0 {
-        let _ = DestroyIcon(HICON(old_big.0 as *mut _));
+    // 换任务栏大图标:先销毁**我们自己创建的**上一个 HICON,
+    // WM_SETICON 换下的类图标句柄不能碰(Shell 持有)
+    {
+        let mut last = LAST_ICON.lock().unwrap();
+        if let Some(raw) = *last {
+            let _ = DestroyIcon(HICON(raw as *mut _));
+            *last = None;
+        }
     }
-    if old_small.0 != 0 && old_small.0 != old_big.0 {
-        let _ = DestroyIcon(HICON(old_small.0 as *mut _));
-    }
-
-    // 清理素材
+    let _ = SendMessageW(hwnd, WM_SETICON, Some(WPARAM(ICON_BIG as usize)), Some(LPARAM(hicon.0 as isize)));
+    *LAST_ICON.lock().unwrap() = Some(hicon.0 as isize);
     let _ = DeleteObject(HGDIOBJ(dib.0));
-    if has_color {
-        let _ = DeleteObject(HGDIOBJ(info.hbmColor.0));
-    }
-    let _ = DeleteObject(HGDIOBJ(info.hbmMask.0));
 }

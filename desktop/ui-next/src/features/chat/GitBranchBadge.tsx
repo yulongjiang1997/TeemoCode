@@ -87,7 +87,7 @@ export const GitBranchBadge = memo(function GitBranchBadge({ workdir, onSwitched
       </button>
       {open && (
         <div className="absolute left-0 top-full z-50 mt-1 min-w-[180px] rounded-box border border-base-300 bg-base-100 shadow-lg">
-          <ul className="menu menu-sm">
+          <ul className="menu menu-sm flex-nowrap [&_li]:flex-nowrap">
             {branches.length === 0 ? (
               <li className="text-2xs text-base-content/40">{t("chat.git.noBranches")}</li>
             ) : branches.map((b) => (

@@ -451,6 +451,7 @@ pub(super) struct SessionsState {
     /// 任务栏完成角标的时间戳(毫秒,frame::now_ms)。轮收尾时记下,15s
     /// 内展示绿点,窗口自过期无需"用户看过"的上行信号。
     pub(super) badge_done_at: StdMutex<Option<u64>>,
+    pub(super) turn_start_ms: StdMutex<Option<u64>>,
 }
 
 /// 打开会话时下发的回放窗口。cursor 是窗口最早那一轮在 replay.jsonl 里的
@@ -2713,6 +2714,26 @@ impl Inner {
 
     pub(super) fn emit_session_event(&self, sid: &str, status: &str) {
         let title = self.sess.sessions.lock_ok().get(sid).map(|s| s.title.clone()).unwrap_or_default();
+        // 轮时长统计:running 记开始时间戳,收尾算 delta 追加到 stats
+        // (2026-09-08 用户需求:工作统计活跃时长精确到秒)。
+        if status == "running" {
+            *self.sess.turn_start_ms.lock_ok() = Some(frame::now_ms());
+        } else if matches!(status, "idle" | "finished" | "error" | "interrupted") {
+            let started = self.sess.turn_start_ms.lock_ok().take();
+            if let Some(start) = started {
+                let delta_ms = frame::now_ms().saturating_sub(start);
+                if delta_ms >= 1000 {
+                    let cfg_dir = self.app.config_dir().ok();
+                    if let Some(dir) = cfg_dir {
+                        crate::stats::UsageStats::shared(&dir).add_duration(
+                            &crate::stats::today(),
+                            sid,
+                            delta_ms,
+                        );
+                    }
+                }
+            }
+        }
         self.app.emit_json(
             "session-event",
             json!({ "type": "session-status", "id": sid, "status": status, "title": title }),
@@ -2722,21 +2743,23 @@ impl Inner {
         // 提醒;角标同理)。记时间戳开 15s 角标展示窗;待审核优先级更高,
         // refresh_badge 统一裁决。通知走 show_notification(受 notification_
         // enabled 开关控制,权限未授予时静默)。
-        if matches!(status, "idle" | "finished" | "error") {
+        // interrupted(用户中断/引擎重启收尾)也算轮收束,角标/时长统计同样生效
+        if matches!(status, "idle" | "finished" | "error" | "interrupted") {
             *self.sess.badge_done_at.lock_ok() = Some(frame::now_ms());
             self.refresh_badge();
             // 只在**会话非前台可见**时弹通知吗?壳不知道哪个会话在前台
             // (那是 UI 状态),但 running 会话所在窗口被用户盯着时弹通知
             // 是噪音——折中:窗口最小化/隐藏(托盘)才弹,前台可见不弹。
-            let minimized = self
-                .app
-                .badge_hwnd()
+            let hwnd_raw = self.app.badge_hwnd();
+            let minimized = hwnd_raw
                 .and_then(|raw| unsafe { crate::badge::is_minimized(raw) })
                 .unwrap_or(false);
-            if minimized && notification_on(&self.app) {
+            let notif_on = notification_on(&self.app);
+            if minimized && notif_on {
                 let body = match status {
                     "finished" => format!("任务「{title}」已完成"),
                     "error" => format!("任务「{title}」出错了,回来看看"),
+                    "interrupted" => format!("任务「{title}」已停止"),
                     _ => format!("任务「{title}」有新回复"),
                 };
                 self.app.show_notification("MonkeyCode", &body);

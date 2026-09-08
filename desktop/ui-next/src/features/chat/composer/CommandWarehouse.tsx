@@ -140,7 +140,7 @@ export const CommandWarehouse = memo(function CommandWarehouse({
         </div>
 
         {/* 指令列表 */}
-        <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-3">
           {items.length === 0 ? (
             <p className="py-8 text-center text-xs text-base-content/40">{t("chat.warehouse.empty")}</p>
           ) : (

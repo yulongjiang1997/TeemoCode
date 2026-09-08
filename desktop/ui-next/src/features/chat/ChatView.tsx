@@ -7,7 +7,7 @@
 // 大纲跳转:锚(data-user-seq)不在 DOM 时按条目 offset 走 ensureLoaded
 // 精确补页(session_history 以 offset 为终点,不盲翻),补页提交前的空窗
 // 用短时重试兜；当前项由虚拟高度索引 O(1) 反查最近的用户行。
-import { IconDots, IconFolderOpen, IconPencil, IconX } from "@tabler/icons-react";
+import { IconClipboardList, IconDots, IconFolderOpen, IconPencil, IconX } from "@tabler/icons-react";
 import {
   useCallback,
   useEffect,
@@ -622,10 +622,42 @@ export function ChatView({
   // 下一轮 task-started 复位(与 plan 同生命周期,见 reduceFrame)。
   // 键 = plan 数组下标(plan 帧按整体覆盖重发,下标即条目身份;id 缺省时无更稳的键)。
   const [planOverrides, setPlanOverrides] = useState<Set<number>>(new Set());
+  // 会话级彻底关闭(2026-09-08 用户报障:清单级持久化挡不住新任务的
+  // 新清单,反复执行任务反复弹)。关闭/全勾时记会话标记,该会话后续所有
+  // plan 帧都不再自动弹面板;需要看时点 composer 旁的小开关重新打开。
+  const planOffKey = `mc.planOff.${meta.id}`;
+  const planOff = () => {
+    try {
+      localStorage.setItem(planOffKey, "1");
+    } catch { /* 只丢持久化 */ }
+    setPlanDismissed(true);
+  };
+  const planOn = () => {
+    try {
+      localStorage.removeItem(planOffKey);
+    } catch { /* 只丢持久化 */ }
+    setPlanDismissed(false);
+  };
   // plan 条目指纹:内容变了(新一轮的新清单)才复位手动标记;同一清单的
   // 进度推进(plan 帧整体重发、只改 status)必须保留用户的勾——漏标步骤
   // 正是模型反复重发都不改的那几条,重置了标记就白勾了
   const planKeyRef = useRef("");
+  // 全勾完成 → 会话级持久关闭(一次即止):用户把步骤全勾了=该任务处理
+  // 完了,后续再发新清单也不再自动弹(2026-09-08 报障)。渲染期只做纯
+  // 判断,写入放这里避开渲染期 setState 告警。
+  const allTickedRef = useRef(false);
+  useEffect(() => {
+    if (allTickedRef.current) return;
+    const all =
+      state.plan.length > 0 &&
+      planOverrides.size > 0 &&
+      state.plan.every((e, i) => e.status === "completed" || planOverrides.has(i));
+    if (all) {
+      allTickedRef.current = true;
+      try { localStorage.setItem(planOffKey, "1"); } catch { /* 只丢持久化 */ }
+      setPlanDismissed(true);
+    }
+  }, [state.plan, planOverrides]);
   // 手动消除的持久化(2026-09-07 用户报障:重开会话大纲又回来了):
   // plan 帧在会话回放时整体重放,planOverrides 是组件内存态,重开即丢。
   // 按「会话 id + 清单指纹」记到 localStorage:同一清单恢复时自动重新
@@ -675,8 +707,13 @@ export function ChatView({
   useEffect(() => {
     // 切会话丢弃编辑态(草稿属于上一个会话)
     setEditingTitle(false);
-    // 切会话复位计划面板关闭态(上一会话的关闭不该带到新会话)
-    setPlanDismissed(false);
+    // 切会话恢复该会话的计划面板关闭态(会话级持久:上次关的这次还关,
+    // 但 A 会话的关闭不会带到 B 会话)
+    let off = false;
+    try {
+      off = localStorage.getItem(`mc.planOff.${meta.id}`) === "1";
+    } catch { /* 只丢持久化 */ }
+    setPlanDismissed(off);
     setPlanOverrides(new Set());
   }, [meta.id]);
 
@@ -1352,45 +1389,60 @@ export function ChatView({
       <footer className="shrink-0 p-3">
         <div className="mx-auto flex chat-measure flex-col gap-2">
           {(() => {
-            // 手动标记完成的行覆盖为 completed;全部完成即整面板消失
-            // (2026-08-25 用户报障:模型漏标步骤,面板赖着不走)。
-            // 全勾的瞬间持久化「已处理」标记:重开会话回放重放 plan 帧时
-            // 据此自动恢复全勾,面板不再弹(2026-09-07 用户报障)。
-            if (state.plan.length > 0 && planOverrides.size > 0) {
-              const all = state.plan.every((e, i) => e.status === "completed" || planOverrides.has(i));
-              if (all) {
-                const key = planKeyRef.current;
-                if (key) {
-                  try { localStorage.setItem(planDoneKey(key), "1"); } catch { /* 只丢持久化 */ }
-                }
-                return null;
-              }
-            }
+            // 手动标记完成的行覆盖为 completed。全勾(allDone)或会话级
+            // 关闭(planDismissed)时面板收起,换成一条可点开的提示条。
+            // 渲染期只做纯判断——持久化副作用在下方 effect,不在这里 setState。
+            const allDone =
+              state.plan.length > 0 &&
+              planOverrides.size > 0 &&
+              state.plan.every((e, i) => e.status === "completed" || planOverrides.has(i));
             const entries =
               planOverrides.size > 0
                 ? state.plan.map((e, i) => (planOverrides.has(i) ? { ...e, status: "completed" } : e))
                 : state.plan;
-            return state.plan.length > 0 && !planDismissed ? (
-              <TaskPanel
-                entries={entries}
-                onDismiss={() => setPlanDismissed(true)}
-                onToggleEntry={(i, checked) => {
-                  setPlanOverrides((prev) => {
-                    const next = new Set(prev);
-                    if (checked) next.add(i);
-                    else next.delete(i);
-                    return next;
-                  });
-                  // 反悔(取消勾)即摘除持久标记,面板回来且重开不再自动全勾
-                  if (!checked) {
-                    const key = planKeyRef.current;
-                    if (key) {
-                      try { localStorage.removeItem(planDoneKey(key)); } catch { /* 只丢持久化 */ }
+            if (state.plan.length > 0 && !planDismissed && !allDone) {
+              return (
+                <TaskPanel
+                  entries={entries}
+                  onDismiss={planOff}
+                  onToggleEntry={(i, checked) => {
+                    setPlanOverrides((prev) => {
+                      const next = new Set(prev);
+                      if (checked) next.add(i);
+                      else next.delete(i);
+                      return next;
+                    });
+                    // 反悔(取消勾)即摘除清单级标记(会话级关闭是明确意图,保留)
+                    if (!checked) {
+                      const key = planKeyRef.current;
+                      if (key) {
+                        try { localStorage.removeItem(planDoneKey(key)); } catch { /* 只丢持久化 */ }
+                      }
                     }
-                  }
-                }}
-              />
-            ) : null;
+                  }}
+                />
+              );
+            }
+            // 面板被收起(会话级关闭或全勾完成):有清单时给一条可点开的提示条,
+            // 想看当前任务计划随时可重开(2026-09-08 用户报障)
+            if (state.plan.length > 0 && (planDismissed || allDone)) {
+              const done = entries.filter((e) => e.status === "completed").length;
+              return (
+                <button
+                  type="button"
+                  aria-label={t("chat.plan.reshow")}
+                  className="flex w-full items-center gap-2 rounded-field border border-base-300 bg-base-100 px-3 py-1.5 text-left text-xs text-base-content/70 hover:bg-base-200/60"
+                  onClick={planOn}
+                >
+                  <IconClipboardList size={14} aria-hidden className="shrink-0 text-base-content/50" />
+                  <span className="min-w-0 truncate">
+                    {t("chat.plan.hidden", { n: done, total: state.plan.length })}
+                  </span>
+                  <span className="ml-auto shrink-0 text-base-content/40">{t("chat.plan.reshowHint") ?? "点击展开"}</span>
+                </button>
+              );
+            }
+            return null;
           })()}
           <LocalComposerHost
             ref={composerRef}

@@ -139,7 +139,7 @@ export function ImportSkillsDialog({ onClose, onImported, existingNames }: Props
           <h2 className="text-sm font-semibold">{t("settings.skills.import.title")}</h2>
           <button type="button" className="btn btn-ghost btn-square btn-xs" onClick={onClose} disabled={phase === "fetching" || phase === "analyzing"}><IconX size={14} aria-hidden /></button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-4">
           {phase === "input" && (
             <div className="flex flex-col gap-2">
               <div className="flex gap-1">
