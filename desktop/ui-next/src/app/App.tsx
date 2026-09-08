@@ -996,9 +996,11 @@ export function App() {
 }
 
 
-/** 设置弹窗:70% 固定尺寸 + 标题栏拖动 + 遮罩透明度可调。
- * 透明度是壳级外观偏好(localStorage mc.settings.maskOpacity,0~0.9),
- * GeneralSection 里也有调节项,两处读写同一偏好。 */
+/** 设置弹窗:70% 固定尺寸 + 点空白拖动 + 弹窗本体透明度可调。
+ * 透明度是壳级外观偏好(localStorage mc.settingsMaskOpacity,0.4~1,
+ * 1=不透):作用于弹窗背景的 color-mix(半透明 base-100 + backdrop-blur
+ * 毛玻璃),文字/控件不透明可读;遮罩固定轻度不再跟随调节(2026-09-07
+ * 用户反馈:调遮罩会"把设置窗口以外的区域都调节了",体验不对)。 */
 function SettingsDialog({ onClose, hasRunningTask }: {
   onClose: () => void;
   hasRunningTask: boolean;
@@ -1006,23 +1008,21 @@ function SettingsDialog({ onClose, hasRunningTask }: {
   const { t } = useI18n();
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const dragRef = useRef<{ dx: number; dy: number } | null>(null);
-  const [maskOpacity, setMaskOpacityState] = useState(() => readSettingsMaskOpacity());
+  const [bodyOpacity, setBodyOpacity] = useState(() => readSettingsMaskOpacity());
   // 设置页调透明度时实时跟随(mc-settings-mask-changed)
   useEffect(() => {
-    const refresh = () => setMaskOpacityState(readSettingsMaskOpacity());
+    const refresh = () => setBodyOpacity(readSettingsMaskOpacity());
     window.addEventListener("mc-settings-mask-changed", refresh);
     return () => window.removeEventListener("mc-settings-mask-changed", refresh);
   }, []);
 
-  // 开窗居中;窗口缩放时不跟随(固定,与尺寸策略一致)
+  // 开窗居中
   useEffect(() => {
-    if (pos === null) {
-      setPos({
-        x: Math.max(0, Math.round((window.innerWidth - window.innerWidth * 0.7) / 2)),
-        y: Math.max(0, Math.round((window.innerHeight - window.innerHeight * 0.7) / 2)),
-      });
-    }
-  }, [pos]);
+    setPos({
+      x: Math.max(0, Math.round((window.innerWidth - window.innerWidth * 0.7) / 2)),
+      y: Math.max(0, Math.round((window.innerHeight - window.innerHeight * 0.7) / 2)),
+    });
+  }, []);
 
   useEffect(() => {
     const onMove = (e: PointerEvent) => {
@@ -1050,8 +1050,7 @@ function SettingsDialog({ onClose, hasRunningTask }: {
   return (
     <div
       role="presentation"
-      className="fixed inset-0 z-40"
-      style={{ background: `rgba(0,0,0,${maskOpacity})` }}
+      className="fixed inset-0 z-40 bg-black/40"
       onClick={(e) => {
         // 点遮罩空白处关闭(点击内容区不冒泡触发)
         if (e.target === e.currentTarget) onClose();
@@ -1061,26 +1060,27 @@ function SettingsDialog({ onClose, hasRunningTask }: {
         role="dialog"
         aria-modal="true"
         aria-label={t("settings.title")}
-        className="absolute flex flex-col overflow-hidden rounded-box border border-base-300 shadow-2xl"
+        className="absolute flex overflow-hidden rounded-box border border-base-300 shadow-2xl backdrop-blur-md [&>main]:!bg-transparent"
         style={{
           left: pos?.x ?? 0,
           top: pos?.y ?? 0,
           width: `${Math.min(size.width, window.innerWidth - 24)}px`,
           height: `${Math.min(size.height, window.innerHeight - 24)}px`,
+          // 弹窗本体透明度:半透明 base-100,内部文字/控件不受影响;
+          // SettingsView main 的 bg-mask-100 会被下面 main 覆盖透明
+          backgroundColor: `color-mix(in oklch, var(--color-base-100) ${Math.round(bodyOpacity * 100)}%, transparent)`,
+        }}
+        onPointerDown={(e) => {
+          // 点在非交互元素上即可拖动(标题/空白):交互元素(按钮/输入框/
+          // 滑杆/链接)照常工作——之前的覆盖式把手把 header 的返回按钮
+          // 拦掉了,返回"不灵敏"就是这么来的
+          if (e.button !== 0) return;
+          const t2 = e.target as HTMLElement;
+          if (t2.closest("button,input,select,textarea,label,a,[role='slider'],[role='menu'],[role='listbox'],[data-no-drag]")) return;
+          const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
+          dragRef.current = { dx: e.clientX - box.left, dy: e.clientY - box.top };
         }}
       >
-        {/* 拖动把手:占满弹窗顶部的细条,双击复位居中。SettingsView 自己
-            的 header 还有拖主窗口的区域语义,两者并存不冲突。 */}
-        <div
-          className="absolute inset-x-0 top-0 z-10 h-8 cursor-move"
-          title={t("settings.dialog.dragHint")}
-          onPointerDown={(e) => {
-            if (e.button !== 0) return;
-            const box = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
-            dragRef.current = { dx: e.clientX - box.left, dy: e.clientY - box.top };
-          }}
-          onDoubleClick={() => setPos(null)}
-        />
         <SettingsView onClose={onClose} hasRunningTask={hasRunningTask} />
       </div>
     </div>

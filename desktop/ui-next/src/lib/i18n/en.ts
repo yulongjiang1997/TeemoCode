@@ -181,7 +181,7 @@ export const en: Record<MessageKey, string> = {
   "settings.appearance.backgroundOpacity": "Background opacity",
   "settings.appearance.maskOpacity": "Overlay opacity",
   "settings.appearance.settingsMaskOpacity": "Settings dialog mask opacity",
-  "settings.appearance.settingsMaskOpacityHint": "Adjust the darkness behind the settings dialog (0% = fully transparent)",
+  "settings.appearance.settingsMaskOpacityHint": "Adjust the settings dialog body opacity (100% = opaque)",
   "settings.dialog.dragHint": "Drag to move · double-click to re-center",
   "settings.appearance.maskOpacityHint": "Opacity of the overlay on all areas (workspace/sidebar/title bar); lower = background more visible",
   "settings.appearance.bgBlur": "Background blur",
