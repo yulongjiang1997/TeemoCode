@@ -22,7 +22,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::Value;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 
 use super::session::SessionsState;
@@ -52,6 +52,10 @@ pub trait ShellCtx: Send + Sync + 'static {
     /// `instance` 标明是**哪一个**引擎进程退出了,壳据此忽略早已被弃用的实例。
     fn on_engine_exit(&self, _instance: u64, _detail: &str, _log_tail: &str) {}
 
+    /// 任务栏角标的目标窗口(主窗口 HWND 值)。None = 不可用(测试/无窗)。
+    /// Windows 任务栏角标用(badge.rs),driver 层不依赖 tauri 类型。
+    fn badge_hwnd(&self) -> Option<isize> { None }
+
     /// 显示系统通知(后台静默;权限未授予时不报错)。
     ///
     /// 测试壳和其它不需要系统通知的 ShellCtx 实现默认忽略；生产壳
@@ -61,10 +65,16 @@ pub trait ShellCtx: Send + Sync + 'static {
 }
 
 impl ShellCtx for AppHandle {
+    // get_webview_window 来自 tauri::Manager(本文件 use 里有 Manager 就行)
     fn emit_json(&self, event: &str, payload: Value) {
         // 全局事件(session-event)广播给所有窗口;帧/状态事件仅 main 在听,
         // emit 全局同样可达且省一次 label 匹配失败的分支
         let _ = self.emit(event, payload);
+    }
+    fn badge_hwnd(&self) -> Option<isize> {
+        self.get_webview_window("main")
+            .and_then(|w| w.hwnd().ok())
+            .map(|h| h.0 as isize)
     }
     fn config_dir(&self) -> Result<PathBuf, String> {
         crate::config::config_dir(self)

@@ -448,6 +448,9 @@ pub(super) struct SessionsState {
     /// 但所有上行命令必须先经 ensure_engine_ready 等它就绪。
     pub(super) resume:
         StdMutex<HashMap<String, tokio::sync::watch::Receiver<Option<Result<(), String>>>>>,
+    /// 任务栏完成角标的时间戳(毫秒,frame::now_ms)。轮收尾时记下,15s
+    /// 内展示绿点,窗口自过期无需"用户看过"的上行信号。
+    pub(super) badge_done_at: StdMutex<Option<u64>>,
 }
 
 /// 打开会话时下发的回放窗口。cursor 是窗口最早那一轮在 replay.jsonl 里的
@@ -2714,6 +2717,12 @@ impl Inner {
             "session-event",
             json!({ "type": "session-status", "id": sid, "status": status, "title": title }),
         );
+        // 任务栏角标:轮收尾(idle/finished/error)= 有结果待看(2026-09-08
+        // 用户需求)。记时间戳开 15s 展示窗;待审核优先级更高,refresh_badge 统一裁决。
+        if matches!(status, "idle" | "finished" | "error") {
+            *self.sess.badge_done_at.lock_ok() = Some(frame::now_ms());
+            self.refresh_badge();
+        }
     }
 
     /// 会话摘要更新(引擎每轮异步生成,见 normalize.rs 的 session_summary 分支)。
@@ -2734,6 +2743,38 @@ impl Inner {
             "session-event",
             json!({ "type": "session-ask", "id": sid, "title": title, "open": open }),
         );
+        // 任务栏角标:出现/解除审核等待都要重裁决(2026-09-08 用户需求)
+        self.refresh_badge();
+    }
+
+    /// 任务栏角标重裁决:待审核(权限/提问)优先 > 任务完成 > 无。
+    /// 仅 Windows 生效(badge 模块 cfg),主窗口拿不到时静默跳过。
+    pub(super) fn refresh_badge(&self) {
+        #[cfg(target_os = "windows")]
+        {
+            // driver 层不依赖 tauri 类型:HWND 经 ShellCtx::badge_hwnd 取值
+            use windows::Win32::Foundation::HWND;
+            let Some(raw) = self.app.badge_hwnd() else { return };
+            let hwnd = HWND(raw as *mut _);
+            let waiting = {
+                let perms = self.sess.pending_perms.lock_ok();
+                let asks = self.sess.pending_questions.lock_ok();
+                !perms.is_empty() || !asks.is_empty()
+            };
+            let finished_recently = self
+                .sess
+                .badge_done_at
+                .lock_ok()
+                .map(|t| frame::now_ms().saturating_sub(t) < 15_000)
+                .unwrap_or(false);
+            if waiting {
+                crate::badge::set_badge(hwnd, crate::badge::BadgeKind::Attention);
+            } else if finished_recently {
+                crate::badge::set_badge(hwnd, crate::badge::BadgeKind::Done);
+            } else {
+                crate::badge::clear_badge(hwnd);
+            }
+        }
     }
 
     pub(super) fn resolve_perm(&self, sid: &str, req_id: &str, outcome: PermOutcome) {
