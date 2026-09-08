@@ -2717,11 +2717,30 @@ impl Inner {
             "session-event",
             json!({ "type": "session-status", "id": sid, "status": status, "title": title }),
         );
-        // 任务栏角标:轮收尾(idle/finished/error)= 有结果待看(2026-09-08
-        // 用户需求)。记时间戳开 15s 展示窗;待审核优先级更高,refresh_badge 统一裁决。
+        // 任务栏角标 + 系统通知:轮收尾(idle/finished/error)= 有结果待看
+        // (2026-09-08 用户报障:通知只有子代理完成才发,主任务跑完没有任何
+        // 提醒;角标同理)。记时间戳开 15s 角标展示窗;待审核优先级更高,
+        // refresh_badge 统一裁决。通知走 show_notification(受 notification_
+        // enabled 开关控制,权限未授予时静默)。
         if matches!(status, "idle" | "finished" | "error") {
             *self.sess.badge_done_at.lock_ok() = Some(frame::now_ms());
             self.refresh_badge();
+            // 只在**会话非前台可见**时弹通知吗?壳不知道哪个会话在前台
+            // (那是 UI 状态),但 running 会话所在窗口被用户盯着时弹通知
+            // 是噪音——折中:窗口最小化/隐藏(托盘)才弹,前台可见不弹。
+            let minimized = self
+                .app
+                .badge_hwnd()
+                .and_then(|raw| unsafe { crate::badge::is_minimized(raw) })
+                .unwrap_or(false);
+            if minimized && notification_on(&self.app) {
+                let body = match status {
+                    "finished" => format!("任务「{title}」已完成"),
+                    "error" => format!("任务「{title}」出错了,回来看看"),
+                    _ => format!("任务「{title}」有新回复"),
+                };
+                self.app.show_notification("MonkeyCode", &body);
+            }
         }
     }
 
@@ -2920,6 +2939,15 @@ impl Inner {
 /// 壳模式词汇 → ohmyagent permission_mode
 /// meta/sidecar 的 skills 字段 → 启用集(非数组/缺失 = None = 缺省集,
 /// 语义见 skills::materialize)。
+/// 系统通知开关(读 config.json 的 notification_enabled;读不到按开)。
+fn notification_on(app: &std::sync::Arc<dyn super::ohmy::ShellCtx>) -> bool {
+    app.config_dir()
+        .ok()
+        .and_then(|dir| crate::config::load_config_from_dir(&dir).ok())
+        .map(|c| c.notification_enabled)
+        .unwrap_or(true)
+}
+
 fn skills_of_meta(meta: &Value) -> Option<Vec<String>> {
     meta.get("skills")
         .and_then(|v| v.as_array())

@@ -53,6 +53,13 @@ unsafe impl Send for SendIcon {}
 static STATE: Mutex<Option<BadgeState>> = Mutex::new(None);
 static BASE_ICON: Mutex<Option<SendIcon>> = Mutex::new(None);
 
+/// 主窗口是否最小化(角标/通知只在用户没盯着时才弹,前台可见不骚扰)。
+/// 取不到按"未最小化"(返回 false)——宁可不弹也不在前台弹噪音。
+pub fn is_minimized(hwnd_raw: isize) -> Option<bool> {
+    let hwnd = HWND(hwnd_raw as *mut _);
+    Some(unsafe { windows::Win32::UI::WindowsAndMessaging::IsIconic(hwnd).as_bool() })
+}
+
 /// 记录窗口类原始大图标(首次 attach 时),clear 时恢复。
 /// HICON 句柄值跨进程内复用安全(窗口类 ICON 由 Shell/内核持有)。
 unsafe fn capture_base_icon(hwnd: HWND) {
