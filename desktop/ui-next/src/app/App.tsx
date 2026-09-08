@@ -1006,8 +1006,9 @@ function SettingsDialog({ onClose, hasRunningTask }: {
   hasRunningTask: boolean;
 }) {
   const { t } = useI18n();
-  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ dx: number; dy: number } | null>(null);
+  const posRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const [bodyOpacity, setBodyOpacity] = useState(() => readSettingsMaskOpacity());
   // 设置页调透明度时实时跟随(mc-settings-mask-changed)
   useEffect(() => {
@@ -1016,22 +1017,30 @@ function SettingsDialog({ onClose, hasRunningTask }: {
     return () => window.removeEventListener("mc-settings-mask-changed", refresh);
   }, []);
 
-  // 开窗居中
+  // 开窗居中(DOM 直写,同拖动路径)
   useEffect(() => {
-    setPos({
-      x: Math.max(0, Math.round((window.innerWidth - window.innerWidth * 0.7) / 2)),
-      y: Math.max(0, Math.round((window.innerHeight - window.innerHeight * 0.7) / 2)),
-    });
+    const x = Math.max(0, Math.round((window.innerWidth - window.innerWidth * 0.7) / 2));
+    const y = Math.max(0, Math.round((window.innerHeight - window.innerHeight * 0.7) / 2));
+    posRef.current = { x, y };
+    const el = dialogRef.current;
+    if (el) {
+      el.style.left = `${x}px`;
+      el.style.top = `${y}px`;
+    }
   }, []);
 
   useEffect(() => {
     const onMove = (e: PointerEvent) => {
       const d = dragRef.current;
-      if (!d) return;
-      setPos({
-        x: Math.max(0, Math.min(window.innerWidth - 200, e.clientX - d.dx)),
-        y: Math.max(0, Math.min(window.innerHeight - 80, e.clientY - d.dy)),
-      });
+      const el = dialogRef.current;
+      if (!d || !el) return;
+      // 直改 DOM style,不走 React state:每帧 setPos 会重渲染整个设置表单
+      // (几百个受控控件),拖动跟手性极差
+      const x = Math.max(0, Math.min(window.innerWidth - 200, e.clientX - d.dx));
+      const y = Math.max(0, Math.min(window.innerHeight - 80, e.clientY - d.dy));
+      el.style.left = `${x}px`;
+      el.style.top = `${y}px`;
+      posRef.current = { x, y };
     };
     const onUp = () => { dragRef.current = null; };
     window.addEventListener("pointermove", onMove);
@@ -1057,13 +1066,12 @@ function SettingsDialog({ onClose, hasRunningTask }: {
       }}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={t("settings.title")}
         className="absolute flex overflow-hidden rounded-box border border-base-300 shadow-2xl backdrop-blur-md [&>main]:!bg-transparent"
         style={{
-          left: pos?.x ?? 0,
-          top: pos?.y ?? 0,
           width: `${Math.min(size.width, window.innerWidth - 24)}px`,
           height: `${Math.min(size.height, window.innerHeight - 24)}px`,
           // 弹窗本体透明度:半透明 base-100,内部文字/控件不受影响;
@@ -1073,12 +1081,16 @@ function SettingsDialog({ onClose, hasRunningTask }: {
         onPointerDown={(e) => {
           // 点在非交互元素上即可拖动(标题/空白):交互元素(按钮/输入框/
           // 滑杆/链接)照常工作——之前的覆盖式把手把 header 的返回按钮
-          // 拦掉了,返回"不灵敏"就是这么来的
+          // 拦掉了,返回"不灵敏"就是这么来的。
+          // preventDefault 防文字选择干扰拖动(拖过正文时选区闪烁/抢事件)
           if (e.button !== 0) return;
           const t2 = e.target as HTMLElement;
           if (t2.closest("button,input,select,textarea,label,a,[role='slider'],[role='menu'],[role='listbox'],[data-no-drag]")) return;
+          // 选区残留会让 move 事件落到被拖选的文字上,清掉
+          window.getSelection()?.removeAllRanges();
           const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
           dragRef.current = { dx: e.clientX - box.left, dy: e.clientY - box.top };
+          e.preventDefault();
         }}
       >
         <SettingsView onClose={onClose} hasRunningTask={hasRunningTask} />
