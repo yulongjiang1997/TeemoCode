@@ -1070,13 +1070,10 @@ function SettingsDialog({ onClose, hasRunningTask }: {
         role="dialog"
         aria-modal="true"
         aria-label={t("settings.title")}
-        className="absolute flex overflow-hidden rounded-box border border-base-300 shadow-2xl backdrop-blur-md [&>main]:!bg-transparent"
+        className="absolute flex overflow-hidden rounded-box border border-base-300 bg-base-100 shadow-2xl"
         style={{
           width: `${Math.min(size.width, window.innerWidth - 24)}px`,
           height: `${Math.min(size.height, window.innerHeight - 24)}px`,
-          // 弹窗本体透明度:半透明 base-100,内部文字/控件不受影响;
-          // SettingsView main 的 bg-mask-100 会被下面 main 覆盖透明
-          backgroundColor: `color-mix(in oklch, var(--color-base-100) ${Math.round(bodyOpacity * 100)}%, transparent)`,
         }}
         onPointerDown={(e) => {
           // 点在非交互元素上即可拖动(标题/空白):交互元素(按钮/输入框/
@@ -1093,7 +1090,12 @@ function SettingsDialog({ onClose, hasRunningTask }: {
           e.preventDefault();
         }}
       >
-        <SettingsView onClose={onClose} hasRunningTask={hasRunningTask} />
+        {/* 透明度作用于整个内容层而非容器背景(2026-09-08 用户反馈:只调
+            容器背景时内部各模块实色底不跟随,观感突兀)。opacity 是整体
+            半透明——文字与背景同步降透明度,macOS 窗口式效果。 */}
+        <div className="flex min-h-0 flex-1 flex-col" style={{ opacity: bodyOpacity }}>
+          <SettingsView onClose={onClose} hasRunningTask={hasRunningTask} />
+        </div>
       </div>
     </div>
   );

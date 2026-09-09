@@ -408,15 +408,16 @@ export function writeComposerQueue(sid: string, val: ComposerPersisted | null): 
   }
 }
 
-/** 设置弹窗遮罩透明度(0~0.9;缺省 0.4)。GeneralSection 调节项与
- * SettingsDialog 共用同一键,双端实时生效。 */
-const SETTINGS_MASK_OPACITY_KEY = "mc.settingsMaskOpacity";
-const DEFAULT_SETTINGS_MASK_OPACITY = 0.4;
+/** 设置窗口不透明度(0~1;缺省 1 = 完全不透明)。GeneralSection 调节项与
+ * SettingsDialog 共用同一键,双端实时生效。2026-09-08 起作用于整个内容层
+ * (内部模块统一跟随),旧键 mc.settingsMaskOpacity 的容器背景旧语义废弃。 */
+const SETTINGS_MASK_OPACITY_KEY = "mc.settingsOpacity";
+const DEFAULT_SETTINGS_MASK_OPACITY = 1;
 
 export function readSettingsMaskOpacity(): number {
   try {
     const v = Number(localStorage.getItem(SETTINGS_MASK_OPACITY_KEY));
-    if (Number.isFinite(v) && v >= 0 && v <= 0.9) return v;
+    if (Number.isFinite(v) && v >= 0 && v <= 1) return v;
   } catch {
     // 只丢持久化
   }
@@ -425,7 +426,7 @@ export function readSettingsMaskOpacity(): number {
 
 export function writeSettingsMaskOpacity(v: number): void {
   try {
-    localStorage.setItem(SETTINGS_MASK_OPACITY_KEY, String(Math.min(0.9, Math.max(0, v))));
+    localStorage.setItem(SETTINGS_MASK_OPACITY_KEY, String(Math.min(1, Math.max(0, v))));
   } catch {
     // 只丢持久化
   }

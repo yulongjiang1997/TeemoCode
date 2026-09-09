@@ -612,7 +612,7 @@ function GeneralSection({ petConfig }: { petConfig?: DesktopConfig | null }) {
             <input
               type="range"
               min={0}
-              max={90}
+              max={100}
               className="range range-xs w-40"
               aria-label={t("settings.appearance.settingsMaskOpacity")}
               value={Math.round(settingsMaskOpacity * 100)}
