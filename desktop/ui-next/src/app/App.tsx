@@ -1074,6 +1074,11 @@ function SettingsDialog({ onClose, hasRunningTask }: {
         style={{
           width: `${Math.min(size.width, window.innerWidth - 24)}px`,
           height: `${Math.min(size.height, window.innerHeight - 24)}px`,
+          // 不透明度作用于**整个弹窗**(group opacity):容器背景/边框/内部
+          // 所有模块一起淡,彼此间对比度不变、文字依旧清晰(2026-09-09
+          // 用户反馈:opacity 只加在内层内容上时,外圈实色容器背景不跟随,
+          // 看起来"只有文字变了")。底下是遮罩黑底,淡出后可透工作区。
+          opacity: bodyOpacity,
         }}
         onPointerDown={(e) => {
           // 点在非交互元素上即可拖动(标题/空白):交互元素(按钮/输入框/
@@ -1090,10 +1095,7 @@ function SettingsDialog({ onClose, hasRunningTask }: {
           e.preventDefault();
         }}
       >
-        {/* 透明度作用于整个内容层而非容器背景(2026-09-08 用户反馈:只调
-            容器背景时内部各模块实色底不跟随,观感突兀)。opacity 是整体
-            半透明——文字与背景同步降透明度,macOS 窗口式效果。 */}
-        <div className="flex min-h-0 flex-1 flex-col" style={{ opacity: bodyOpacity }}>
+        <div className="flex min-h-0 flex-1 flex-col">
           <SettingsView onClose={onClose} hasRunningTask={hasRunningTask} />
         </div>
       </div>
