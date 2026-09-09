@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.39",
+    notes: "任务规划面板可彻底关闭;工作统计活跃时长精确到秒;待发送指令全可编辑;设置弹窗固定尺寸/可拖动/透明度整窗可调",
+  },
+  {
     version: "0.1.38",
     notes: "工作区模型菜单接入本地网关分组;设置页改为独立弹窗(可拖动/透明度可调)",
   },
