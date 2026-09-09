@@ -138,7 +138,10 @@ export function writeBgImage(dataUrl: string): void {
 /** 背景图透明度(1-100;100 = 完全显示图片,默认 60)。 */
 export function readBgOpacity(): number {
   try {
-    const v = Number(localStorage.getItem("mc.bgOpacity"));
+    // 判 null:Number(null)===0 会被 clamp 成下限 1,未设置过就误用 1%
+    const raw = localStorage.getItem("mc.bgOpacity");
+    if (raw === null) return 60;
+    const v = Number(raw);
     return Number.isFinite(v) ? Math.min(Math.max(Math.round(v), 1), 100) : 60;
   } catch {
     return 60;
@@ -157,7 +160,9 @@ export function writeBgOpacity(pct: number): void {
  *  默认 70 = 原硬编码值;调低让背景图更透,调高更实。 */
 export function readMaskOpacity(): number {
   try {
-    const v = Number(localStorage.getItem("mc.maskOpacity"));
+    const raw = localStorage.getItem("mc.maskOpacity");
+    if (raw === null) return 70;
+    const v = Number(raw);
     return Number.isFinite(v) ? Math.min(Math.max(Math.round(v), 0), 100) : 70;
   } catch {
     return 70;
@@ -176,7 +181,9 @@ export function writeMaskOpacity(pct: number): void {
  *  在根图层统一模糊一次,跨区域无缝(各区域各自 blur 会有接缝)。 */
 export function readBgBlur(): number {
   try {
-    const v = Number(localStorage.getItem("mc.bgBlur"));
+    const raw = localStorage.getItem("mc.bgBlur");
+    if (raw === null) return 4;
+    const v = Number(raw);
     return Number.isFinite(v) ? Math.min(Math.max(v, 0), 20) : 4;
   } catch {
     return 4;
@@ -413,11 +420,20 @@ export function writeComposerQueue(sid: string, val: ComposerPersisted | null): 
  * (内部模块统一跟随),旧键 mc.settingsMaskOpacity 的容器背景旧语义废弃。 */
 const SETTINGS_MASK_OPACITY_KEY = "mc.settingsOpacity";
 const DEFAULT_SETTINGS_MASK_OPACITY = 1;
+// 下限 30%:内容层整体 opacity,0/低值会让设置面板完全看不见(2026-09-09
+// 用户报障"打开设置看不见内容")——永远留 30% 以上可读
+const MIN_SETTINGS_MASK_OPACITY = 0.6;
 
 export function readSettingsMaskOpacity(): number {
   try {
-    const v = Number(localStorage.getItem(SETTINGS_MASK_OPACITY_KEY));
-    if (Number.isFinite(v) && v >= 0 && v <= 1) return v;
+    // getItem 无键返回 null,Number(null)===0——不判 null 就会把"从没
+    // 调过滑杆"误读成 0% 不透明度(2026-09-09 用户报障:打开设置看不见
+    // 内容),必须键存在才取
+    const raw = localStorage.getItem(SETTINGS_MASK_OPACITY_KEY);
+    if (raw !== null) {
+      const v = Number(raw);
+      if (Number.isFinite(v)) return Math.min(1, Math.max(MIN_SETTINGS_MASK_OPACITY, v));
+    }
   } catch {
     // 只丢持久化
   }
@@ -426,7 +442,7 @@ export function readSettingsMaskOpacity(): number {
 
 export function writeSettingsMaskOpacity(v: number): void {
   try {
-    localStorage.setItem(SETTINGS_MASK_OPACITY_KEY, String(Math.min(1, Math.max(0, v))));
+    localStorage.setItem(SETTINGS_MASK_OPACITY_KEY, String(Math.min(1, Math.max(MIN_SETTINGS_MASK_OPACITY, v))));
   } catch {
     // 只丢持久化
   }

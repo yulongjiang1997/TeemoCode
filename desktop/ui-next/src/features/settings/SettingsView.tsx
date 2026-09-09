@@ -611,7 +611,7 @@ function GeneralSection({ petConfig }: { petConfig?: DesktopConfig | null }) {
           <div className="flex items-center gap-2">
             <input
               type="range"
-              min={0}
+              min={60}
               max={100}
               className="range range-xs w-40"
               aria-label={t("settings.appearance.settingsMaskOpacity")}
