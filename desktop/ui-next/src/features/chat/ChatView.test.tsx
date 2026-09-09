@@ -414,18 +414,19 @@ describe("聊天视图", () => {
     await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
     emit("frames:s1", [planFrame("in_progress", 5)]);
     await waitFor(() => expect(screen.queryByText(/任务 \d\/\d/)).toBeNull());
-    // 提示条可手动重开面板(重开后摘除会话级标记,回到自动弹出)
+    // 提示条可手动重开面板(展开只是临时查看:会话级标记保留,新清单
+    // 继续不自动弹——2026-09-08 用户要的是「彻底关闭」)
     await userEvent.click(screen.getByRole("button", { name: "展开任务规划" }));
     await waitFor(() => expect(screen.getByText("任务 0/1")).toBeTruthy());
-    expect(localStorage.getItem("mc.planOff.s1")).toBeNull();
+    expect(localStorage.getItem("mc.planOff.s1")).toBe("1");
 
-    // 摘除标记后重开(会话级关闭不再命中):plan 回放面板直接弹出
+    // 展开后关掉面板(再点关闭)→ 重开会话标记仍在,仍不自动弹
     cleanup();
     await tick();
     render(<ChatView meta={META} />);
     await waitFor(() => expect(screen.getByText("帮我修 bug")).toBeTruthy());
     emit("frames:s1", [planFrame("in_progress", 5)]);
-    await waitFor(() => expect(screen.getByText("任务 0/1")).toBeTruthy());
+    await waitFor(() => expect(screen.queryByText(/任务 \d\/\d/)).toBeNull());
   });
 
   it("任务面板:全勾会话级关闭后,新任务新清单不再自动弹(2026-09-08 报障)", async () => {

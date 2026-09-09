@@ -13,7 +13,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod automation;
-mod badge;
 mod baizhi;
 mod browser;
 mod config;

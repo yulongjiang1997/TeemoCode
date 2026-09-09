@@ -377,7 +377,6 @@ impl OhmyDriver {
                 pending_perms: StdMutex::new(HashMap::new()),
                 perm_tools: StdMutex::new(HashMap::new()),
                 resume: StdMutex::new(HashMap::new()),
-                badge_done_at: StdMutex::new(None),
                 turn_start_ms: StdMutex::new(None),
 
             },

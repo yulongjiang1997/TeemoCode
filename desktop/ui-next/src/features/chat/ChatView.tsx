@@ -633,9 +633,12 @@ export function ChatView({
     setPlanDismissed(true);
   };
   const planOn = () => {
-    try {
-      localStorage.removeItem(planOffKey);
-    } catch { /* 只丢持久化 */ }
+    // 临时展开查看(2026-09-08 用户报障:全勾后点「点击展开」无反应,
+    // 根因是 allDone 由 planOverrides 全勾恒推,清掉 overrides 面板才回来)。
+    // **保留**会话级关闭标记:用户要的是「彻底关闭」,展开只是查看,
+    // 新任务新清单继续不自动弹;想恢复自动弹 = 删会话或反悔取消勾选。
+    setPlanOverrides(new Set());
+    allTickedRef.current = false;
     setPlanDismissed(false);
   };
   // plan 条目指纹:内容变了(新一轮的新清单)才复位手动标记;同一清单的

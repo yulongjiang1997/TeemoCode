@@ -448,9 +448,8 @@ pub(super) struct SessionsState {
     /// 但所有上行命令必须先经 ensure_engine_ready 等它就绪。
     pub(super) resume:
         StdMutex<HashMap<String, tokio::sync::watch::Receiver<Option<Result<(), String>>>>>,
-    /// 任务栏完成角标的时间戳(毫秒,frame::now_ms)。轮收尾时记下,15s
-    /// 内展示绿点,窗口自过期无需"用户看过"的上行信号。
-    pub(super) badge_done_at: StdMutex<Option<u64>>,
+    /// 轮开始时间戳(毫秒,frame::now_ms)。活跃时长统计(2026-09-08):
+    /// running 记下,轮收尾算 delta 累加进 stats。
     pub(super) turn_start_ms: StdMutex<Option<u64>>,
 }
 
@@ -2738,33 +2737,6 @@ impl Inner {
             "session-event",
             json!({ "type": "session-status", "id": sid, "status": status, "title": title }),
         );
-        // 任务栏角标 + 系统通知:轮收尾(idle/finished/error)= 有结果待看
-        // (2026-09-08 用户报障:通知只有子代理完成才发,主任务跑完没有任何
-        // 提醒;角标同理)。记时间戳开 15s 角标展示窗;待审核优先级更高,
-        // refresh_badge 统一裁决。通知走 show_notification(受 notification_
-        // enabled 开关控制,权限未授予时静默)。
-        // interrupted(用户中断/引擎重启收尾)也算轮收束,角标/时长统计同样生效
-        if matches!(status, "idle" | "finished" | "error" | "interrupted") {
-            *self.sess.badge_done_at.lock_ok() = Some(frame::now_ms());
-            self.refresh_badge();
-            // 只在**会话非前台可见**时弹通知吗?壳不知道哪个会话在前台
-            // (那是 UI 状态),但 running 会话所在窗口被用户盯着时弹通知
-            // 是噪音——折中:窗口最小化/隐藏(托盘)才弹,前台可见不弹。
-            let hwnd_raw = self.app.badge_hwnd();
-            let minimized = hwnd_raw
-                .and_then(|raw| unsafe { crate::badge::is_minimized(raw) })
-                .unwrap_or(false);
-            let notif_on = notification_on(&self.app);
-            if minimized && notif_on {
-                let body = match status {
-                    "finished" => format!("任务「{title}」已完成"),
-                    "error" => format!("任务「{title}」出错了,回来看看"),
-                    "interrupted" => format!("任务「{title}」已停止"),
-                    _ => format!("任务「{title}」有新回复"),
-                };
-                self.app.show_notification("MonkeyCode", &body);
-            }
-        }
     }
 
     /// 会话摘要更新(引擎每轮异步生成,见 normalize.rs 的 session_summary 分支)。
@@ -2785,38 +2757,6 @@ impl Inner {
             "session-event",
             json!({ "type": "session-ask", "id": sid, "title": title, "open": open }),
         );
-        // 任务栏角标:出现/解除审核等待都要重裁决(2026-09-08 用户需求)
-        self.refresh_badge();
-    }
-
-    /// 任务栏角标重裁决:待审核(权限/提问)优先 > 任务完成 > 无。
-    /// 仅 Windows 生效(badge 模块 cfg),主窗口拿不到时静默跳过。
-    pub(super) fn refresh_badge(&self) {
-        #[cfg(target_os = "windows")]
-        {
-            // driver 层不依赖 tauri 类型:HWND 经 ShellCtx::badge_hwnd 取值
-            use windows::Win32::Foundation::HWND;
-            let Some(raw) = self.app.badge_hwnd() else { return };
-            let hwnd = HWND(raw as *mut _);
-            let waiting = {
-                let perms = self.sess.pending_perms.lock_ok();
-                let asks = self.sess.pending_questions.lock_ok();
-                !perms.is_empty() || !asks.is_empty()
-            };
-            let finished_recently = self
-                .sess
-                .badge_done_at
-                .lock_ok()
-                .map(|t| frame::now_ms().saturating_sub(t) < 15_000)
-                .unwrap_or(false);
-            if waiting {
-                crate::badge::set_badge(hwnd, crate::badge::BadgeKind::Attention);
-            } else if finished_recently {
-                crate::badge::set_badge(hwnd, crate::badge::BadgeKind::Done);
-            } else {
-                crate::badge::clear_badge(hwnd);
-            }
-        }
     }
 
     pub(super) fn resolve_perm(&self, sid: &str, req_id: &str, outcome: PermOutcome) {
@@ -2962,15 +2902,6 @@ impl Inner {
 /// 壳模式词汇 → ohmyagent permission_mode
 /// meta/sidecar 的 skills 字段 → 启用集(非数组/缺失 = None = 缺省集,
 /// 语义见 skills::materialize)。
-/// 系统通知开关(读 config.json 的 notification_enabled;读不到按开)。
-fn notification_on(app: &std::sync::Arc<dyn super::ohmy::ShellCtx>) -> bool {
-    app.config_dir()
-        .ok()
-        .and_then(|dir| crate::config::load_config_from_dir(&dir).ok())
-        .map(|c| c.notification_enabled)
-        .unwrap_or(true)
-}
-
 fn skills_of_meta(meta: &Value) -> Option<Vec<String>> {
     meta.get("skills")
         .and_then(|v| v.as_array())
