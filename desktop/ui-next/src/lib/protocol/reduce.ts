@@ -620,15 +620,16 @@ function reduceAcp(s: ChatState, u: AcpUpdate, timestamp?: number): ChatState {
 export function reduceFrame(s: ChatState, f: Frame): ChatState {
   switch (f.type) {
     case "task-started":
-      // plan/todo 是轮次级状态:上一轮的最终清单可在结束后保留供回顾,
-      // 新一轮开始时只清掉已全部完成的清单;还有未完成项则跨轮保留,
-      // 直到本轮 plan 帧继续更新它。turnEnded 同为轮次级:新一轮开始即复位,
-      // 视图的「轮末边沿」检测(改动计数刷新)每轮都能触发,不是只有首轮
+      // plan/todo 是轮次级状态(2026-09-09 用户报障:任务完成后面板不消失,
+      // 多任务清单越积越大):轮结束边沿(task-ended/terminal task-error)
+      // 就清掉 plan,新一轮 task-started 的模型新 plan 帧再重建。
+      // turnEnded 同为轮次级:新一轮开始即复位,视图的「轮末边沿」检测
+      // (改动计数刷新)每轮都能触发,不是只有首轮
       return {
         ...s,
         running: true,
         turnEnded: false,
-        plan: s.plan.length > 0 && s.plan.every((e) => e.status === "completed") ? [] : s.plan,
+        plan: [],
       };
     case "task-ended":
       return {
@@ -636,6 +637,9 @@ export function reduceFrame(s: ChatState, f: Frame): ChatState {
         running: false,
         streamKind: "",
         turnEnded: true,
+        // 轮末边沿清规划清单(2026-09-09:任务完成后面板应消失,不留
+        // 累积;下一轮 task-started 模型会重发新清单)
+        plan: [],
         items: [...expireOpenAsks(s.items), { kind: "sys", tag: "turn-end", text: "", key: "chat.sys.turnEnd" }],
       };
     case "task-error": {
@@ -647,6 +651,8 @@ export function reduceFrame(s: ChatState, f: Frame): ChatState {
         // 只负责即时展示，不能提前放开输入/排队闸；云端旧帧缺字段仍终止。
         running: terminal ? false : s.running,
         streamKind: "",
+        // 终止性错误:本轮规划清单作废,同 task-ended 一并清(面板不留残)
+        ...(terminal ? { plan: [] as typeof s.plan } : {}),
         items: [
           ...(terminal ? expireOpenAsks(s.items) : s.items),
           data?.error

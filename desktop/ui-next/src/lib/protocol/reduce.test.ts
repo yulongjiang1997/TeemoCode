@@ -395,29 +395,51 @@ describe("计划卡片", () => {
     expect(s.plan).toEqual([{ content: "步骤一", status: "completed" }]);
   });
 
-  it("新一轮开始时清空上一轮已全部完成的任务清单", () => {
-    const previous = run([
+  it("轮末边沿(task-ended)清任务清单:完成与否都清,不留残(2026-09-09 报障)", () => {
+    // 旧语义:清单全完成才清、未完成跨轮保留 → 模型漏标/任务异常时面板
+    // 永久挂着且多轮越积越大。新语义:轮末就清,下一轮模型重发新清单。
+    const done = run([
       frame("task-started"),
       acp({ sessionUpdate: "plan", entries: [{ content: "上一轮任务", status: "completed" }] }),
       frame("task-ended"),
     ]);
-    expect(previous.plan).toHaveLength(1);
+    expect(done.plan).toEqual([]);
 
-    const next = reduceBatch(previous, [frame("user-input", { content: b64encode("开始下一轮") }), frame("task-started")]);
-    expect(next.plan).toEqual([]);
-    expect(next.running).toBe(true);
+    const pending = run([
+      frame("task-started"),
+      acp({ sessionUpdate: "plan", entries: [{ content: "继续处理", status: "in_progress" }] }),
+      frame("task-ended"),
+    ]);
+    expect(pending.plan).toEqual([]);
   });
 
-  it("新一轮开始时保留上一轮尚未完成的任务清单", () => {
+  it("新一轮 task-started 也清清单(回放/旧数据兜底):不继承上一轮残值", () => {
     const entries = [
       { content: "已完成", status: "completed" },
       { content: "继续处理", status: "in_progress" },
     ];
-    const previous = run([frame("task-started"), acp({ sessionUpdate: "plan", entries }), frame("task-ended")]);
+    // 模拟旧会话回放:task-ended 缺失、清单残留在上一轮状态里
+    const previous = reduceBatch(createChatState(), [
+      frame("task-started"),
+      acp({ sessionUpdate: "plan", entries }),
+    ]);
+    expect(previous.plan).toHaveLength(2);
 
     const next = reduceBatch(previous, [frame("user-input", { content: b64encode("继续做") }), frame("task-started")]);
-    expect(next.plan).toEqual(entries);
+    expect(next.plan).toEqual([]);
     expect(next.running).toBe(true);
+  });
+
+  it("终止性 task-error 清清单;非终止错误保留(任务还活着)", () => {
+    const entries = [{ content: "步骤一", status: "in_progress" }];
+    const st = reduceBatch(createChatState(), [
+      frame("task-started"),
+      acp({ sessionUpdate: "plan", entries }),
+    ]);
+    const ok = reduceBatch(st, [frame("task-error", { error: "boom", terminal: false })]);
+    expect(ok.plan).toEqual(entries); // 非终止:任务继续,清单保留
+    const term = reduceBatch(st, [frame("task-error", { error: "boom", terminal: true })]);
+    expect(term.plan).toEqual([]); // 终止:清单作废
   });
 });
 
