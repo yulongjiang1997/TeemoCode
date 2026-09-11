@@ -10,12 +10,13 @@
 // 关闭胶水统一 useDismiss(外点 pointerdown + Esc;不用 onBlur,WebKitGTK
 // 点按钮不移焦点会误关)。
 import { IconCheck, IconChevronDown, IconX } from "@tabler/icons-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useI18n, type MessageKey } from "@/lib/i18n";
 import { useUpwardMenuHeight } from "@/lib/util/menuHeight";
 import type { ModelInfo } from "@/lib/ipc/sessions";
 import { defaultEnabledSkills, type SkillInfo } from "@/lib/ipc/skills";
+import { externalAgentProbe, type ExternalAgent, type ExternalAgentProbe } from "@/lib/ipc/externalAgents";
 import {
   filterModels,
   groupMemberSections,
@@ -661,6 +662,93 @@ export function OptionMenu({
                 ...s.options.map(itemOf),
               ])
             : flat.map(itemOf)}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** 外部 CLI 子代理选择器(2026-09-09):本机 Claude Code / Codex CLI 当子代理。
+ *  选中后本次提交的消息改走壳的 external_agent_run(spawn CLI,物化壳侧子
+ *  会话),不走引擎主模型;再选一次(选「引擎(默认)」)取消。菜单项按 PATH
+ *  探测置灰。 */
+export function ExternalAgentMenu({
+  current,
+  onPick,
+  disabled = false,
+  title,
+}: {
+  /** 当前选中的外部代理("" = 走引擎,缺省态) */
+  current: string;
+  onPick: (agent: string) => void;
+  disabled?: boolean;
+  title?: string;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const [probe, setProbe] = useState<ExternalAgentProbe>({ claude: false, codex: false });
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  useDismiss(open, boxRef, () => setOpen(false));
+  useEffect(() => {
+    let alive = true;
+    void externalAgentProbe().then((p) => {
+      // 测试替身/旧壳可能 resolve null:按"都没装"兜底,别让渲染崩
+      if (alive && p && typeof p.claude === "boolean") setProbe(p);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const items: Array<{ key: ExternalAgent; label: string; ok: boolean }> = [
+    { key: "claude", label: "Claude Code", ok: probe.claude },
+    { key: "codex", label: "Codex CLI", ok: probe.codex },
+  ];
+  return (
+    <div ref={boxRef} className={`dropdown dropdown-top shrink-0 dropdown-end ${open ? "dropdown-open" : ""}`}>
+      <button
+        type="button"
+        disabled={disabled}
+        title={title ?? t("chat.extagent.tip")}
+        aria-label={t("chat.extagent.trigger")}
+        className={`badge badge-sm cursor-pointer shrink-0 transition-colors ${
+          current ? "border-secondary/60 bg-secondary/10 text-secondary" : "badge-outline text-base-content/40 hover:text-base-content/60"
+        } disabled:cursor-not-allowed disabled:opacity-40`}
+        onClick={() => setOpen(!open)}
+      >
+        {current ? items.find((x) => x.key === current)?.label ?? current : t("chat.extagent.trigger")}
+      </button>
+      {open && (
+        <ul aria-label={t("chat.extagent.trigger")} className="dropdown-content menu w-48 flex-nowrap [&_li]:flex-nowrap z-50 mt-1 rounded-box border border-base-300 bg-base-100 p-1 shadow-lg">
+          <li>
+            <button
+              type="button"
+              className={`flex w-full items-center justify-between text-xs ${current === "" ? "text-secondary" : ""}`}
+              onClick={() => {
+                onPick("");
+                setOpen(false);
+              }}
+            >
+              <span>{t("chat.extagent.engine")}</span>
+              {current === "" && <IconCheck size={12} aria-hidden />}
+            </button>
+          </li>
+          {items.map((it) => (
+            <li key={it.key}>
+              <button
+                type="button"
+                disabled={!it.ok}
+                className={`flex w-full items-center justify-between text-xs ${it.key === current ? "text-secondary" : ""} disabled:opacity-40`}
+                title={it.ok ? undefined : t("chat.extagent.notFound")}
+                onClick={() => {
+                  onPick(it.key);
+                  setOpen(false);
+                }}
+              >
+                <span>{it.label}</span>
+                {it.key === current && <IconCheck size={12} aria-hidden />}
+              </button>
+            </li>
+          ))}
         </ul>
       )}
     </div>

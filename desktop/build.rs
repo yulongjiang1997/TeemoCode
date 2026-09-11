@@ -65,6 +65,10 @@ fn main() {
                 "session_close",
                 "session_send",
                 "session_call",
+                "external_agent_run",
+                "external_agent_cancel",
+                "external_agent_list",
+                "external_agent_probe",
                 // 技能库(skills.rs;会话级启用走 session_call 的
                 // session_set_skills,不是独立命令)
                 "skills_list",

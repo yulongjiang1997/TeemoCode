@@ -51,6 +51,7 @@ use tauri_nspanel::{tauri_panel, StyleMask, WebviewWindowExt as _};
 
 use config::{load_config, materialize_engine_config, save_ui_config_files, DesktopConfig};
 use driver::DriverHost;
+use driver::ExternalAgentHost;
 use crate::util::LockExt;
 
 // macOS 桌宠面板类:普通 NSWindow 被点击会激活应用、把主窗口带到最前;
@@ -1797,7 +1798,8 @@ fn main() {
     // 系统通知开关状态(从 config 读取初始值,后续由 IPC 命令更新)
     let builder = builder
         .manage(config::ConfigStore::new())
-        .manage(DriverHost::new())
+        .manage(std::sync::Arc::new(ExternalAgentHost::new()))
+            .manage(DriverHost::new())
         .manage(TrayReady(AtomicBool::new(true)))
         .manage(UiIntent(Mutex::new(None)))
         .manage(PetEnabled(AtomicBool::new(true)))
@@ -1854,6 +1856,10 @@ fn main() {
             driver::session_close,
             driver::session_send,
             driver::session_call,
+            driver::external_agent_run,
+            driver::external_agent_cancel,
+            driver::external_agent_list,
+            driver::external_agent_probe,
             skills::skills_list,
             skills::skills_save,
             skills::skills_delete,

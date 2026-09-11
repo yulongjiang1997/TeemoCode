@@ -44,7 +44,8 @@ import { timelineDeltaOf } from "@/lib/protocol/reduce";
 import { fmtK } from "@/lib/util/fmt";
 import { commandText, createImeGuard, cycleIndex, filterCommands, slashQuery } from "@/lib/util/slash";
 import { ComposerCard, ComposerTextarea, ErrorBar, RunBar, SlashPanel, UsageRing } from "./composerKit";
-import { ModelMenu, SkillsMenu, ThinkMenu } from "./pickers";
+import { ExternalAgentMenu, ModelMenu, SkillsMenu, ThinkMenu } from "./pickers";
+import { externalAgentRun, type ExternalAgent } from "@/lib/ipc/externalAgents";
 import { CommandWarehouse } from "./CommandWarehouse";
 import type { ComposerCtl } from "./useComposer";
 
@@ -325,6 +326,8 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
   const [models, setModels] = useState<ModelInfo[]>([]);
   // teamOn 来自 props(LocalComposerHost 管理状态,通过 useComposer 传递给 send)
   const [warehouseOpen, setWarehouseOpen] = useState(false);
+  // 外部 CLI 子代理(2026-09-09):选中后提交改走壳 external_agent_run(会话级,切会话重置)
+  const [extAgent, setExtAgent] = useState<string>("");
   // 指令仓库:按 sessionId 隔离,持久化到 localStorage
   const [warehouseItems, setWarehouseItems] = useState<Array<{ id: string; text: string; atts: Array<{ path: string; name: string; isImage: boolean }> }>>(() => {
     try { return JSON.parse(localStorage.getItem(`mc.warehouse.${sessionId}`) ?? "[]"); } catch { return []; }
@@ -548,6 +551,22 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
 
   // ==== 发送 / 键盘 ====
   const submit = () => {
+    // 外部 CLI 子代理(2026-09-09):选中时本条消息 spawn 本机 CLI(Claude
+    // Code/Codex)执行,壳侧物化子会话 + 流式出帧(渲染复用引擎子代理体系),
+    // 不走引擎主模型。失败(未安装/超时等)保留草稿并外显错误。
+    if (extAgent) {
+      const text = ctl.draft.trim();
+      if (!text) return;
+      void externalAgentRun(sessionId, extAgent as ExternalAgent, text, meta.workdir ?? "", 0)
+        .then(() => {
+          ctl.setDraft("");
+          onAfterSend?.();
+        })
+        .catch((e: unknown) => {
+          ctl.notifyError(t("chat.extagent.runFailed", { reason: e instanceof Error ? e.message : String(e) }));
+        });
+      return;
+    }
     if (ctl.send()) onAfterSend?.();
   };
 
@@ -720,6 +739,9 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
             disabled={presentation.running}
             title={presentation.running ? t("chat.switchWhileRunning") : t("chat.model.tip")}
           />
+
+          {/* 外部 CLI 子代理:选中后本条消息交给本机 CLI 执行(2026-09-09) */}
+          <ExternalAgentMenu current={extAgent} onPick={setExtAgent} title={t("chat.extagent.tip")} />
 
           {/* 计划模式开关(对标 ZCode Plan Mode):本轮只调研与出计划,等确认再动手 */}
           <button

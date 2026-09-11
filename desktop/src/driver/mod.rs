@@ -16,11 +16,13 @@ pub mod frame;
 mod normalize;
 pub mod ohmy;
 mod session;
+mod external;
 mod subagent;
 mod transport;
 
 use std::ops::Deref;
 use std::sync::{Condvar, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use ohmy::OhmyDriver;
@@ -28,6 +30,8 @@ use serde_json::Value;
 use tauri::{AppHandle, Manager, State};
 
 use crate::config::DesktopConfig;
+use external::AgentPreset;
+pub(crate) use external::ExternalAgentHost;
 use crate::repo::RepoCtx;
 use crate::util::LockExt;
 
@@ -488,6 +492,55 @@ pub async fn session_call(
     }
     engine.session_call(&id, &kind, payload).await
 }
+/// 外部 CLI 子代理:派发一条任务给本机安装的外部 CLI agent(Claude Code /
+/// Codex),物化壳侧子会话,流式出帧;立即返回 run_id(前端据此可取消/查在跑
+/// 列表)。引擎是否在线不影响(不走引擎,直接 spawn CLI)。
+#[tauri::command]
+pub async fn external_agent_run(
+    host: State<'_, DriverHost>,
+    ext: State<'_, Arc<ExternalAgentHost>>,
+    session_id: String,
+    agent: String,
+    prompt: String,
+    workdir: String,
+    timeout_secs: u64,
+) -> Result<String, String> {
+    let preset = AgentPreset::of(&agent)
+        .ok_or_else(|| format!("未识别的外部代理: {agent}"))?;
+    let inner = host.get()?.0.clone();
+    // State 解引用到 &Arc<..>,(*ext).clone() 拿 Arc 传给阻塞任务
+    let ext_state = (*ext).clone();
+    // spawn CLI + 流式读是阻塞活,丢 blocking 池(命令本身立即返回 run_id)
+    let (i2, e2, sid, preset2, p, wd, to) =
+        (inner, ext_state, session_id, preset, prompt, workdir, timeout_secs);
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::driver::external::run_external_agent(&i2, &e2, &sid, &preset2, &p, &wd, to)
+    })
+    .await
+    .map_err(|e| format!("外部代理派发失败: {e}"))?
+}
+
+/// 取消在跑的外部 CLI 子代理(置 cancel,worker 线程下一轮 kill 进程树)。
+#[tauri::command]
+pub async fn external_agent_cancel(
+    ext: State<'_, Arc<ExternalAgentHost>>,
+    run_id: String,
+) -> Result<(), String> {
+    crate::driver::external::cancel_external_agent(&**ext, &run_id)
+}
+
+/// 在跑的外部 CLI 子代理列表(前端显示"正在跑"角标/入口)。
+#[tauri::command]
+pub async fn external_agent_list(ext: State<'_, Arc<ExternalAgentHost>>) -> Result<Value, String> {
+    Ok(serde_json::json!(crate::driver::external::list_external_runs(&**ext)))
+}
+
+/// 外部 CLI 安装探测(claude/codex 在 PATH 里吗;菜单据此置灰)。
+#[tauri::command]
+pub async fn external_agent_probe() -> Result<Value, String> {
+    Ok(crate::driver::external::probe_external_agents())
+}
+
 
 /// 开始分块上传附件(chunk/finish/abort 在 uploads.rs——不需要会话上下文)。
 /// 附件大小不设限:单块 4MB 由 UI 控制,内存与单条 IPC 消息都有界。
