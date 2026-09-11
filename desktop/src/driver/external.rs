@@ -96,29 +96,64 @@ impl AgentPreset {
     }
 }
 
-/// PATH 探测(Windows 带 .exe/.cmd/.bat 后缀;POSIX 直接找)。
-pub(crate) fn find_in_path(bin: &str) -> Option<String> {
-    let path_env = std::env::var("PATH").ok()?;
-    for dir in std::env::split_paths(&path_env) {
-        if !dir.is_dir() {
-            continue;
-        }
-        #[cfg(windows)]
-        {
-            for ext in ["", ".exe", ".cmd", ".bat"] {
-                let p = dir.join(format!("{bin}{ext}"));
-                if p.is_file() {
-                    return Some(p.to_string_lossy().into_owned());
-                }
-            }
-            continue;
-        }
-        #[cfg(not(windows))]
-        {
-            let p = dir.join(bin);
+/// 在候选目录里找可执行文件(Windows 带 .exe/.cmd/.bat 后缀)。
+fn find_in_dir(dir: &std::path::Path, bin: &str) -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        for ext in ["", ".exe", ".cmd", ".bat"] {
+            let p = dir.join(format!("{bin}{ext}"));
             if p.is_file() {
+                return Some(p);
+            }
+        }
+        None
+    }
+    #[cfg(not(windows))]
+    {
+        let p = dir.join(bin);
+        if p.is_file() {
+            Some(p)
+        } else {
+            None
+        }
+    }
+}
+
+/// CLI 探测:先扫 PATH,失败后查**已知安装位置**兜底——桌面版/原生
+/// 安装器的 CLI 不一定进系统 PATH(实测 Codex 桌面版把 codex.exe 放
+/// ~/.codex/.sandbox-bin/,不在 PATH,只扫 PATH 会误报"未安装"→
+/// 菜单置灰,2026-09-10 用户报障)。
+pub(crate) fn find_in_path(bin: &str) -> Option<String> {
+    let home = std::env::var("HOME").ok().map(std::path::PathBuf::from)
+        .or_else(|| std::env::var("USERPROFILE").ok().map(std::path::PathBuf::from))?;
+    find_in_path_with_home(bin, &home)
+}
+
+/// 可注入 home 的探测体(单测用:建临时目录放假 CLI,不碰真实环境变量)。
+pub(crate) fn find_in_path_with_home(bin: &str, home: &std::path::Path) -> Option<String> {
+    // 1. PATH
+    if let Ok(path_env) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path_env) {
+            if let Some(p) = find_in_dir(&dir, bin) {
                 return Some(p.to_string_lossy().into_owned());
             }
+        }
+    }
+    // 2. 已知安装位置(用户目录下的桌面版/原生安装器落点)
+    let candidates = [
+        // Codex 桌面版(sandbox 内嵌 CLI;多版本并存,取最新)
+        home.join(".codex").join(".sandbox-bin"),
+        home.join(".codex").join("bin"),
+        // Claude Code 原生安装器
+        home.join(".claude").join("local"),
+        home.join(".claude"),
+        // 常见全局 bin
+        home.join(".local").join("bin"),
+        home.join(".npm-global"),
+    ];
+    for dir in &candidates {
+        if let Some(p) = find_in_dir(dir, bin) {
+            return Some(p.to_string_lossy().into_owned());
         }
     }
     None
@@ -530,5 +565,47 @@ fn handle_stream_json_line(inner: &Arc<Inner>, child_sid: &str, v: &Value) -> bo
         }
         // system/init、user(工具结果回显)、permission_denied(诊断级)等:忽略
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod external_tests {
+    use super::*;
+
+    /// 手工临时目录(tempfile 不在依赖,避免为测试扩依赖面):
+    /// 建唯一目录,测试结束由调用方/进程退出清。返回 home 路径。
+    fn tmp_home() -> std::path::PathBuf {
+        let n = std::sync::atomic::AtomicU64::new(0);
+        let _ = &n;
+        let dir = std::env::temp_dir().join(format!(
+            "ext-probe-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir tmp home");
+        dir
+    }
+
+    #[test]
+    fn sandbox_bin_fallback_finds_codex() {
+        // 模拟 Codex 桌面版:~/.codex/.sandbox-bin/codex.exe 不在 PATH
+        let home = tmp_home();
+        let sb = home.join(".codex").join(".sandbox-bin");
+        std::fs::create_dir_all(&sb).expect("mkdir sandbox-bin");
+        let exe = sb.join(if cfg!(windows) { "codex.exe" } else { "codex" });
+        std::fs::write(&exe, b"").expect("write fake cli");
+        let found = find_in_path_with_home("codex", &home);
+        assert!(found.is_some(), "sandbox-bin 兜底应命中 codex");
+        assert!(found.unwrap().starts_with(sb.to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn nothing_installed_returns_none() {
+        let home = tmp_home();
+        // 空 home + PATH 里没有这个假 CLI → None
+        assert!(find_in_path_with_home("definitely_not_a_cli_xyz", &home).is_none());
     }
 }
