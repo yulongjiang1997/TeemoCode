@@ -22,7 +22,13 @@ interface Op {
   args?: Record<string, unknown>;
 }
 
-function stubShell({ models = [] }: { models?: ModelInfo[] } = {}) {
+function stubShell({
+  models = [],
+  externalProbe,
+}: {
+  models?: ModelInfo[];
+  externalProbe?: { claude: boolean; codex: boolean };
+} = {}) {
   const ops: Op[] = [];
   const listeners = new Map<string, (e: { payload: unknown }) => void>();
   (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
@@ -37,6 +43,7 @@ function stubShell({ models = [] }: { models?: ModelInfo[] } = {}) {
           });
         }
         if (cmd === "models_list") return Promise.resolve(models);
+        if (cmd === "external_agent_probe") return Promise.resolve(externalProbe ?? null);
         if (cmd === "session_call") return Promise.resolve({ result: {} });
         if (cmd === "upload_begin") return Promise.resolve({ handle: 9 });
         if (cmd === "upload_finish") return Promise.resolve({ path: ".monkeycode/uploads/shot.png" });
@@ -726,5 +733,53 @@ describe("计划模式", () => {
     const payload = b64decode((sends(ops, "user-input")[0]?.args?.payload as { content: string }).content);
     expect(payload).not.toContain("[mc-plan]");
     expect(payload).toBe("直接修");
+  });
+});
+
+
+describe("外部 CLI 子代理", () => {
+  it("选中外部代理后发送走 external_agent_run 而非引擎;选引擎恢复", async () => {
+    const user = userEvent.setup();
+    const { ops } = stubShell({ externalProbe: { claude: true, codex: false } });
+    render(<ChatView meta={META} onPatched={() => {}} onDeleted={() => {}} />);
+    const box = await ready();
+
+    // 打开外部代理菜单,选 Claude(已装可点)
+    const trigger = screen.getByRole("button", { name: "外部代理" });
+    await user.click(trigger);
+    const claudeBtn = await screen.findByRole("button", { name: /Claude Code/ });
+    expect((claudeBtn as HTMLButtonElement).disabled).toBe(false);
+    await user.click(claudeBtn);
+
+    await user.type(box, "帮我看下这个报错");
+    await user.keyboard("{Enter}");
+
+    // 不该走引擎 user-input
+    await waitFor(() => expect(sends(ops, "user-input").length).toBe(0));
+    // 应走 external_agent_run
+    const ext = ops.find((o) => o.op === "invoke" && o.cmd === "external_agent_run");
+    expect(ext).toBeTruthy();
+    expect(ext?.args?.agent).toBe("claude");
+    expect(ext?.args?.prompt).toBe("帮我看下这个报错");
+    expect(ext?.args?.sessionId).toBe("s1");
+
+    // 再选「引擎(默认)」恢复走引擎
+    await user.click(screen.getByRole("button", { name: "Claude Code" }));
+    await user.click(await screen.findByRole("button", { name: "引擎(默认)" }));
+    await user.type(box, "直接改");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(sends(ops, "user-input").length).toBe(1));
+  });
+
+  it("未装/探针缺省时菜单项禁用,不可选", async () => {
+    const user = userEvent.setup();
+    const { ops } = stubShell();
+    render(<ChatView meta={META} onPatched={() => {}} onDeleted={() => {}} />);
+    await ready();
+    await user.click(screen.getByRole("button", { name: "外部代理" }));
+    // stub 探针缺省(null) → 按"都没装"兜底,两项禁用
+    const claude = await screen.findByRole("button", { name: /Claude Code/ });
+    expect((claude as HTMLButtonElement).disabled).toBe(true);
+    expect(ops.some((o) => o.cmd === "external_agent_run")).toBe(false);
   });
 });

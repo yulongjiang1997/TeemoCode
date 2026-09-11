@@ -709,7 +709,7 @@ export function ExternalAgentMenu({
         type="button"
         disabled={disabled}
         title={title ?? t("chat.extagent.tip")}
-        aria-label={t("chat.extagent.trigger")}
+        aria-label={current ? items.find((x) => x.key === current)?.label ?? current : t("chat.extagent.trigger")}
         className={`badge badge-sm cursor-pointer shrink-0 transition-colors ${
           current ? "border-secondary/60 bg-secondary/10 text-secondary" : "badge-outline text-base-content/40 hover:text-base-content/60"
         } disabled:cursor-not-allowed disabled:opacity-40`}
