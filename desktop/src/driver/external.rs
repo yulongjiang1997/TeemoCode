@@ -83,8 +83,12 @@ impl AgentPreset {
                 "stream-json".into(),
                 "--verbose".into(),
             ],
-            // codex exec:非交互单任务,stdout 直接是 agent 文本
-            Self::Codex => vec!["exec".into(), prompt.into()],
+            // codex exec:非交互单任务,stdout 直接是 agent 文本。
+            // --skip-git-repo-check 必带:会话工作区常不是 git 仓库(或
+            // 不在 codex 受信任列表),缺它 exec 直接报 "Not inside a
+            // trusted directory" 退出,任务根本跑不起来(2026-09-11
+            // 用户报障"调用不了 codex")。
+            Self::Codex => vec!["exec".into(), "--skip-git-repo-check".into(), prompt.into()],
         }
     }
 
