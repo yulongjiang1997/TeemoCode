@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.41",
+    notes: "本地大模型网关独立为左侧菜单空间,新增 Token 统计面板(按模型分类/时间范围/热力图,含调用总时长);自定义模型列表改两行显示,信息展示更全;执行中指令可手动移除",
+  },
+  {
     version: "0.1.40",
     notes: "外部 CLI 子代理(Claude Code / Codex CLI):composer 外部代理菜单发派本机 CLI 实施任务,子会话流式展示;任务规划面板轮次收尾自动清空,不再跨轮积累",
   },
