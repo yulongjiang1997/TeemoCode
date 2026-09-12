@@ -196,28 +196,71 @@ export function ModelsSection({
     const managed = m.source === SOURCE_MONKEYCODE;
     const open = expanded === i && !managed;
     const d = modelDisplay({ name: m.name, model: m.model, source: m.source });
+    // 自定义条目(!source)改成两行布局:第一行名称+徽标,第二行把
+    // model 标识/provider/base_url/高级摘要全铺开,不再被 truncate 截断
+    // ——用户要"尽量把所有信息显示全"(2026-09-12)。
+    // 同步条目(会员/百智云)仍单行(信息密度低,wire 串与摘要都不出)。
+    const custom = !m.source;
     const nameBody = (
       <>
-        {/* 行主文本 = 应用基准 14px 常规(与侧栏/菜单行同级),不加粗:
-            名称的主导地位靠 wire 串的灰色等宽小字衬出,不靠字重 */}
-        <span className={`truncate ${m.locked ? "text-base-content/50" : ""}`}>
-          {d.label.trim() || t("settings.models.unnamed")}
-        </span>
-        {!noTier && d.tier && <span className="badge badge-ghost badge-sm shrink-0">{d.tier}</span>}
-        {m.locked && <span className="badge badge-warning badge-soft badge-sm shrink-0">{t("settings.models.lockedBadge")}</span>}
-        {!m.source && m.model && <span className="min-w-0 truncate font-mono text-xs text-base-content/50">{m.model}</span>}
-        {/* 折叠态补一句高级项摘要(旧 UI advSummary):配置过的值收起来就
-            完全不可见,用户改完一合上根本认不出这行跟别行有什么不同。
-            展开时不出——下面的表单里逐项都在,重复一遍是噪音 */}
-        {!open && advSummary(m, t) && (
+        {/* 第一行:名称 + 档位/锁定/测试徽标 */}
+        {/* 自定义条目在 flex-col 容器里,第一行用 flex 包裹保持水平;
+            非自定义条目容器本身就是 items-center 单行,不需要包裹 */}
+        {custom ? (
+          <span className="flex min-w-0 items-center gap-2">
+            <span className={`truncate ${m.locked ? "text-base-content/50" : ""}`}>
+              {d.label.trim() || t("settings.models.unnamed")}
+            </span>
+            {!noTier && d.tier && <span className="badge badge-ghost badge-sm shrink-0">{d.tier}</span>}
+            {m.locked && <span className="badge badge-warning badge-soft badge-sm shrink-0">{t("settings.models.lockedBadge")}</span>}
+            {testState[i]?.running && (
+              <span className="loading loading-spinner loading-xs shrink-0 text-info" aria-label={t("settings.models.test.running")} />
+            )}
+            {!testState[i]?.running && testState[i]?.result?.ok === true && (
+              <span
+                className="badge badge-success badge-soft badge-sm shrink-0"
+                title={t("settings.models.test.passHint", { ms: (testState[i]!.result as { ms: number }).ms })}
+              >
+                ✓ {t("settings.models.test.pass", { ms: (testState[i]!.result as { ms: number }).ms })}
+              </span>
+            )}
+            {!testState[i]?.running && testState[i]?.result?.ok === false && (
+              <span
+                className="badge badge-error badge-soft badge-sm shrink-0 cursor-help"
+                title={(testState[i]!.result as { error: string }).error}
+              >
+                ✕ {t("settings.models.test.fail")}
+              </span>
+            )}
+          </span>
+        ) : (
+          <>
+            <span className={`truncate ${m.locked ? "text-base-content/50" : ""}`}>
+              {d.label.trim() || t("settings.models.unnamed")}
+            </span>
+            {!noTier && d.tier && <span className="badge badge-ghost badge-sm shrink-0">{d.tier}</span>}
+            {m.locked && <span className="badge badge-warning badge-soft badge-sm shrink-0">{t("settings.models.lockedBadge")}</span>}
+          </>
+        )}
+        {/* 第二行(仅自定义条目):model 标识 + provider + base_url + 高级摘要 */}
+        {custom && (
+          <span className="flex min-w-0 items-center gap-1.5 text-xs text-base-content/45">
+            {m.model && <span className="min-w-0 truncate font-mono">{m.model}</span>}
+            {m.provider && <span className="shrink-0 rounded bg-base-200/70 px-1 font-mono text-[10px]">{m.provider}</span>}
+            {m.base_url && <span className="min-w-0 truncate font-mono text-[10px]">{m.base_url}</span>}
+            {!open && advSummary(m, t) && <span className="min-w-0 shrink-0 truncate">{advSummary(m, t)}</span>}
+          </span>
+        )}
+        {/* 非自定义条目:高级摘要仍在第一行(单行布局不变) */}
+        {!custom && !open && advSummary(m, t) && (
           <span className="min-w-0 shrink truncate text-xs text-base-content/45">{advSummary(m, t)}</span>
         )}
-        {/* 连通性测试结果徽标:测试中转圈 / 通过带耗时 / 失败红叉(hover 看
-            原因);行配置一变即作废消失,不展示过期结论 */}
-        {testState[i]?.running && (
+        {/* 连通性测试结果徽标(非自定义条目在第一行内渲染;自定义条目
+            已在上方的 flex 第一行里,此处不再重复) */}
+        {!custom && testState[i]?.running && (
           <span className="loading loading-spinner loading-xs shrink-0 text-info" aria-label={t("settings.models.test.running")} />
         )}
-        {!testState[i]?.running && testState[i]?.result?.ok === true && (
+        {!custom && !testState[i]?.running && testState[i]?.result?.ok === true && (
           <span
             className="badge badge-success badge-soft badge-sm shrink-0"
             title={t("settings.models.test.passHint", { ms: (testState[i]!.result as { ms: number }).ms })}
@@ -225,7 +268,7 @@ export function ModelsSection({
             ✓ {t("settings.models.test.pass", { ms: (testState[i]!.result as { ms: number }).ms })}
           </span>
         )}
-        {!testState[i]?.running && testState[i]?.result?.ok === false && (
+        {!custom && !testState[i]?.running && testState[i]?.result?.ok === false && (
           <span
             className="badge badge-error badge-soft badge-sm shrink-0 cursor-help"
             title={(testState[i]!.result as { error: string }).error}
@@ -244,16 +287,17 @@ export function ModelsSection({
               onClick={managed ? undefined : () => setExpanded(open ? null : i)}
             >
               {managed ? (
-                <span className="list-col-grow flex min-w-0 items-center gap-2" title={m.name.trim() || undefined}>
+                <span className={`list-col-grow flex min-w-0 items-center gap-2`} title={m.name.trim() || undefined}>
                   {nameBody}
                 </span>
               ) : (
                 // 无独立 onClick:点击冒泡到行级热区,一次翻转(role/aria 仍在)
+                // 自定义条目用 flex-col 两行:第一行名称+徽标,第二行 wire 串
                 <button
                   type="button"
                   aria-expanded={open}
                   title={m.name.trim() || undefined}
-                  className="list-col-grow flex min-w-0 cursor-pointer items-center gap-2 text-start"
+                  className={`list-col-grow flex min-w-0 cursor-pointer ${custom ? "flex-col items-start gap-0.5" : "items-center gap-2"} text-start`}
                 >
                   {nameBody}
                 </button>
