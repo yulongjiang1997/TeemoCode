@@ -430,3 +430,48 @@ describe("useComposer:restorePersisted ref 重置", () => {
     expect(sends()).toHaveLength(2);
   });
 });
+
+describe("useComposer:僵尸 executing 兜底", () => {
+  it("残留 executing(无在途上行)保持原样,可手动移除", async () => {
+    // 僵尸场景:空闲(running=false)、无任何在途上行,但队列里残留 executing 项
+    // (从持久化恢复/时序丢失造成)。补投不得自动重发它(可能已真执行=重复执行),
+    // 但 UI 已放开 executing 的移除按钮(Composer.tsx removable),用户可手动删。
+        const { sends } = stubSend();
+    const { result } = renderHook(
+      () => useComposer("a", feed({ running: false, turnEnded: false })),
+    );
+    act(() => result.current.restorePersisted([qi("僵尸任务", "executing")]));
+    await settle();
+    // 不被自动重投:保持 executing,不产生新的 session_send
+    await settle();
+    expect(result.current.queue[0]?.state).toBe("executing");
+    expect(sends()).toHaveLength(0);
+    // 用户手动移除(removeInstr 清在途标记),队列清空
+    act(() => result.current.removeInstr(result.current.queue[0]!.id));
+    await settle();
+    expect(result.current.queue).toHaveLength(0);
+  });
+
+  it("执行中项允许手动移除,移除后在途标记不锁死后续补投", async () => {
+    const { sends } = stubSend();
+    const { result, rerender } = renderHook(
+      ({ running, turnEnded }) => useComposer("a", feed({ running, turnEnded })),
+      { initialProps: { running: true, turnEnded: false } },
+    );
+    // 执行中补投:running 期间 send 入队,轮结束投出 → executing
+    act(() => result.current.setDraft("任务A"));
+    act(() => result.current.send());
+    rerender({ running: false, turnEnded: true });
+    await waitFor(() => expect(sends().length).toBe(1));
+    await waitFor(() => expect(result.current.queue[0]?.state).toBe("executing"));
+    // 手动移除此执行中项
+    act(() => result.current.removeInstr(result.current.queue[0]!.id));
+    await settle();
+    expect(result.current.queue).toHaveLength(0);
+    // 后续新指令照常入队补投(未被僵尸 in-flight 锁死)
+    act(() => result.current.setDraft("任务B"));
+    act(() => result.current.send());
+    rerender({ running: false, turnEnded: true });
+    await waitFor(() => expect(sends().length).toBeGreaterThanOrEqual(1));
+  });
+});

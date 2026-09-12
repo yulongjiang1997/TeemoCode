@@ -7,12 +7,13 @@
 //   侧栏 attention 高亮;
 // - D8 增量自愈:session-event/意图指向未知 id → 重拉全表再选中;
 // - H9 意图消费:open-* 事件送达即 takeUiIntent 消费壳侧副本,防刷新重放。
-import { IconAlertCircle, IconChartBar, IconCircleCheck, IconCloud, IconFolderCode, IconHelpCircle, IconMessages, IconPlayerStop, IconSend, IconSettings, IconWorld, IconX } from "@tabler/icons-react";
+import { IconAlertCircle, IconArrowsExchange, IconChartBar, IconCircleCheck, IconCloud, IconFolderCode, IconHelpCircle, IconMessages, IconPlayerStop, IconSend, IconSettings, IconWorld, IconX } from "@tabler/icons-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import { ChatView } from "@/features/chat/ChatView";
 import { UsageStatsView } from "@/features/stats/UsageStatsView";
 import { WorkStatsView, prefetchWorkStats } from "@/features/stats/WorkStatsView";
+import { GatewayView } from "@/features/gateway/GatewayView";
 import { CloudTaskView } from "@/features/cloud/CloudTaskView";
 import { DownloadsDock } from "@/features/downloads/DownloadsDock";
 import { EngineBanner } from "@/features/engine/EngineBanner";
@@ -59,6 +60,7 @@ const SPACE_ICONS: Record<Space, typeof IconFolderCode> = {
   cloud: IconCloud,
   chat: IconMessages,
   stats: IconChartBar,
+  gateway: IconArrowsExchange,
 };
 
 const NOTICE_TONE: Record<NoticeKind, string> = {
@@ -133,7 +135,7 @@ function SpaceRail({
   onToggleSettings: () => void;
 }) {
   const { t } = useI18n();
-  const labels: Record<Space, string> = { local: t("rail.local"), cloud: t("rail.cloud"), chat: t("rail.chat"), stats: t("rail.stats") };
+  const labels: Record<Space, string> = { local: t("rail.local"), cloud: t("rail.cloud"), chat: t("rail.chat"), stats: t("rail.stats"), gateway: t("rail.gateway") };
   return (
     <nav aria-label={t("rail.label")} className="flex w-rail shrink-0 flex-col items-center bg-mask-300">
       {/* 头部基线上的 rail 角落格(h-13 = 52px,与各列头部同高,保证三列头部线
@@ -166,7 +168,7 @@ function SpaceRail({
         )}
       </div>
       <div className="flex flex-1 flex-col items-center gap-1 py-1">
-        {(["local", "cloud", "chat", "stats"] as const).map((s) => {
+        {(["local", "cloud", "chat", "gateway", "stats"] as const).map((s) => {
           // 徽标不再只挂本地任务:本地会话同样会停在等待确认上(用户报障
           // 2026-08-10「本地会话的等待审批没有计数提示」),两个空间一个口径
           const count = waiting[s];
@@ -656,9 +658,9 @@ export function App() {
   // 任务时窗口切换器里仍挂着上一个本地会话的标题)
   useEffect(() => {
     const label = windowContextLabel(
-      { settingsOpen, creating: !!creating, cloudSpace: space === "cloud", statsSpace: space === "stats" },
+      { settingsOpen, creating: !!creating, cloudSpace: space === "cloud", statsSpace: space === "stats", gatewaySpace: space === "gateway" },
       cloudTask,
-      space === "cloud" || space === "stats" ? null : current,
+      space === "cloud" || space === "stats" || space === "gateway" ? null : current,
       t,
     );
     setWindowTitle(`${label} — ${t("app.name")}`);
@@ -666,7 +668,7 @@ export function App() {
 
   const select = (meta: SessionMeta) => {
     console.log(`[perf] select: id=${meta.id.slice(0,8)} title="${meta.title?.slice(0,20)}"`);
-    if (meta.id !== currentId || settingsOpen || creating || space === "cloud") requestComposerFocus();
+    if (meta.id !== currentId || settingsOpen || creating || space === "cloud" || space === "gateway" || space === "stats") requestComposerFocus();
     setCurrentId(meta.id);
     writeLastSession(meta.id);
     dismissSession(meta.id);
@@ -698,6 +700,7 @@ export function App() {
       cloud: 0,
       chat: sessions.filter((m) => m.kind === "chat" && m.waiting_ask).length,
       stats: 0,
+      gateway: 0,
     }),
     [sessions],
   );
@@ -819,8 +822,8 @@ export function App() {
             open
             initialDir={creating.dir}
             initialCloudProject={creating.cloudProject}
-            // stats 空间没有对应的新建页签,回退默认(本地)
-            initialKind={space === "stats" ? undefined : space}
+            // stats/gateway 空间没有对应的新建页签,回退默认(本地)
+            initialKind={space === "stats" || space === "gateway" ? undefined : space}
             initialText={creating.text}
             initialFiles={creating.files}
             // 侧栏 ＋ 属于当前空间:rail 停在哪个空间,新建就默认开哪个页签。
@@ -870,6 +873,8 @@ export function App() {
               </div>
             </div>
           </div>
+        ) : space === "gateway" ? (
+          <GatewayView />
         ) : (
           <MainArea
             current={space === "cloud" ? null : current}

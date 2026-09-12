@@ -884,7 +884,7 @@ function Overview({
   const { t } = useI18n();
   const [importOpen, setImportOpen] = useState(false);
   const title = t(
-    space === "cloud" ? "rail.cloud" : space === "chat" ? "rail.chat" : false ? "rail.stats" : "rail.local",
+    space === "cloud" ? "rail.cloud" : space === "chat" ? "rail.chat" : space === "gateway" ? "rail.gateway" : space === "stats" ? "rail.stats" : "rail.local",
   );
   const desc = t(
     space === "cloud"
@@ -1409,7 +1409,7 @@ export function Sidebar({
   }, []);
 
   const body = () => {
-    if (space === "stats") return null;
+    if (space === "stats" || space === "gateway") return null;
 
     if (space === "cloud") {
       return (
@@ -1661,7 +1661,7 @@ export function Sidebar({
           title={t("sidebar.newTask")}
           className="btn btn-primary btn-square btn-xs"
           onClick={actions.onNewTask}
-          disabled={space === "stats"}
+          disabled={space === "stats" || space === "gateway"}
         >
           <IconPlus size={14} stroke={2} aria-hidden />
         </button>

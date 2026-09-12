@@ -119,10 +119,14 @@ function QueueArea({ ctl }: { ctl: ComposerCtl }) {
       </div>
       <ul className="flex flex-col gap-0.5">
         {queue.map((item, i) => {
-          // 按 state 锁:执行中/失败指令不可拖动/编辑(失败走重试,执行中
-          // 正在跑);**pending 全部可编辑,包括队首**(2026-09-08 用户报障:
-          // 旧逻辑 i===0 位置锁定,暂停时第一条未执行指令被锁无法编辑)。
+          // 按 state 锁拖动/编辑:执行中/失败指令不可拖动/编辑(失败走重试,
+          // 执行中正在跑);**pending 全部可编辑,包括队首**(2026-09-08)。
+          // **移除例外(2026-09-12 用户报障:指令执行完没自动出队也移不掉)**:
+          // executing 项允许手动移除——壳的回显/出队时序若没走到(轮次中断、
+          // task-started/task-ended 帧被吞),executing 会卡成僵尸,必须让用户
+          // 能手动删。仅 failed 的移除仍锁(它走重试,防误删要重跑的失败项)。
           const locked = item.state !== "pending";
+          const removable = item.state !== "failed";
           return (
           <li
             key={item.id}
@@ -198,9 +202,9 @@ function QueueArea({ ctl }: { ctl: ComposerCtl }) {
             <button
               type="button"
               className="btn btn-ghost btn-square btn-xs shrink-0 text-base-content/50"
-              aria-label={locked ? t("chat.queue.executing") : t("chat.queue.remove")}
-              title={locked ? t("chat.queue.executing") : t("chat.queue.remove")}
-              disabled={locked}
+              aria-label={removable ? t("chat.queue.remove") : t("chat.queue.executing")}
+              title={removable ? t("chat.queue.remove") : t("chat.queue.executing")}
+              disabled={!removable}
               onClick={() => removeInstr(item.id)}
             >
               <IconX size={12} stroke={1.75} aria-hidden />

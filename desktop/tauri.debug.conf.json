@@ -55,6 +55,7 @@
             "allow-export-engine-log",
             "allow-gateway-delete-group",
             "allow-gateway-log",
+            "allow-gateway-log-stats",
             "allow-gateway-regen-key",
             "allow-gateway-save-group",
             "allow-gateway-ensure-running",

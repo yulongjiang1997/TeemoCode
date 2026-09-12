@@ -431,6 +431,9 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
 
     // 队列非空 + 未暂停 + 队头未失败/执行中 → 投出队头下一条
     // 注意:队头可能是 executing(从持久化恢复的),要跳过等本轮结束再处理
+    // ⚠️ 不把残留 executing 自动复位 pending 再投:指令可能已真执行过,
+    // 重发 = 重复执行。2026-09-12 用户报障后,executing 项由 UI 放开手动
+    // 移除(Composer.tsx removable),残留僵尸交给用户处置,补投不自动碰它。
     const next = queue[0];
     if (!next || paused || next.state === "failed" || next.state === "executing") return;
     const forSid = sessionId;
@@ -468,6 +471,14 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
   const removeInstr = useCallback((id: string) => {
     flushBlockedRef.current = false;
     setQueue((cur) => cur.filter((x) => x.id !== id));
+    // 2026-09-12 执行中项可手动移除了:若删的正是当前在途项,清掉在途
+    // 标记,避免把补投/失败抑制锁死在这次已删的指令上(否则删完自动补投
+    // 依旧卡住,等于白删)
+    if (inFlightRef.current?.id === id) {
+      inFlightRef.current = null;
+      deliveredTurnRef.current = false;
+      sendingRef.current = false;
+    }
   }, []);
   const reorderInstr = useCallback((from: number, to: number) => {
     setQueue((cur) => {

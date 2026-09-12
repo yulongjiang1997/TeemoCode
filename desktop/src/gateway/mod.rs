@@ -20,7 +20,8 @@ pub mod sched;
 pub mod server;
 pub mod upstream;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use serde::{Deserialize, Serialize};
@@ -29,6 +30,32 @@ use tauri::{AppHandle, Manager};
 use crate::util::LockExt;
 
 pub const DEFAULT_PORT: u16 = 8317;
+
+/// 统计日志落盘目录缓存:`manage` 启动早期写入 app_config_dir,之后
+/// `GatewayHost::new()`(服务线程、单测)都能取到同一份路径;取不到时
+/// 退回当前目录(测试场景无 AppHandle,不污染真实配置)。
+static CONFIG_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// 由 `manage` 在启动早期写入;测试不调用则退回当前目录。
+pub(crate) fn init_config_dir(dir: PathBuf) {
+    let _ = CONFIG_DIR.set(dir);
+}
+
+/// 统计日志落盘目录。
+pub(crate) fn log_stats_dir() -> PathBuf {
+    CONFIG_DIR.get().cloned().unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// 构造统计仓库:仅当 `manage` 已初始化目录(生产)才挂真实仓库;
+/// 单测路径(无 AppHandle)不挂,避免往测试 cwd 落文件。
+fn build_log_store() -> Option<GatewayLogStore> {
+    if CONFIG_DIR.get().is_some() {
+        Some(GatewayLogStore::new(&log_stats_dir()))
+    } else {
+        None
+    }
+}
+
 pub const DEFAULT_CONTEXT_WINDOW: i64 = 128_000;
 pub const DEFAULT_MAX_OUTPUT: i64 = 32_768;
 pub const DEFAULT_TIMEOUT_SECONDS: u64 = 120;
@@ -400,6 +427,227 @@ pub struct GroupCounter {
 
 const LOG_CAP: usize = 100;
 
+// ==================== 持久化调用日志(按天 × 模型聚合) ====================
+//
+// 2026-09-12 需求:本地大模型网关独立成左侧空间并新增 token 统计面板
+// (按模型分类 / 时间范围 / 热力图 / 调用总时长)。内存日志只保 LOG_CAP 条
+// 供「最近请求」表用,跨会话的时间维度统计需要落盘聚合。
+//
+// 落盘:`<app_config>/gateway-log-stats.json`,结构
+// `{ "<YYYY-MM-DD>": { "<模型展示名>": GatewayDayRecord } }`。与
+// stats.rs(本地会话用量)同为「聚合态落盘」而非逐请求流水:每次请求
+// 累加到对应 天/模型 桶再整体原子写,请求级 token 明细仍以 LogEntry 保留。
+// 保留 KEEP_DAYS 天,与本地会话统计口径一致。
+
+/// 网关统计日志保留天数(2026-09-12 统计面板「累计」口径)。
+const LOG_STATS_KEEP_DAYS: i64 = 366;
+
+/// 某天某模型的聚合调用记录。
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
+pub struct GatewayDayRecord {
+    /// 调用次数(含失败;失败请求也计入「调用」与「总时长」)。
+    pub calls: u64,
+    /// 成功次数。
+    pub ok_calls: u64,
+    /// 失败次数。
+    pub fail_calls: u64,
+    /// prompt tokens 累计(null 不计入,与 LogEntry 口径一致)。
+    pub input_tokens: u64,
+    /// completion tokens 累计。
+    pub output_tokens: u64,
+    /// 请求耗时累计(毫秒,取 LogEntry.latency_ms)。面板换算秒展示。
+    pub duration_ms: u64,
+}
+
+/// 聚合范围:today=当日,day7=近7日(含当日),all=全部留存。
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GatewayRangeKind {
+    #[default]
+    Today,
+    Day7,
+    All,
+}
+
+/// UI 传来的范围字符串归一化(`today`/`7d`/`all` 均可,容错大小写与点号)。
+pub(crate) fn parse_range_kind(s: &str) -> GatewayRangeKind {
+    match s.trim().to_ascii_lowercase().replace('.', "").as_str() {
+        "day7" | "7d" | "week" => GatewayRangeKind::Day7,
+        "all" | "total" | "lifetime" => GatewayRangeKind::All,
+        _ => GatewayRangeKind::Today,
+    }
+}
+
+/// 单个模型在所选范围内的统计。
+#[derive(Default, Clone, Debug, Serialize)]
+pub struct GatewayModelStats {
+    pub model: String,
+    pub calls: u64,
+    pub ok_calls: u64,
+    pub fail_calls: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
+    /// 请求耗时累计(毫秒)。
+    pub duration_ms: u64,
+}
+
+/// 单日热力图数据点。
+#[derive(Default, Clone, Debug, Serialize)]
+pub struct GatewayHeatDay {
+    /// `YYYY-MM-DD`。
+    pub date: String,
+    pub total_tokens: u64,
+    pub calls: u64,
+}
+
+/// 统计查询响应(对表前端 GatewayLogStats)。
+#[derive(Default, Clone, Debug, Serialize)]
+pub struct GatewayLogStats {
+    /// 请求的聚合范围(原样回传,便于 UI 校验)。
+    pub range: GatewayRangeKind,
+    /// 范围内总输入 tokens。
+    pub total_input_tokens: u64,
+    pub total_output_tokens: u64,
+    pub total_tokens: u64,
+    /// 范围内总调用次数。
+    pub total_calls: u64,
+    /// 范围内请求耗时累计(毫秒,面板换算秒)。
+    pub total_duration_ms: u64,
+    /// 按 total_tokens 降序;total_tokens 相同按模型名升序(稳定排序)。
+    pub models: Vec<GatewayModelStats>,
+    /// 全部留存天数(热力图,按日期升序)。
+    pub heatmap: Vec<GatewayHeatDay>,
+}
+
+/// 跨会话的网关调用统计仓库(与 UsageStats 同款聚合落盘)。
+/// 挂在 `GatewayInner.log_stats` 上,push_log 与服务线程共用同一份内存态。
+pub struct GatewayLogStore {
+    path: PathBuf,
+    days: StdMutex<BTreeMap<String, BTreeMap<String, GatewayDayRecord>>>,
+}
+
+impl GatewayLogStore {
+    fn new(config_dir: &Path) -> Self {
+        let path = config_dir.join("gateway-log-stats.json");
+        let days = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<BTreeMap<String, BTreeMap<String, GatewayDayRecord>>>(&s).ok())
+            .unwrap_or_default();
+        let store = Self { path, days: StdMutex::new(days) };
+        store.prune();
+        store
+    }
+
+    /// 记一次请求:按 天 × 模型 聚合累加,然后整体原子落盘。
+    pub fn record(&self, entry: &LogEntry) {
+        let date = crate::stats::today_str();
+        let model: String = if entry.model.is_empty() { "<unknown>".into() } else { entry.model.clone() };
+        {
+            let mut days = self.days.lock_ok();
+            let rec = days
+                .entry(date)
+                .or_default()
+                .entry(model)
+                .or_default();
+            rec.calls += 1;
+            if entry.ok {
+                rec.ok_calls += 1;
+            } else {
+                rec.fail_calls += 1;
+            }
+            if let Some(t) = entry.prompt_tokens {
+                rec.input_tokens = rec.input_tokens.saturating_add(t.max(0) as u64);
+            }
+            if let Some(t) = entry.completion_tokens {
+                rec.output_tokens = rec.output_tokens.saturating_add(t.max(0) as u64);
+            }
+            rec.duration_ms = rec.duration_ms.saturating_add(entry.latency_ms);
+        }
+        // 落盘在锁外做;统计面板不要求零丢失,失败静默(stats.rs 同款约定)。
+        self.prune();
+        let _ = serde_json::to_vec_pretty(&*self.days.lock_ok())
+            .map(|data| crate::config::atomic_write_private(&self.path, &data));
+    }
+
+    /// 丢掉超过保留期的旧天。
+    fn prune(&self) {
+        let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+        let cutoff = now.date().checked_sub(time::Duration::days(LOG_STATS_KEEP_DAYS)).unwrap_or(now.date());
+        let cutoff_s = format!("{:04}-{:02}-{:02}", cutoff.year(), cutoff.month() as u8, cutoff.day());
+        let mut days = self.days.lock_ok();
+        days.retain(|date, _| date.as_str() >= cutoff_s.as_str());
+    }
+
+    /// 按范围聚合出统计面板所需数据。
+    pub fn query(&self, range: GatewayRangeKind) -> GatewayLogStats {
+        let days = self.days.lock_ok();
+        let today = crate::stats::today_str();
+        let mut lo = String::new();
+        match range {
+            GatewayRangeKind::Today => lo = today.clone(),
+            GatewayRangeKind::Day7 => {
+                let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+                let d = now.date().checked_sub(time::Duration::days(6)).unwrap_or(now.date());
+                lo = format!("{:04}-{:02}-{:02}", d.year(), d.month() as u8, d.day());
+            }
+            GatewayRangeKind::All => lo = String::new(),
+        }
+        let mut totals = (0u64, 0u64, 0u64, 0u64, 0u64); // input, output, calls, ok, fail
+        let mut by_model: HashMap<String, GatewayModelStats> = HashMap::new();
+        let mut heat = BTreeMap::new(); // date -> (tokens, calls)
+        for (date, models) in days.iter() {
+            let in_range = date.as_str() >= lo.as_str();
+            for (model, rec) in models.iter() {
+                let tokens = rec.input_tokens.saturating_add(rec.output_tokens);
+                let h = heat.entry(date.clone()).or_insert((0u64, 0u64));
+                h.0 = h.0.saturating_add(tokens);
+                h.1 = h.1.saturating_add(rec.calls);
+                if !in_range {
+                    continue;
+                }
+                totals.0 = totals.0.saturating_add(rec.input_tokens);
+                totals.1 = totals.1.saturating_add(rec.output_tokens);
+                totals.2 = totals.2.saturating_add(rec.calls);
+                totals.3 = totals.3.saturating_add(rec.ok_calls);
+                totals.4 = totals.4.saturating_add(rec.fail_calls);
+                let m = by_model.entry(model.clone()).or_default();
+                m.model = model.clone();
+                m.calls = m.calls.saturating_add(rec.calls);
+                m.ok_calls = m.ok_calls.saturating_add(rec.ok_calls);
+                m.fail_calls = m.fail_calls.saturating_add(rec.fail_calls);
+                m.input_tokens = m.input_tokens.saturating_add(rec.input_tokens);
+                m.output_tokens = m.output_tokens.saturating_add(rec.output_tokens);
+                m.total_tokens = m.total_tokens.saturating_add(tokens);
+                m.duration_ms = m.duration_ms.saturating_add(rec.duration_ms);
+            }
+        }
+        // 模型列表稳定排序:总 tokens 降序 → 调用数降序 → 名称升序
+        let mut models: Vec<GatewayModelStats> = by_model.into_values().collect();
+        models.sort_by(|a, b| {
+            b.total_tokens.cmp(&a.total_tokens)
+                .then(b.calls.cmp(&a.calls))
+                .then(a.model.cmp(&b.model))
+        });
+        let total_duration_ms: u64 = models.iter().map(|m| m.duration_ms).sum();
+        let heatmap: Vec<GatewayHeatDay> = heat.into_iter().map(|(date, (tok, calls))| GatewayHeatDay {
+            date,
+            total_tokens: tok,
+            calls,
+        }).collect();
+        GatewayLogStats {
+            range,
+            total_input_tokens: totals.0,
+            total_output_tokens: totals.1,
+            total_tokens: totals.0.saturating_add(totals.1),
+            total_calls: totals.2,
+            total_duration_ms,
+            models,
+            heatmap,
+        }
+    }
+}
+
 // ==================== 壳侧运行时(managed state) ====================
 
 #[derive(Clone)]
@@ -417,6 +665,9 @@ pub(crate) struct GatewayInner {
     client: reqwest::Client,
     /// reload 串行闸(保存/重启并发时避免两个线程同时折腾监听线程)。
     reload_gate: StdMutex<()>,
+    /// 跨会话调用统计(按天 × 模型聚合落盘);生产由 `manage` 初始化,
+    /// 单测路径(无 AppHandle)为 None,push_log 跳过持久化。
+    log_stats: Option<Arc<GatewayLogStore>>,
 }
 
 impl GatewayHost {
@@ -437,6 +688,7 @@ impl GatewayHost {
             server_error: StdMutex::new(None),
             client,
             reload_gate: StdMutex::new(()),
+            log_stats: build_log_store().map(Arc::new),
         }))
     }
 
@@ -482,10 +734,16 @@ impl GatewayHost {
         let failovers = entry.attempts.saturating_sub(1) as u64;
         {
             let mut log = self.0.log.lock_ok();
-            log.push_back(entry);
+            log.push_back(entry.clone());
             while log.len() > LOG_CAP {
                 log.pop_front();
             }
+        }
+        // 跨会话持久化聚合(2026-09-12 统计面板数据源)。与内存日志解耦:
+        // 内存只留 LOG_CAP 条供「最近请求」表,persist 按 天×模型 累加落盘。
+        // 单测路径(manage 未初始化)log_stats=None,跳过持久化不落盘文件。
+        if let Some(store) = &self.0.log_stats {
+            store.record(&entry);
         }
         let mut counters = self.0.counters.lock_ok();
         let c = counters.entry(group_id).or_default();
@@ -549,6 +807,9 @@ pub fn ensure_running(app: &AppHandle) {
 
 /// 壳启动时挂载 managed state 并按配置起服务。挂在配置加载之后。
 pub fn manage(app: &AppHandle) {
+    init_config_dir(
+        app.path().app_config_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    );
     app.manage(GatewayHost::new());
     reload(app);
 }
@@ -698,6 +959,23 @@ pub fn gateway_log(app: AppHandle, limit: Option<u32>) -> Result<Vec<LogEntry>, 
     let take = limit.map(|n| n as usize).unwrap_or(usize::MAX);
     let start = log.len().saturating_sub(take);
     Ok(log.iter().skip(start).cloned().collect())
+}
+
+/// 跨会话调用统计(2026-09-12 需求):按模型分类 + 范围(today/day7/all)聚合
+/// tokens/调用数/总时长,并附带全量热力图。数据源是 `GatewayLogStore`
+/// (push_log 记账时的聚合落盘),不是内存环形日志。
+#[tauri::command]
+pub fn gateway_log_stats(app: AppHandle, range: Option<String>) -> Result<GatewayLogStats, String> {
+    let host = app.state::<GatewayHost>();
+    let kind = match range.as_deref() {
+        Some(s) => parse_range_kind(s),
+        None => GatewayRangeKind::default(),
+    };
+    // 单测路径(manage 未初始化)log_stats=None → 返回空态,不报错
+    Ok(match &host.0.log_stats {
+        Some(store) => store.query(kind),
+        None => GatewayLogStats { range: kind, ..Default::default() },
+    })
 }
 
 /// 保存事务体:校验失败经 err_slot 透出且不改配置;成功则原位替换/追加。

@@ -90,6 +90,44 @@ export interface GatewayTestResult {
   error?: string;
 }
 
+/** 统计聚合范围(对表 Rust GatewayRangeKind;serialize_all=lowercase)。 */
+export type GatewayRangeKind = "today" | "day7" | "all";
+
+/** 单个模型的聚合统计(gateway_log_stats 返回)。 */
+export interface GatewayModelStats {
+  model: string;
+  calls: number;
+  ok_calls: number;
+  fail_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  /** 请求耗时累计(毫秒);UI 换算秒展示 */
+  duration_ms: number;
+}
+
+/** 单日热力图数据点。 */
+export interface GatewayHeatDay {
+  date: string;
+  total_tokens: number;
+  calls: number;
+}
+
+/** 跨会话调用统计面板数据源(gateway_log_stats)。 */
+export interface GatewayLogStats {
+  range: GatewayRangeKind;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_tokens: number;
+  total_calls: number;
+  /** 范围内请求耗时累计(毫秒) */
+  total_duration_ms: number;
+  /** 按 total_tokens 降序 */
+  models: GatewayModelStats[];
+  /** 全量留存天,按日期升序(热力图) */
+  heatmap: GatewayHeatDay[];
+}
+
 /** 网关对外端点(设置页展示/复制用)。 */
 export function gatewayEndpoint(port: number): string {
   return `http://127.0.0.1:${port}/v1`;
@@ -103,6 +141,13 @@ export async function gatewayStatus(): Promise<GatewayStatus | null> {
 export async function gatewayLog(limit?: number): Promise<GatewayLogEntry[]> {
   if (!inDesktopShell()) return [];
   return invoke<GatewayLogEntry[]>("gateway_log", { limit: limit ?? null });
+}
+
+/** 跨会话调用统计(2026-09-12):按模型 + 范围聚合 tokens/调用/总时长 + 全量热力图。
+ * range 可选(today/day7/all),缺省 today。 */
+export async function gatewayLogStats(range?: GatewayRangeKind): Promise<GatewayLogStats | null> {
+  if (!inDesktopShell()) return null;
+  return invoke<GatewayLogStats>("gateway_log_stats", { range: range ?? null });
 }
 
 export async function gatewaySaveGroup(group: ModelGroup): Promise<ModelGroup> {

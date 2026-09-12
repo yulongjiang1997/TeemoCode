@@ -69,7 +69,7 @@ function SumCard({ label, bucket }: { label: string; bucket: Bucket }) {
 }
 
 /** 全量数字(tooltip 用):缩写会丢精度,悬停给回真实值 */
-const fmtFull = (n: number): string => n.toLocaleString("en-US");
+export const fmtFull = (n: number): string => n.toLocaleString("en-US");
 
 /** 每日趋势:最近 7 天(可折叠,默认收起只留标题行),每天一行堆叠条。
  *  数值同样走 K/M 缩写,tooltip 给全量。 */

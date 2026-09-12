@@ -289,6 +289,12 @@ fn sorted_bucket_json(map: BTreeMap<String, (u64, u64, u64)>) -> Vec<Value> {
 
 /// 本地时区的今天,`YYYY-MM-DD`。取不到本地时区时退回 UTC。
 pub(super) fn today() -> String {
+    today_str()
+}
+
+/// 本地时区的今天,`YYYY-MM-DD`。取不到本地时区时退回 UTC。
+/// 公共版供其他模块(如网关日志持久化)使用,格式契约与 `today()` 一致。
+pub(crate) fn today_str() -> String {
     let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
     let d = now.date();
     format!("{:04}-{:02}-{:02}", d.year(), d.month() as u8, d.day())

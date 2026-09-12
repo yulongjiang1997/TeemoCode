@@ -1926,6 +1926,7 @@ fn main() {
             gateway::gateway_status,
             gateway::gateway_ensure_running,
             gateway::gateway_log,
+            gateway::gateway_log_stats,
             gateway::gateway_save_group,
             gateway::gateway_delete_group,
             gateway::gateway_update_settings,
