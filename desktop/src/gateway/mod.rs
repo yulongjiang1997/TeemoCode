@@ -67,6 +67,10 @@ pub const MAX_NAME_LEN: usize = 64;
 /// 调度策略词汇(对外契约,UI 下拉与持久化同源)。
 pub const STRATEGY_PRIORITY: &str = "priority";
 pub const STRATEGY_WEIGHTED: &str = "weighted";
+/// 最快模式:自动定时探测模型延迟,优选延迟最低的模型。
+pub const STRATEGY_FASTEST: &str = "fastest";
+/// 负载均衡:顺序轮转(round-robin),不按权重。
+pub const STRATEGY_BALANCED: &str = "balanced";
 
 pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -221,10 +225,11 @@ impl GroupModel {
 
 impl ModelGroup {
     pub fn effective_strategy(&self) -> &'static str {
-        if self.strategy == STRATEGY_WEIGHTED {
-            STRATEGY_WEIGHTED
-        } else {
-            STRATEGY_PRIORITY
+        match self.strategy.as_str() {
+            STRATEGY_WEIGHTED => STRATEGY_WEIGHTED,
+            STRATEGY_FASTEST => STRATEGY_FASTEST,
+            STRATEGY_BALANCED => STRATEGY_BALANCED,
+            _ => STRATEGY_PRIORITY,
         }
     }
 
@@ -668,6 +673,12 @@ pub(crate) struct GatewayInner {
     /// 跨会话调用统计(按天 × 模型聚合落盘);生产由 `manage` 初始化,
     /// 单测路径(无 AppHandle)为 None,push_log 跳过持久化。
     log_stats: Option<Arc<GatewayLogStore>>,
+    /// fastest 模式:各模型最近一次探测延迟(毫秒),key = group_id/model_id。
+    /// 由后台探测线程定期更新;plan() 读取此表排序。
+    latencies: StdMutex<HashMap<String, u64>>,
+    /// balanced 模式:round-robin 计数器,key = group_id。每次取
+    /// counter % candidates.len() 作为起始下标,成功后自增。
+    rr_counters: StdMutex<HashMap<String, u64>>,
 }
 
 impl GatewayHost {
@@ -689,6 +700,8 @@ impl GatewayHost {
             client,
             reload_gate: StdMutex::new(()),
             log_stats: build_log_store().map(Arc::new),
+            latencies: StdMutex::new(HashMap::new()),
+            rr_counters: StdMutex::new(HashMap::new()),
         }))
     }
 
@@ -702,6 +715,28 @@ impl GatewayHost {
 
     pub(crate) fn health_map(&self) -> std::sync::MutexGuard<'_, HashMap<String, sched::ModelHealth>> {
         self.0.health.lock_ok()
+    }
+
+    /// fastest 模式:读取各模型最近探测延迟(毫秒)。key = group_id/model_id。
+    pub(crate) fn latencies(&self) -> std::sync::MutexGuard<'_, HashMap<String, u64>> {
+        self.0.latencies.lock_ok()
+    }
+
+    /// 写入一次延迟探测结果(后台探测线程调用)。
+    pub(crate) fn record_latency(&self, group_id: &str, model_id: &str, ms: u64) {
+        self.0.latencies.lock_ok().insert(format!("{group_id}/{model_id}"), ms);
+    }
+
+    /// balanced 模式:取当前 round-robin 起始下标并自增计数器。
+    /// 返回值 = counter % len;若 len=0 返回 0。每次请求规划时调用,
+    /// 使后续请求从下一个候选开始轮转。
+    pub(crate) fn rr_next(&self, group_id: &str, len: usize) -> usize {
+        if len == 0 { return 0; }
+        let mut counters = self.0.rr_counters.lock_ok();
+        let c = counters.entry(group_id.to_string()).or_insert(0);
+        let idx = (*c % len as u64) as usize;
+        *c = c.saturating_add(1);
+        idx
     }
 
     /// 单次尝试结果落健康簿。成功不新建记录(无历史的模型成功后仍无记录,
@@ -879,7 +914,72 @@ pub fn reload(app: &AppHandle) {
         (false, _) => None,
     };
     *server_slot = handle;
-    *host.0.snapshot.lock_ok() = Arc::new(snapshot);
+    *host.0.snapshot.lock_ok() = Arc::new(snapshot.clone());
+
+    // fastest 模式需要后台延迟探测:有 fastest 组就 spawn 线程定期 ping。
+    spawn_latency_probe(host.clone(), &snapshot);
+}
+
+/// 探测间隔(秒)。太短浪费上游配额;太长延迟变化反应慢。
+const PROBE_INTERVAL_SECS: u64 = 60;
+
+/// fastest 模式后台探测线程:遍历所有 strategy=fastest 的组,对每个候选
+/// 发一次最小 ping 请求记录延迟。线程循环到 stop_flag 置位或进程退出。
+/// 探测失败(超时/网络错)的模型延迟记为 u64::MAX,排到最后。
+fn spawn_latency_probe(host: GatewayHost, snapshot: &RuntimeSnapshot) {
+    let has_fastest = snapshot.groups.iter().any(|g| g.group.effective_strategy() == STRATEGY_FASTEST);
+    if !has_fastest {
+        return;
+    }
+    let host = host.clone();
+    std::thread::spawn(move || {
+        loop {
+            let snap = host.snapshot();
+            for rg in &snap.groups {
+                if rg.group.effective_strategy() != STRATEGY_FASTEST {
+                    continue;
+                }
+                for cand in &rg.candidates {
+                    if cand.unavailable.is_some() {
+                        continue;
+                    }
+                    let latency = probe_one(host.client(), cand);
+                    host.record_latency(&rg.group.id, &cand.id, latency);
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_secs(PROBE_INTERVAL_SECS));
+        }
+    });
+}
+
+/// 对单个候选发一次最小 ping,返回延迟(毫秒)。失败返 u64::MAX。
+fn probe_one(client: &reqwest::Client, cand: &ResolvedCandidate) -> u64 {
+    let body = serde_json::json!({
+        "model": cand.model,
+        "messages": [{ "role": "user", "content": "hi" }],
+        "max_tokens": 1,
+    });
+    let started = std::time::Instant::now();
+    let result = tauri::async_runtime::block_on(async {
+        client
+            .post(format!("{}/v1/chat/completions", cand.base_url.trim_end_matches('/')))
+            .bearer_auth(&cand.api_key)
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
+    });
+    match result {
+        Ok(resp) => {
+            let _ = started.elapsed().as_millis() as u64;
+            if resp.status().is_success() {
+                started.elapsed().as_millis() as u64
+            } else {
+                u64::MAX
+            }
+        }
+        Err(_) => u64::MAX,
+    }
 }
 
 /// 网关配置变更后同步物化引擎模型条目(组名 → 引擎 settings.models):

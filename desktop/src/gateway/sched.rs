@@ -108,6 +108,8 @@ fn weighted_draw(weights: &[u32], rng: &mut u64) -> usize {
 
 /// 生成尝试顺序。冷却中的候选被剔除;返回候选克隆的有序列表。
 /// 健康簿键 = "<group_id>/<model_id>"。
+/// latencies(fastest 模式)与 rr_start(balanced 模式)由调用方从
+/// GatewayHost 传入;非对应模式时传空/None 即可。
 pub fn plan(
     strategy: &str,
     group_id: &str,
@@ -115,6 +117,8 @@ pub fn plan(
     health: &HashMap<String, ModelHealth>,
     now_ms: u64,
     rng: &mut u64,
+    latencies: &HashMap<String, u64>,
+    rr_start: Option<usize>,
 ) -> Vec<ResolvedCandidate> {
     let available: Vec<&ResolvedCandidate> = candidates
         .iter()
@@ -133,6 +137,31 @@ pub fn plan(
             let weights: Vec<u32> = remaining.iter().map(|c| c.weight).collect();
             let pick = weighted_draw(&weights, rng);
             ordered.push(remaining.remove(pick).clone());
+        }
+    } else if strategy == super::STRATEGY_FASTEST {
+        // 最快模式:按探测延迟升序排列(延迟最低的先行)。无延迟记录
+        // 的模型(从未探测过)排在最后,保持组内定义顺序;有记录的按
+        // 延迟升序——延迟相同按 id 升序(稳定排序)。
+        let mut sorted: Vec<&ResolvedCandidate> = available;
+        sorted.sort_by(|a, b| {
+            let la = latencies.get(&format!("{group_id}/{}", a.id)).copied().unwrap_or(u64::MAX);
+            let lb = latencies.get(&format!("{group_id}/{}", b.id)).copied().unwrap_or(u64::MAX);
+            la.cmp(&lb).then(a.id.cmp(&b.id))
+        });
+        ordered.extend(sorted.into_iter().map(|c| (*c).clone()));
+    } else if strategy == super::STRATEGY_BALANCED {
+        // 负载均衡:round-robin 顺序轮转,不按权重。rr_start 是当前
+        // 计数器对应的起始下标;从该下标开始循环排列,使每个候选
+        // 在多次请求中被均匀分配。
+        let start = rr_start.unwrap_or(0);
+        let len = available.len();
+        if len > 0 {
+            // 原始顺序的候选按 start 偏移排列:先放 start 及之后,再放之前
+            let mut shifted = Vec::with_capacity(len);
+            for k in 0..len {
+                shifted.push(available[(start + k) % len].clone());
+            }
+            ordered.extend(shifted);
         }
     } else {
         // 顺序优先:权重降序稳定排列(权重相同保持组内定义顺序)。
@@ -168,7 +197,7 @@ mod tests {
     fn priority_orders_by_weight_desc_stable() {
         let cands = vec![cand("a", "g", 1), cand("b", "g", 9), cand("c", "g", 5), cand("d", "g", 5)];
         let mut rng = 1u64;
-        let plan = plan("priority", "g", &cands, &HashMap::new(), 0, &mut rng);
+        let plan = plan("priority", "g", &cands, &HashMap::new(), 0, &mut rng, &HashMap::new(), None);
         let ids: Vec<&str> = plan.iter().map(|c| c.id.as_str()).collect();
         assert_eq!(ids, vec!["b", "c", "d", "a"], "权重高者先行;同权重保持定义顺序");
     }
@@ -183,7 +212,7 @@ mod tests {
         h.record_failure(100); // 3 次 → Open
         health.insert(health_key("g", &cands[0]), h);
         let mut rng = 1u64;
-        let plan = plan("priority", "g", &cands, &health, 100 + COOLDOWN_MS - 1, &mut rng);
+        let plan = plan("priority", "g", &cands, &health, 100 + COOLDOWN_MS - 1, &mut rng, &HashMap::new(), None);
         let ids: Vec<&str> = plan.iter().map(|c| c.id.as_str()).collect();
         assert_eq!(ids, vec!["b", "c"], "冷却中的模型被调度跳过");
     }
@@ -223,7 +252,7 @@ mod tests {
         let mut first_a = 0;
         let runs = 2000;
         for _ in 0..runs {
-            let plan = plan("weighted", "g", &cands, &HashMap::new(), 0, &mut rng);
+            let plan = plan("weighted", "g", &cands, &HashMap::new(), 0, &mut rng, &HashMap::new(), None);
             assert_eq!(plan.len(), 2, "不放回抽样必须产出全量候选");
             if plan[0].id == "a" {
                 first_a += 1;
@@ -240,7 +269,7 @@ mod tests {
         let mut rng = 7u64;
         let mut counts = HashMap::new();
         for _ in 0..200 {
-            let plan = plan("weighted", "g", &cands, &HashMap::new(), 0, &mut rng);
+            let plan = plan("weighted", "g", &cands, &HashMap::new(), 0, &mut rng, &HashMap::new(), None);
             *counts.entry(plan[0].id.clone()).or_insert(0) += 1;
         }
         let a = *counts.get("a").unwrap();
@@ -258,7 +287,7 @@ mod tests {
         health.insert(health_key("g", &cands[0]), h);
         let mut rng = 99u64;
         for _ in 0..50 {
-            let plan = plan("weighted", "g", &cands, &health, 1, &mut rng);
+            let plan = plan("weighted", "g", &cands, &health, 1, &mut rng, &HashMap::new(), None);
             assert_eq!(plan.len(), 1);
             assert_eq!(plan[0].id, "b");
         }

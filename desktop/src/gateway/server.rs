@@ -416,13 +416,20 @@ pub(crate) async fn run_buffered(
     let mut rng = host.rng_next();
     let plan = {
         let health = host.health_map();
+        let lats = host.latencies();
+        let strat = group.group.effective_strategy();
+        let rr_start = if strat == super::STRATEGY_BALANCED {
+            Some(host.rr_next(&group.group.id, group.candidates.len()))
+        } else { None };
         sched::plan(
-            group.group.effective_strategy(),
+            strat,
             &group.group.id,
             &group.candidates,
             &health,
             super::now_ms(),
             &mut rng,
+            &lats,
+            rr_start,
         )
     };
     let mut last_error: Option<UpstreamError> = None;
@@ -524,13 +531,20 @@ fn handle_streaming(
         let mut rng = host.rng_next();
         let plan = {
             let health = host.health_map();
+            let lats = host.latencies();
+            let strat = group.group.effective_strategy();
+            let rr_start = if strat == super::STRATEGY_BALANCED {
+                Some(host.rr_next(&group.group.id, group.candidates.len()))
+            } else { None };
             sched::plan(
-                group.group.effective_strategy(),
+                strat,
                 &group.group.id,
                 &group.candidates,
                 &health,
                 super::now_ms(),
                 &mut rng,
+                &lats,
+                rr_start,
             )
         };
         let mut last_error: Option<UpstreamError> = None;

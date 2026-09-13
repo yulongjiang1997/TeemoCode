@@ -261,6 +261,8 @@ export function GatewaySection() {
           >
             <option value="priority">{t("settings.gateway.group.strategy.priority")}</option>
             <option value="weighted">{t("settings.gateway.group.strategy.weighted")}</option>
+            <option value="fastest">{t("settings.gateway.group.strategy.fastest")}</option>
+            <option value="balanced">{t("settings.gateway.group.strategy.balanced")}</option>
           </select>
           <p className="text-2xs text-base-content/50">{t("settings.gateway.form.strategyHint")}</p>
         </fieldset>
@@ -600,7 +602,7 @@ export function GatewaySection() {
                     {t("settings.gateway.group.modelsBadge", { count: enabledModels })}
                   </span>
                   <span className="badge badge-ghost badge-sm shrink-0">
-                    {t(g.strategy === "weighted" ? "settings.gateway.group.strategy.weighted" : "settings.gateway.group.strategy.priority")}
+                    {t(("settings.gateway.group.strategy." + (g.strategy || "priority")) as "settings.gateway.group.strategy.priority")}
                   </span>
                   {openCount > 0 && (
                     <span className="badge badge-error badge-soft badge-sm shrink-0">{t("gateway.health.open")}</span>
