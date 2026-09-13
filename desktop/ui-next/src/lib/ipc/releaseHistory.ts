@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.42",
+    notes: "网关调度策略新增最快模式(自动探测延迟,优选最低)与负载均衡模式(顺序轮转)",
+  },
+  {
     version: "0.1.41",
     notes: "本地大模型网关独立为左侧菜单空间,新增 Token 统计面板(按模型分类/时间范围/热力图,含调用总时长);自定义模型列表改两行显示,信息展示更全;执行中指令可手动移除",
   },
