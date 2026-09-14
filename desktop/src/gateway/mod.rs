@@ -971,7 +971,6 @@ fn probe_one(client: &reqwest::Client, cand: &ResolvedCandidate) -> u64 {
     });
     match result {
         Ok(resp) => {
-            let _ = started.elapsed().as_millis() as u64;
             if resp.status().is_success() {
                 started.elapsed().as_millis() as u64
             } else {
@@ -980,6 +979,67 @@ fn probe_one(client: &reqwest::Client, cand: &ResolvedCandidate) -> u64 {
         }
         Err(_) => u64::MAX,
     }
+}
+
+/// async 版 ping 探测(供 gateway_probe_group 并行调用)。
+async fn probe_one_async(client: &reqwest::Client, cand: &ResolvedCandidate) -> (String, u64) {
+    let body = serde_json::json!({
+        "model": cand.model,
+        "messages": [{ "role": "user", "content": "hi" }],
+        "max_tokens": 1,
+    });
+    let started = std::time::Instant::now();
+    let result = client
+        .post(format!("{}/v1/chat/completions", cand.base_url.trim_end_matches('/')))
+        .bearer_auth(&cand.api_key)
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await;
+    let latency = match result {
+        Ok(resp) if resp.status().is_success() => started.elapsed().as_millis() as u64,
+        Ok(_) => u64::MAX,
+        Err(_) => u64::MAX,
+    };
+    (cand.id.clone(), latency)
+}
+
+/// 逐模型探测延迟(2026-09-13):对组内每个候选并行发 ping,返回
+/// [{ id, latency_ms }] 列表。前端在测试按钮后展示每个模型的延迟。
+#[tauri::command]
+pub async fn gateway_probe_group(app: AppHandle, id: String) -> Result<serde_json::Value, String> {
+    let host = app.state::<GatewayHost>().inner().clone();
+    let snapshot = host.snapshot();
+    let group = snapshot
+        .group_by_id(&id)
+        .ok_or_else(|| format!("模型组不存在: {id}"))?
+        .clone();
+    // 并行探测所有候选(unavailable 的跳过,记为 null)
+    let tasks: Vec<_> = group.candidates.iter().map(|c| {
+        let client = host.client().clone();
+        let cand = c.clone();
+        async move {
+            if cand.unavailable.is_some() {
+                return (cand.id, None);
+            }
+            let (_, ms) = probe_one_async(&client, &cand).await;
+            (cand.id, Some(ms))
+        }
+    }).collect();
+    let results = futures_util::future::join_all(tasks).await;
+    // 同步写入 latencies 表(fastest 模式也可受益)
+    for (cid, ms) in &results {
+        if let Some(ms) = ms {
+            host.record_latency(&id, cid, *ms);
+        }
+    }
+    let arr: Vec<serde_json::Value> = results.iter().map(|(cid, ms)| {
+        serde_json::json!({
+            "id": cid,
+            "latency_ms": match ms { Some(v) if *v != u64::MAX => v.to_string().into(), _ => serde_json::Value::Null },
+        })
+    }).collect();
+    Ok(serde_json::json!({ "id": id, "models": arr }))
 }
 
 /// 网关配置变更后同步物化引擎模型条目(组名 → 引擎 settings.models):

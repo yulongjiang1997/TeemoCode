@@ -12,6 +12,7 @@ import {
   gatewayDeleteGroup,
   gatewayEndpoint,
   gatewayLog,
+  gatewayProbeGroup,
   gatewayRegenKey,
   gatewaySaveGroup,
   gatewayStatus,
@@ -83,6 +84,9 @@ export function GatewaySection() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [edit, setEdit] = useState<ModelGroup | null>(null);
   const [testResult, setTestResult] = useState<Record<string, { ok: boolean; text: string }>>({});
+  /** 逐模型延迟探测结果(2026-09-13):key = group_id, value = { model_id -> latency_ms } */
+  const [probeResult, setProbeResult] = useState<Record<string, Record<string, string | null>>>({});
+  const [probing, setProbing] = useState<Set<string>>(new Set());
   const [log, setLog] = useState<GatewayLogEntry[]>([]);
   // 端口草稿:与保存值不同时出现「应用」按钮
   const [portDraft, setPortDraft] = useState<string | null>(null);
@@ -203,6 +207,22 @@ export function GatewaySection() {
       .catch((e) =>
         setTestResult((prev) => ({ ...prev, [id]: { ok: false, text: t("settings.gateway.group.testFailed", { error: errText(e) }) } })),
       );
+  };
+
+  /** 逐模型延迟探测(2026-09-13):并行 ping 组内每个候选,延迟结果
+   *  写入 probeResult,在展开的模型列表中每个模型后展示毫秒数。 */
+  const probeGroup = (id: string) => {
+    setProbing((prev) => new Set(prev).add(id));
+    gatewayProbeGroup(id)
+      .then((r) => {
+        const map: Record<string, string | null> = {};
+        for (const m of r.models) map[m.id] = m.latency_ms;
+        setProbeResult((prev) => ({ ...prev, [id]: map }));
+      })
+      .catch(() => {})
+      .finally(() => {
+        setProbing((prev) => { const n = new Set(prev); n.delete(id); return n; });
+      });
   };
 
   // 重置 Key 两段确认(Tauri 下 window.confirm 是 dialog 插件命令,未放行
@@ -619,8 +639,10 @@ export function GatewaySection() {
                   onClick={(e) => {
                     e.stopPropagation();
                     testGroup(g.id);
+                    probeGroup(g.id);
                   }}
                 >
+                  {probing.has(g.id) ? <span className="loading loading-spinner loading-xs" aria-hidden /> : null}
                   {t("settings.gateway.group.test")}
                 </button>
                 <button
@@ -722,6 +744,12 @@ export function GatewaySection() {
                           <span className="text-base-content/40">w{m.weight}</span>
                           {!m.enabled && <span className="badge badge-ghost badge-xs">{t("settings.gateway.group.disable")}</span>}
                           {m.unavailable && <span className="text-error">{m.unavailable}</span>}
+                          {/* 延迟数值(2026-09-13):探测后在此展示 */}
+                          {probeResult[g.id]?.[m.id] !== undefined && (
+                            <span className={`font-mono text-2xs ${probeResult[g.id]![m.id] === null ? "text-error" : "text-base-content/50"}`}>
+                              {probeResult[g.id]![m.id] === null ? "✕" : `${probeResult[g.id]![m.id]}ms`}
+                            </span>
+                          )}
                         </li>
                       ))}
                     </ul>

@@ -170,6 +170,25 @@ export async function gatewayTestGroup(id: string): Promise<GatewayTestResult> {
   return invoke<GatewayTestResult>("gateway_test_group", { id });
 }
 
+/** 单模型延迟探测结果(2026-09-13)。latency_ms = null 表示探测失败/超时。 */
+export interface GatewayProbeModel {
+  id: string;
+  /** 延迟毫秒;null = 失败/超时 */
+  latency_ms: string | null;
+}
+
+/** 整组延迟探测结果(gateway_probe_group)。 */
+export interface GatewayProbeResult {
+  id: string;
+  models: GatewayProbeModel[];
+}
+
+/** 逐模型探测延迟:对组内每个候选并行 ping,返回各模型延迟(毫秒)。
+ * 前端在测试按钮后展示每个模型后的延迟数值。 */
+export async function gatewayProbeGroup(id: string): Promise<GatewayProbeResult> {
+  return invoke<GatewayProbeResult>("gateway_probe_group", { id });
+}
+
 /** 幂等自愈:enabled 但没在跑时按当前配置重建。工作区拉模型列表时调用,
  * 避免网关意外停止后用户无从发现(发网关组请求会一直 connection refused)。 */
 export async function gatewayEnsureRunning(): Promise<void> {

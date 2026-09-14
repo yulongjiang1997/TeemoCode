@@ -61,6 +61,7 @@
             "allow-gateway-ensure-running",
             "allow-gateway-status",
             "allow-gateway-test-group",
+            "allow-gateway-probe-group",
             "allow-gateway-update-settings",
             "allow-get-config",
             "allow-git-import",
