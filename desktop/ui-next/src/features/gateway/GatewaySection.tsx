@@ -17,7 +17,6 @@ import {
   gatewayRegenKey,
   gatewaySaveGroup,
   gatewayStatus,
-  gatewayTestGroup,
   gatewayUpdateSettings,
   type GatewayLogEntry,
   type GatewayStatus,
@@ -215,46 +214,35 @@ export function GatewaySection() {
       .finally(() => setBusy(false));
   };
 
-  const testGroup = (id: string, timeoutMs?: number) => {
-    setTestResult((prev) => ({ ...prev, [id]: { ok: true, text: t("settings.gateway.group.testing") } }));
-    gatewayTestGroup(id, timeoutMs)
-      .then((r) => {
-        setTestResult((prev) => ({
-          ...prev,
-          [id]: r.ok
-            ? { ok: true, text: t("settings.gateway.group.testOk", { model: r.model ?? "", latency: r.latency_ms }) }
-            : { ok: false, text: t("settings.gateway.group.testFailed", { error: r.error ?? "" }) },
-        }));
-        refresh();
-      })
-      .catch((e) =>
-        setTestResult((prev) => ({ ...prev, [id]: { ok: false, text: t("settings.gateway.group.testFailed", { error: errText(e) }) } })),
-      );
-  };
-
   /** 逐模型延迟探测(2026-09-13):并行 ping 组内每个候选,延迟结果
    *  写入 probeResult,在展开的模型列表中每个模型后展示毫秒数。
    *  timeoutMs:探测超时(毫秒),超过则标记为 null(异常)。 */
-  const probeGroup = (id: string, timeoutMs?: number) => {
+  const runTest = (id: string) => {
+    const timeoutMs = parseInt(testTimeoutValue, 10) || 5000;
+    setTestTimeoutOpen(null);
+    setTestResult((prev) => ({ ...prev, [id]: { ok: true, text: t("settings.gateway.group.testing") } }));
     setProbing((prev) => new Set(prev).add(id));
     gatewayProbeGroup(id, timeoutMs)
       .then((r) => {
         const map: Record<string, string | null> = {};
         for (const m of r.models) map[m.id] = m.latency_ms;
         setProbeResult((prev) => ({ ...prev, [id]: map }));
+        // 推导整组结果:任一模型有延迟=成功
+        const anyOk = r.models.some((m) => m.latency_ms !== null);
+        setTestResult((prev) => ({
+          ...prev,
+          [id]: anyOk
+            ? { ok: true, text: t("settings.gateway.group.testOk", { model: r.models.find((m) => m.latency_ms !== null)?.id ?? "", latency: Number(r.models.find((m) => m.latency_ms !== null)?.latency_ms) || 0 }) }
+            : { ok: false, text: t("settings.gateway.group.testFailed", { error: "所有模型超时或失败" }) },
+        }));
+        refresh();
       })
-      .catch(() => {})
+      .catch((e) => {
+        setTestResult((prev) => ({ ...prev, [id]: { ok: false, text: t("settings.gateway.group.testFailed", { error: errText(e) }) } }));
+      })
       .finally(() => {
         setProbing((prev) => { const n = new Set(prev); n.delete(id); return n; });
       });
-  };
-
-  /** 执行测试(含整组测试 + 逐模型延迟探测),用弹窗中的超时值。 */
-  const runTest = (id: string) => {
-    const timeoutMs = parseInt(testTimeoutValue, 10) || 5000;
-    setTestTimeoutOpen(null);
-    testGroup(id, timeoutMs);
-    probeGroup(id, timeoutMs);
   };
 
   /** 拉取远端模型列表(2026-09-14):用当前行的 provider/base_url/api_key
