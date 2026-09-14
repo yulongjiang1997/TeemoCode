@@ -3,7 +3,7 @@
 // save_config 保存条——本分区"改了即生效",没有脏状态管理。
 // 行形态照 SkillsSection(list-row + 行内展开编辑);删除用两段确认
 // (第一次点变红为"确认删除",失焦/超时还原),不引入弹窗。
-import { IconArrowsExchange, IconChevronDown, IconCopy, IconPlus, IconRefresh, IconTrash } from "@tabler/icons-react";
+import { IconArrowsExchange, IconChevronDown, IconCopy, IconDownload, IconPlus, IconRefresh, IconTrash } from "@tabler/icons-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -27,6 +27,7 @@ import {
 } from "@/lib/ipc/gateway";
 import { inDesktopShell } from "@/lib/ipc/ipc";
 import { copyText } from "@/lib/util/clipboard";
+import { VendorImportDialog } from "./VendorImportDialog";
 
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -96,6 +97,8 @@ export function GatewaySection() {
   /** 测试超时弹窗(2026-09-14):点测试按钮先弹输入超时,默认 5000ms。 */
   const [testTimeoutOpen, setTestTimeoutOpen] = useState<string | null>(null);
   const [testTimeoutValue, setTestTimeoutValue] = useState("5000");
+  /** 从厂商批量导入弹窗(2026-09-14):"create"=新建组模式,edit.id=编辑组模式 */
+  const [importDialog, setImportDialog] = useState<string | null>(null);
   /** 远端模型列表拉取(2026-09-14):key = 行下标(idx),value = { ids, error } */
   const [fetched, setFetched] = useState<Record<number, { ids: string[]; error?: string }>>({});
   const [fetching, setFetching] = useState<Set<number>>(new Set());
@@ -399,42 +402,6 @@ export function GatewaySection() {
       {/* 组内模型 */}
       <div className="flex flex-col gap-1.5">
         <p className="text-xs font-semibold">{t("settings.gateway.form.modelsTitle")}</p>
-        {/* 厂商预设卡片(2026-09-14):选用户保存的预设厂商,
-            批量填充组内所有自定义模型的 provider+base_url+api_key。
-            预设在「厂商预设」tab 中管理。 */}
-        {vendorPresets.length > 0 && (
-          <div className="flex items-center gap-2 rounded-box border border-base-300 bg-base-200/50 p-2.5">
-            <label className="flex items-center gap-2 text-2xs whitespace-nowrap">
-              {t("settings.gateway.preset.title")}
-              <select
-                className="select select-xs"
-                onChange={(e) => {
-                  const preset = vendorPresets.find((p) => p.id === e.target.value);
-                  if (!preset) return;
-                  // 批量填充所有自定义模型(alias 为空)的 provider+base_url+api_key
-                  const models = edit.models.map((m) =>
-                    m.alias ? m : {
-                      ...m,
-                      provider: preset.provider || m.provider,
-                      base_url: preset.base_url || m.base_url,
-                      api_key: preset.api_key || m.api_key,
-                    }
-                  );
-                  setEdit({ ...edit, models });
-                  setFetched({});
-                  e.target.value = "";
-                }}
-                defaultValue=""
-              >
-                <option value="" disabled>{t("settings.gateway.preset.none")}</option>
-                {vendorPresets.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            </label>
-            <span className="text-2xs text-base-content/40">{t("settings.gateway.preset.hint")}</span>
-          </div>
-        )}
         {edit.models.map((m, idx) => {
           const isRef = m.alias !== "";
           const health = status?.groups.find((g) => g.id === edit.id)?.models.find((x) => x.id === m.id);
@@ -617,6 +584,16 @@ export function GatewaySection() {
         >
           <IconPlus size={13} stroke={2} aria-hidden />
           {t("settings.gateway.form.addModel")}
+        </button>
+        <button
+          type="button"
+          className="btn btn-xs btn-ghost w-fit"
+          disabled={vendorPresets.length === 0}
+          onClick={() => setImportDialog(edit.id || "edit")}
+          title={t("settings.gateway.import.batchFromVendor")}
+        >
+          <IconDownload size={13} stroke={2} aria-hidden />
+          {t("settings.gateway.import.batchFromVendor")}
         </button>
       </div>
 
@@ -875,6 +852,16 @@ export function GatewaySection() {
             <IconPlus size={14} stroke={2} aria-hidden />
             {t("settings.gateway.groups.add")}
           </button>
+          <button
+            type="button"
+            className="btn btn-sm btn-outline w-fit"
+            disabled={vendorPresets.length === 0}
+            onClick={() => setImportDialog("create")}
+            title={t("settings.gateway.import.fromVendor")}
+          >
+            <IconDownload size={14} stroke={2} aria-hidden />
+            {t("settings.gateway.import.fromVendor")}
+          </button>
         </div>
       )}
 
@@ -977,6 +964,25 @@ export function GatewaySection() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* 从厂商批量导入弹窗(2026-09-14) */}
+      {importDialog && (
+        <VendorImportDialog
+          vendors={vendorPresets}
+          onClose={() => setImportDialog(null)}
+          onConfirm={(models) => {
+            if (importDialog === "create") {
+              // 新建组:填入模型 + 展开编辑表单
+              setExpanded(null);
+              setEdit({ ...emptyGroup(), models });
+            } else if (edit) {
+              // 编辑组:追加模型
+              setEdit({ ...edit, models: [...edit.models, ...models] });
+            }
+            setImportDialog(null);
+          }}
+        />
       )}
     </>
   );

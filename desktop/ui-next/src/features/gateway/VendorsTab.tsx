@@ -2,15 +2,13 @@
 //
 // 用户自建厂商接入预设:名称 + provider + base_url + api_key,
 // 存 config.json(gateway_save_vendors 全量写回)。
-// 在模型组编辑表单添加自定义模型时,选一个预设即可自动填
-// provider+base_url+api_key,然后直接获取模型列表——无需重复手填。
-import { IconPlus, IconRefresh, IconTrash } from "@tabler/icons-react";
+// 保存后折叠为摘要行(名称 + 协议 + 地址),点击展开可编辑。
+import { IconChevronDown, IconPlus, IconRefresh, IconTrash } from "@tabler/icons-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
-import { getConfig } from "@/lib/ipc/config";
+import { getConfig, fetchModelIds } from "@/lib/ipc/config";
 import { gatewaySaveVendors, type VendorPreset } from "@/lib/ipc/gateway";
-import { fetchModelIds } from "@/lib/ipc/config";
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -24,9 +22,13 @@ export function VendorsTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** 展开的厂商行 index(null = 全折叠) */
+  const [expanded, setExpanded] = useState<number | null>(null);
   /** 各行拉取的模型列表(key = row index) */
   const [fetched, setFetched] = useState<Record<number, { ids: string[]; error?: string }>>({});
   const [fetching, setFetching] = useState<Set<number>>(new Set());
+  /** 标记新增未保存的行 */
+  const [dirty, setDirty] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -50,6 +52,8 @@ export function VendorsTab() {
     try {
       const saved = await gatewaySaveVendors(vendors);
       setVendors(saved);
+      setDirty(false);
+      setExpanded(null);
     } catch (e) {
       setError(errMsg(e));
     } finally {
@@ -59,19 +63,20 @@ export function VendorsTab() {
 
   const update = (idx: number, patch: Partial<VendorPreset>) => {
     setVendors((prev) => prev.map((v, i) => (i === idx ? { ...v, ...patch } : v)));
+    setDirty(true);
   };
 
   const add = () => {
     setVendors((prev) => [...prev, emptyPreset()]);
+    setDirty(true);
+    setExpanded(vendors.length);
   };
 
   const remove = (idx: number) => {
     setVendors((prev) => prev.filter((_, i) => i !== idx));
-    setFetched((prev) => {
-      const n = { ...prev };
-      delete n[idx];
-      return n;
-    });
+    setFetched((prev) => { const n = { ...prev }; delete n[idx]; return n; });
+    setDirty(true);
+    setExpanded(null);
   };
 
   const fetchList = async (idx: number) => {
@@ -108,83 +113,107 @@ export function VendorsTab() {
           {t("settings.gateway.vendors.empty")}
         </p>
       ) : (
-        <div className="flex flex-col gap-2">
-          {vendors.map((v, idx) => (
-            <div key={v.id || `new-${idx}`} className="flex flex-col gap-2 rounded-box border border-base-300 bg-base-100 p-3">
-              <div className="flex items-center gap-2">
-                <input
-                  className="input input-sm min-w-0 flex-1"
-                  placeholder={t("settings.gateway.vendors.namePlaceholder")}
-                  value={v.name}
-                  onChange={(e) => update(idx, { name: e.target.value })}
-                />
+        <div className="flex flex-col gap-1.5">
+          {vendors.map((v, idx) => {
+            const isOpen = expanded === idx;
+            return (
+              <div key={v.id || `new-${idx}`} className="rounded-box border border-base-300 bg-base-100">
+                {/* 折叠态:一行摘要(名称 + 协议 + 地址) */}
                 <button
                   type="button"
-                  className="btn btn-ghost btn-xs shrink-0 text-error"
-                  onClick={() => remove(idx)}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm"
+                  onClick={() => setExpanded(isOpen ? null : idx)}
                 >
-                  <IconTrash size={13} stroke={1.75} aria-hidden />
-                </button>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <label className="flex flex-col gap-1 text-2xs">
-                  {t("settings.gateway.model.provider")}
-                  <select
-                    className="select select-xs w-full"
-                    value={v.provider}
-                    onChange={(e) => update(idx, { provider: e.target.value })}
-                  >
-                    <option value="openai">OpenAI</option>
-                    <option value="anthropic">Anthropic</option>
-                    <option value="openai_responses">OpenAI Responses</option>
-                  </select>
-                </label>
-                <label className="flex flex-col gap-1 text-2xs">
-                  {t("settings.gateway.model.baseUrl")}
-                  <input
-                    className="input input-xs w-full font-mono"
-                    placeholder="https://…"
-                    value={v.base_url}
-                    onChange={(e) => update(idx, { base_url: e.target.value })}
+                  <IconChevronDown
+                    size={13}
+                    stroke={2}
+                    className={`shrink-0 transition-transform ${isOpen ? "" : "-rotate-90"}`}
+                    aria-hidden
                   />
-                </label>
-                <label className="col-span-2 flex flex-col gap-1 text-2xs">
-                  {t("settings.gateway.model.apiKey")}
-                  <input
-                    type="password"
-                    className="input input-xs w-full font-mono"
-                    placeholder="sk-…"
-                    value={v.api_key}
-                    onChange={(e) => update(idx, { api_key: e.target.value })}
-                  />
-                </label>
-              </div>
-              {/* 测试获取模型列表 */}
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-xs"
-                  disabled={fetching.has(idx) || !v.base_url}
-                  onClick={() => fetchList(idx)}
-                >
-                  {fetching.has(idx) ? (
-                    <span className="loading loading-spinner loading-xs" aria-hidden />
-                  ) : (
-                    <IconRefresh size={12} stroke={1.75} aria-hidden />
-                  )}
-                  {t("settings.models.fetch")}
+                  <span className="min-w-0 flex-1 truncate font-medium">{v.name || t("settings.gateway.vendors.namePlaceholder")}</span>
+                  <span className="badge badge-ghost badge-xs shrink-0">{v.provider}</span>
+                  <span className="hidden max-w-40 truncate font-mono text-2xs text-base-content/40 sm:block">{v.base_url}</span>
                 </button>
-                {fetched[idx]?.ids && fetched[idx]!.ids.length > 0 && (
-                  <span className="text-2xs text-base-content/50">
-                    {t("settings.gateway.vendors.modelsFound", { n: fetched[idx]!.ids.length })}
-                  </span>
-                )}
-                {fetched[idx]?.error && (
-                  <span className="text-2xs text-error">{fetched[idx]!.error}</span>
+                {/* 展开态:完整编辑表单 */}
+                {isOpen && (
+                  <div className="flex flex-col gap-2 border-t border-base-300 p-3">
+                    <div className="flex items-center gap-2">
+                      <input
+                        className="input input-sm min-w-0 flex-1"
+                        placeholder={t("settings.gateway.vendors.namePlaceholder")}
+                        value={v.name}
+                        onChange={(e) => update(idx, { name: e.target.value })}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs shrink-0 text-error"
+                        onClick={() => remove(idx)}
+                      >
+                        <IconTrash size={13} stroke={1.75} aria-hidden />
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="flex flex-col gap-1 text-2xs">
+                        {t("settings.gateway.model.provider")}
+                        <select
+                          className="select select-xs w-full"
+                          value={v.provider}
+                          onChange={(e) => update(idx, { provider: e.target.value })}
+                        >
+                          <option value="openai">OpenAI</option>
+                          <option value="anthropic">Anthropic</option>
+                          <option value="openai_responses">OpenAI Responses</option>
+                        </select>
+                      </label>
+                      <label className="flex flex-col gap-1 text-2xs">
+                        {t("settings.gateway.model.baseUrl")}
+                        <input
+                          className="input input-xs w-full font-mono"
+                          placeholder="https://…"
+                          value={v.base_url}
+                          onChange={(e) => update(idx, { base_url: e.target.value })}
+                        />
+                      </label>
+                      <label className="col-span-2 flex flex-col gap-1 text-2xs">
+                        {t("settings.gateway.model.apiKey")}
+                        <input
+                          type="password"
+                          className="input input-xs w-full font-mono"
+                          placeholder="sk-…"
+                          value={v.api_key}
+                          onChange={(e) => update(idx, { api_key: e.target.value })}
+                        />
+                      </label>
+                    </div>
+                    {/* 测试获取模型列表 */}
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        disabled={fetching.has(idx) || !v.base_url}
+                        onClick={() => fetchList(idx)}
+                      >
+                        {fetching.has(idx) ? (
+                          <span className="loading loading-spinner loading-xs" aria-hidden />
+                        ) : (
+                          <IconRefresh size={12} stroke={1.75} aria-hidden />
+                        )}
+                        {t("settings.models.fetch")}
+                      </button>
+                      {fetched[idx]?.ids && fetched[idx]!.ids.length > 0 && (
+                        <span className="text-2xs text-base-content/50">
+                          {t("settings.gateway.vendors.modelsFound", { n: fetched[idx]!.ids.length })}
+                        </span>
+                      )}
+                      {fetched[idx]?.error && (
+                        <span className="text-2xs text-error">{fetched[idx]!.error}</span>
+                      )}
+                    </div>
+                  </div>
                 )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -193,7 +222,7 @@ export function VendorsTab() {
           <IconPlus size={13} stroke={2} aria-hidden />
           {t("settings.gateway.vendors.add")}
         </button>
-        {vendors.length > 0 && (
+        {dirty && (
           <button
             type="button"
             className="btn btn-primary btn-sm"
