@@ -479,6 +479,7 @@ export const en: Record<MessageKey, string> = {
   "settings.gateway.import.selectVendor": "Select vendor preset",
   "settings.gateway.import.selectModels": "Select models to import",
   "settings.gateway.import.searchPlaceholder": "Search models…",
+  "settings.gateway.import.searchEmpty": "No matching models",
   "settings.gateway.import.selectAll": "Select all",
   "settings.gateway.import.deselectAll": "Deselect all",
   "settings.gateway.import.import": "Import {n} models",

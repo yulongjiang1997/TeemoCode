@@ -90,8 +90,12 @@ export function ModelsSection({
   // 供 model 输入框的 datalist 下拉选择。只读探测,失败信息行内显示。
   const [fetched, setFetched] = useState<Record<number, { ids: string[]; error?: string }>>({});
   const [fetching, setFetching] = useState<ReadonlySet<number>>(new Set());
-  /** 厂商级模型拉取(2026-09-14):key = base_url,value = { ids, checked, loading } */
+  /** 厂商级模型拉取(2026-09-14):弹窗模式,key = base_url */
   const [vendorFetch, setVendorFetch] = useState<Record<string, { ids: string[]; checked: Set<string>; loading: boolean; error?: string }>>({});
+  /** 当前打开弹窗的厂商 base_url(null = 关闭) */
+  const [vendorModal, setVendorModal] = useState<string | null>(null);
+  /** 弹窗内搜索关键字 */
+  const [vendorSearch, setVendorSearch] = useState("");
   const fetchList = async (i: number) => {
     const m = draft.models[i];
     if (!m || fetching.has(i)) return;
@@ -736,7 +740,7 @@ export function ModelsSection({
                             <span className="badge badge-ghost badge-xs shrink-0">{vg.items.length}</span>
                             <span className="text-2xs text-base-content/40">{enabledCount}/{vg.items.length}</span>
                           </button>
-                          {/* 添加模型按钮(2026-09-14):拉取厂商模型列表,
+                          {/* 添加模型按钮(2026-09-14):弹窗拉取厂商模型列表,
                               排除已有,勾选添加 */}
                           <button
                             type="button"
@@ -744,80 +748,23 @@ export function ModelsSection({
                             disabled={vendorFetch[vk]?.loading}
                             onClick={(e) => {
                               e.stopPropagation();
+                              // 打开弹窗并拉取(如果还没拉过)
+                              setVendorSearch("");
+                              setVendorModal(vk);
                               if (!vendorFetch[vk]) {
                                 void vendorFetchList(vk, vg.items[0]!.m);
-                              } else {
-                                // 已拉取过:切换显示/隐藏
-                                setVendorFetch((prev) => { const n = { ...prev }; delete n[vk]; return n; });
                               }
                             }}
                             title={t("settings.models.fetch")}
                           >
                             {vendorFetch[vk]?.loading ? (
                               <span className="loading loading-spinner loading-xs" aria-hidden />
-                            ) : vendorFetch[vk] ? (
-                              <IconChevronDown size={12} stroke={2} aria-hidden className="rotate-180" />
                             ) : (
                               <IconPlus size={12} stroke={2} aria-hidden />
                             )}
                             {t("settings.models.add")}
                           </button>
                         </div>
-                        {/* 厂商级模型拉取面板 */}
-                        {vendorFetch[vk] && !vendorFetch[vk]!.loading && (
-                          <div className="border-t border-base-200 bg-base-200/30 px-3 py-2">
-                            {vendorFetch[vk]!.error ? (
-                              <p className="py-2 text-center text-2xs text-error">{vendorFetch[vk]!.error}</p>
-                            ) : vendorFetch[vk]!.ids.length === 0 ? (
-                              <p className="py-2 text-center text-2xs text-base-content/40">{t("settings.models.fetch.empty")}</p>
-                            ) : (
-                              <>
-                                <div className="max-h-48 overflow-y-auto">
-                                  {vendorFetch[vk]!.ids.map((id) => (
-                                    <label
-                                      key={id}
-                                      className="flex cursor-pointer items-center gap-2 px-2 py-1 hover:bg-base-200"
-                                    >
-                                      <input
-                                        type="checkbox"
-                                        className="checkbox checkbox-xs"
-                                        checked={vendorFetch[vk]!.checked.has(id)}
-                                        onChange={() => vendorToggle(vk, id)}
-                                      />
-                                      <span className="min-w-0 flex-1 truncate font-mono text-2xs">{id}</span>
-                                    </label>
-                                  ))}
-                                </div>
-                                <div className="flex items-center gap-2 pt-1.5">
-                                  <button
-                                    type="button"
-                                    className="btn btn-ghost btn-xs"
-                                    onClick={() => {
-                                      const all = vendorFetch[vk]!.ids;
-                                      const allChecked = vendorFetch[vk]!.checked.size === all.length;
-                                      setVendorFetch((prev) => ({
-                                        ...prev,
-                                        [vk]: { ...prev[vk]!, checked: allChecked ? new Set() : new Set(all) },
-                                      }));
-                                    }}
-                                  >
-                                    {vendorFetch[vk]!.checked.size === vendorFetch[vk]!.ids.length
-                                      ? t("settings.gateway.import.deselectAll")
-                                      : t("settings.gateway.import.selectAll")}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="btn btn-primary btn-xs"
-                                    disabled={vendorFetch[vk]!.checked.size === 0}
-                                    onClick={() => vendorConfirm(vk, vg.items[0]!.m)}
-                                  >
-                                    {t("settings.gateway.import.import", { n: vendorFetch[vk]!.checked.size })}
-                                  </button>
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        )}
                         {vOpen && (
                           <div className="divide-y divide-base-200">
                             {vg.items.map(({ m, i }) => {
@@ -888,6 +835,105 @@ export function ModelsSection({
         <IconPlus size={14} stroke={2} aria-hidden />
         {t("settings.models.add")}
       </button>
+
+      {/* 厂商级模型拉取弹窗(2026-09-14):搜索 + 勾选 + 批量添加 */}
+      {vendorModal && (() => {
+        const vf = vendorFetch[vendorModal];
+        const filtered = vf?.ids.filter((id) =>
+          !vendorSearch || id.toLowerCase().includes(vendorSearch.toLowerCase())
+        ) ?? [];
+        // 找到该厂商的第一个模型用于 confirm 时的 refModel
+        const refModel = draft.models.find((m) => m.base_url === vendorModal);
+        const vLabel = vendorModal.replace(/^https?:\/\//, "").replace(/\/v1$/, "").replace(/\/api.*$/, "") || vendorModal;
+        return (
+          <div className="modal modal-open" onClick={() => setVendorModal(null)}>
+            <div className="modal-box max-w-lg" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-bold">{t("settings.models.add")}</h3>
+                <span className="badge badge-ghost badge-xs">{vLabel}</span>
+              </div>
+              {vf?.loading ? (
+                <div className="flex items-center gap-2 py-8 justify-center text-sm text-base-content/40">
+                  <span className="loading loading-spinner loading-sm" />
+                  {t("settings.models.fetch")}
+                </div>
+              ) : vf?.error ? (
+                <p className="py-4 text-center text-xs text-error">{vf.error}</p>
+              ) : filtered.length === 0 ? (
+                <p className="py-4 text-center text-xs text-base-content/40">
+                  {vendorSearch ? t("settings.gateway.import.searchEmpty") : t("settings.models.fetch.empty")}
+                </p>
+              ) : (
+                <>
+                  {/* 搜索框 */}
+                  <input
+                    type="text"
+                    className="input input-sm w-full mt-2"
+                    placeholder={t("settings.gateway.import.searchPlaceholder")}
+                    value={vendorSearch}
+                    onChange={(e) => setVendorSearch(e.target.value)}
+                    autoFocus
+                  />
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-2xs text-base-content/50">
+                      {vf!.checked.size}/{filtered.length}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => {
+                        const allChecked = vf!.checked.size === vf!.ids.length;
+                        setVendorFetch((prev) => ({
+                          ...prev,
+                          [vendorModal]: { ...prev[vendorModal]!, checked: allChecked ? new Set() : new Set(prev[vendorModal]!.ids) },
+                        }));
+                      }}
+                    >
+                      {vf!.checked.size === vf!.ids.length
+                        ? t("settings.gateway.import.deselectAll")
+                        : t("settings.gateway.import.selectAll")}
+                    </button>
+                  </div>
+                  {/* 模型列表 */}
+                  <div className="max-h-72 overflow-y-auto rounded-box border border-base-300 mt-1">
+                    {filtered.map((id) => (
+                      <label
+                        key={id}
+                        className="flex cursor-pointer items-center gap-2 border-b border-base-200 px-3 py-1.5 hover:bg-base-200"
+                      >
+                        <input
+                          type="checkbox"
+                          className="checkbox checkbox-xs"
+                          checked={vf!.checked.has(id)}
+                          onChange={() => vendorToggle(vendorModal, id)}
+                        />
+                        <span className="min-w-0 flex-1 truncate font-mono text-xs">{id}</span>
+                      </label>
+                    ))}
+                  </div>
+                </>
+              )}
+              <div className="modal-action">
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setVendorModal(null)}>
+                  {t("settings.gateway.cancel")}
+                </button>
+                {!vf?.loading && !vf?.error && vf && vf.checked.size > 0 && refModel && (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    onClick={() => {
+                      vendorConfirm(vendorModal, refModel);
+                      setVendorModal(null);
+                    }}
+                  >
+                    {t("settings.gateway.import.import", { n: vf.checked.size })}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </section>
   );
 }

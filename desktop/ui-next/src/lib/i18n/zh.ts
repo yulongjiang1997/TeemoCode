@@ -492,6 +492,7 @@ export const zh = {
   "settings.gateway.import.selectVendor": "选择厂商预设",
   "settings.gateway.import.selectModels": "勾选要导入的模型",
   "settings.gateway.import.searchPlaceholder": "搜索模型…",
+  "settings.gateway.import.searchEmpty": "没有匹配的模型",
   "settings.gateway.import.selectAll": "全选",
   "settings.gateway.import.deselectAll": "取消全选",
   "settings.gateway.import.import": "导入 {n} 个模型",
