@@ -1046,31 +1046,97 @@ pub fn reload(app: &AppHandle) {
 /// 探测间隔(秒)。太短浪费上游配额;太长延迟变化反应慢。
 const PROBE_INTERVAL_SECS: u64 = 60;
 
-/// fastest 模式后台探测线程:遍历所有 strategy=fastest 的组,对每个候选
-/// 发一次最小 ping 请求记录延迟。线程循环到 stop_flag 置位或进程退出。
-/// 探测失败(超时/网络错)的模型延迟记为 u64::MAX,排到最后。
+/// fastest 模式后台探测线程(2026-09-14):遍历所有 strategy=fastest 的组,
+/// 对每个候选**并行**发 call_buffered 真实请求,记录延迟 + 写日志。
+/// 探测超时/失败的模型延迟记为 u64::MAX,日志标记失败。
 fn spawn_latency_probe(host: GatewayHost, snapshot: &RuntimeSnapshot) {
     let has_fastest = snapshot.groups.iter().any(|g| g.group.effective_strategy() == STRATEGY_FASTEST);
     if !has_fastest {
         return;
     }
-    let host = host.clone();
-    std::thread::spawn(move || {
+    tauri::async_runtime::spawn(async move {
         loop {
             let snap = host.snapshot();
+            // 收集所有 fastest 组的候选,并行探测
+            let mut tasks: Vec<_> = vec![];
             for rg in &snap.groups {
                 if rg.group.effective_strategy() != STRATEGY_FASTEST {
                     continue;
                 }
+                let ctx = upstream::GroupCtx::of(&rg.group);
+                let client = host.client().clone();
+                let group_id = rg.group.id.clone();
+                let group_name = rg.group.name.clone();
                 for cand in &rg.candidates {
                     if cand.unavailable.is_some() {
                         continue;
                     }
-                    let latency = probe_one(host.client(), cand);
-                    host.record_latency(&rg.group.id, &cand.id, latency);
+                    let host = host.clone();
+                    let cand = cand.clone();
+                    let ctx = ctx.clone();
+                    let client = client.clone();
+                    let group_id = group_id.clone();
+                    let group_name = group_name.clone();
+                    tasks.push(async move {
+                        let body = serde_json::json!({
+                            "model": &cand.model,
+                            "messages": [{ "role": "user", "content": "ping" }],
+                            "max_tokens": 1,
+                        });
+                        let timeout = std::time::Duration::from_secs(15);
+                        let started = std::time::Instant::now();
+                        // 写 pending 日志
+                        host.push_log(LogEntry {
+                            ts_ms: now_ms(),
+                            group_id: group_id.clone(),
+                            group_name: group_name.clone(),
+                            stream: false,
+                            ok: false,
+                            status: None,
+                            latency_ms: 0,
+                            model: cand.model.clone(),
+                            attempts: 0,
+                            prompt_tokens: None,
+                            completion_tokens: None,
+                            error: None,
+                            request_content: Some("[fastest 探测]".to_string()),
+                            response_content: None,
+                            pending: true,
+                        });
+                        let result = tokio::time::timeout(timeout, {
+                            let client = client.clone();
+                            let cand = cand.clone();
+                            let body = body.clone();
+                            let ctx = ctx.clone();
+                            async move {
+                                upstream::call_buffered(&client, &cand, &body, &ctx, timeout).await
+                            }
+                        }).await;
+                        let elapsed = started.elapsed().as_millis() as u64;
+                        match result {
+                            Err(_) => {
+                                host.update_pending_for_model(&cand.model, false, Some(408), elapsed,
+                                    Some(format!("fastest 探测超时")));
+                                host.record_latency(&group_id, &cand.id, u64::MAX);
+                            }
+                            Ok(Ok(_)) => {
+                                host.update_pending_for_model(&cand.model, true, Some(200), elapsed, None);
+                                host.record_latency(&group_id, &cand.id, elapsed);
+                            }
+                            Ok(Err(e)) => {
+                                let status = e.status().unwrap_or(502);
+                                host.update_pending_for_model(&cand.model, false, Some(status), elapsed,
+                                    Some(e.message()));
+                                host.record_latency(&group_id, &cand.id, u64::MAX);
+                            }
+                        }
+                    });
                 }
             }
-            std::thread::sleep(std::time::Duration::from_secs(PROBE_INTERVAL_SECS));
+            if !tasks.is_empty() {
+                futures_util::future::join_all(tasks).await;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(PROBE_INTERVAL_SECS)).await;
         }
     });
 }
