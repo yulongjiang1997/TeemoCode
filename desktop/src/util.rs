@@ -1,5 +1,12 @@
 // 壳内跨模块小工具(自给自足,不为一个函数引第三方 crate)。
 
+/// 生成一个短随机 id(8 位十六进制,不引 uuid crate)。
+pub fn short_uuid() -> String {
+    let mut buf = [0u8; 4];
+    let _ = getrandom::getrandom(&mut buf);
+    format!("{:08x}", u32::from_le_bytes(buf))
+}
+
 /// 百分号编码:RFC 3986 unreserved(字母/数字/-_.~)之外的字节一律 %XX。
 /// query 参数与 fragment 通用(main.rs 错误页 hash、monkeycode 云端 API 共用,
 /// 之前两处各自手写一份逐字节相同的实现,合并于此)。

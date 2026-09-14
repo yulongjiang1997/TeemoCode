@@ -108,11 +108,31 @@ pub struct GatewaySettings {
     pub port: u16,
     #[serde(default)]
     pub groups: Vec<ModelGroup>,
+    /// 厂商预设(2026-09-14):用户自建的厂商接入预设,存 config.json。
+    /// 添加模型时选一个预设即可自动填 provider+base_url+api_key,
+    /// 然后直接获取模型列表,无需重复手填。
+    #[serde(default)]
+    pub vendor_presets: Vec<VendorPreset>,
+}
+
+/// 厂商预设(用户自建)。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct VendorPreset {
+    /// 唯一标识(uuid 截断)。
+    pub id: String,
+    /// 展示名(如 "我的 OpenAI"、"DeepSeek 账号 A")。
+    pub name: String,
+    /// 协议:openai | anthropic | openai_responses
+    pub provider: String,
+    /// 接口地址(如 https://api.openai.com)
+    pub base_url: String,
+    /// API Key(明文存 config.json,与模型组同款)。
+    pub api_key: String,
 }
 
 impl Default for GatewaySettings {
     fn default() -> Self {
-        Self { enabled: false, port: default_port(), groups: vec![] }
+        Self { enabled: false, port: default_port(), groups: vec![], vendor_presets: vec![] }
     }
 }
 
@@ -1320,7 +1340,7 @@ pub async fn gateway_regen_key(app: AppHandle, id: String) -> Result<String, Str
 /// 组连通性测试:走**真实调度链路**(含故障切换与熔断),发一条最小对话,
 /// 报告最终由哪个模型应答、耗时与失败摘要。
 #[tauri::command]
-pub async fn gateway_test_group(app: AppHandle, id: String) -> Result<serde_json::Value, String> {
+pub async fn gateway_test_group(app: AppHandle, id: String, timeout_ms: Option<u64>) -> Result<serde_json::Value, String> {
     let host = app.state::<GatewayHost>().inner().clone();
     let snapshot = host.snapshot();
     let group = snapshot
@@ -1333,7 +1353,25 @@ pub async fn gateway_test_group(app: AppHandle, id: String) -> Result<serde_json
         "messages": [{ "role": "user", "content": "ping" }],
         "max_tokens": 16,
     });
-    let result = server::run_buffered(&host, &group, body).await;
+    // 弹窗设的超时(2026-09-14):用 tokio::time::timeout 包裹,
+    // 超过则放弃整组测试,标记为失败。
+    let probe_timeout_ms = timeout_ms.unwrap_or(0);
+    let result = if probe_timeout_ms > 0 {
+        match tokio::time::timeout(
+            std::time::Duration::from_millis(probe_timeout_ms),
+            server::run_buffered(&host, &group, body),
+        ).await {
+            Ok(r) => r,
+            Err(_) => Err(server::BufferedFail {
+                status: 408,
+                body: serde_json::json!({"error": {"message": format!("测试超时({probe_timeout_ms}ms)"), "type": "timeout"}}),
+                summary: format!("测试超时({probe_timeout_ms}ms)"),
+                attempts: 0,
+            }),
+        }
+    } else {
+        server::run_buffered(&host, &group, body).await
+    };
     let latency = started.elapsed().as_millis() as u64;
     Ok(match result {
         Ok(reply) => serde_json::json!({
@@ -1346,6 +1384,35 @@ pub async fn gateway_test_group(app: AppHandle, id: String) -> Result<serde_json
             "attempts": failed.attempts, "error": failed.summary,
         }),
     })
+}
+
+// ==================== 厂商预设 CRUD(2026-09-14) ====================
+
+/// 保存厂商预设列表(全量替换)。
+#[tauri::command]
+pub fn gateway_save_vendors(app: AppHandle, vendors: Vec<VendorPreset>) -> Result<Vec<VendorPreset>, String> {
+    // 校验
+    let mut seen = std::collections::HashSet::new();
+    for v in &vendors {
+        let name = v.name.trim();
+        if name.is_empty() {
+            return Err("厂商预设名称不能为空".to_string());
+        }
+        if !seen.insert(name.to_lowercase()) {
+            return Err(format!("厂商预设名称重复: {name}"));
+        }
+    }
+    let mut vendors = vendors;
+    // 确保 id 非空(新建时 UI 传空 id,此处补 uuid)
+    for v in &mut vendors {
+        if v.id.is_empty() {
+            v.id = crate::util::short_uuid();
+        }
+    }
+    crate::config::update_config_json(&app, |cfg| {
+        cfg.gateway.vendor_presets = vendors.clone();
+    })?;
+    Ok(vendors)
 }
 
 #[cfg(test)]

@@ -171,8 +171,8 @@ export async function gatewayRegenKey(id: string): Promise<string> {
   return invoke<string>("gateway_regen_key", { id });
 }
 
-export async function gatewayTestGroup(id: string): Promise<GatewayTestResult> {
-  return invoke<GatewayTestResult>("gateway_test_group", { id });
+export async function gatewayTestGroup(id: string, timeoutMs?: number): Promise<GatewayTestResult> {
+  return invoke<GatewayTestResult>("gateway_test_group", { id, timeoutMs: timeoutMs ?? null });
 }
 
 /** 单模型延迟探测结果(2026-09-13)。latency_ms = null 表示探测失败/超时。 */
@@ -186,6 +186,20 @@ export interface GatewayProbeModel {
 export interface GatewayProbeResult {
   id: string;
   models: GatewayProbeModel[];
+}
+
+/** 用户自建厂商预设(对表 Rust VendorPreset)。 */
+export interface VendorPreset {
+  id: string;
+  name: string;
+  provider: string;
+  base_url: string;
+  api_key: string;
+}
+
+/** 保存厂商预设列表(全量替换)。返回含新生成 id 的归一化列表。 */
+export async function gatewaySaveVendors(vendors: VendorPreset[]): Promise<VendorPreset[]> {
+  return invoke<VendorPreset[]>("gateway_save_vendors", { vendors });
 }
 
 /** 逐模型探测延迟:对组内每个候选并行 ping,返回各模型延迟(毫秒)。

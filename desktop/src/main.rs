@@ -1935,6 +1935,7 @@ fn main() {
             notification::set_notification_enabled,
             gateway::gateway_test_group,
             gateway::gateway_probe_group,
+            gateway::gateway_save_vendors,
             memory::memory_read,
             memory::memory_write,
             automation::automation_list,

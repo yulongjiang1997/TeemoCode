@@ -66,6 +66,13 @@ export interface DesktopConfig {
   /** 桌宠自定义精灵图(data URL);键=动作名(idle/running/waiting/celebrate/offline) */
   pet_sprites?: Record<string, string>;
   telemetry_enabled?: boolean;
+  /** 壳自有偏好:网关设置(enabled/port/groups/vendor_presets)。
+   *  壳以磁盘值合并,UI 透传(组的增删改走 gateway_* 独立命令)。 */
+  gateway?: {
+    enabled?: boolean;
+    port?: number;
+    vendor_presets?: { id: string; name: string; provider: string; base_url: string; api_key: string }[];
+  };
 }
 
 /** 读取壳配置;浏览器模式返回 null(设置页据此降级为只读提示)。 */

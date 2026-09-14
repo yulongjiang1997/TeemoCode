@@ -23,6 +23,7 @@ import {
   type GatewayStatus,
   type GroupModel,
   type ModelGroup,
+  type VendorPreset,
 } from "@/lib/ipc/gateway";
 import { inDesktopShell } from "@/lib/ipc/ipc";
 import { copyText } from "@/lib/util/clipboard";
@@ -38,20 +39,7 @@ const HEALTH_BADGE: Record<string, string> = {
   probing: "badge-info",
 };
 
-/** 厂商预设(2026-09-14):选场景后自动填 provider + base_url,
- *  用户只需贴 api_key + 获取模型列表。列表内置常见厂商,
- *  仍可自定义(provider/base_url 可手改)。 */
-const VENDOR_PRESETS: { id: string; name: string; provider: string; base_url: string }[] = [
-  { id: "", name: "settings.gateway.preset.none", provider: "", base_url: "" },
-  { id: "openai", name: "OpenAI 官方", provider: "openai", base_url: "https://api.openai.com" },
-  { id: "deepseek", name: "DeepSeek", provider: "openai", base_url: "https://api.deepseek.com" },
-  { id: "siliconflow", name: "硅基流动", provider: "openai", base_url: "https://api.siliconflow.cn" },
-  { id: "openrouter", name: "OpenRouter", provider: "openai", base_url: "https://openrouter.ai/api" },
-  { id: "moonshot", name: "Moonshot (Kimi)", provider: "openai", base_url: "https://api.moonshot.cn" },
-  { id: "anthropic", name: "Anthropic Claude", provider: "anthropic", base_url: "https://api.anthropic.com" },
-  { id: "zhipu", name: "智谱 GLM", provider: "openai", base_url: "https://open.bigmodel.cn/api/paas/v4" },
-  { id: "custom", name: "自定义", provider: "", base_url: "" },
-];
+
 
 function emptyGroup(): ModelGroup {
   return {
@@ -96,6 +84,8 @@ export function GatewaySection() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [library, setLibrary] = useState<HostModel[]>([]);
+  /** 用户保存的厂商预设(2026-09-14):添加模型时选预设自动填 provider+base_url+api_key */
+  const [vendorPresets, setVendorPresets] = useState<VendorPreset[]>([]);
   // 展开的组(查看态);编辑中的组 id(edit 非 null 时显示表单)
   const [expanded, setExpanded] = useState<string | null>(null);
   const [edit, setEdit] = useState<ModelGroup | null>(null);
@@ -133,7 +123,10 @@ export function GatewaySection() {
   useEffect(() => {
     if (!inDesktopShell()) return;
     getConfig()
-      .then((cfg) => setLibrary(cfg?.models ?? []))
+      .then((cfg) => {
+        setLibrary(cfg?.models ?? []);
+        setVendorPresets(cfg?.gateway?.vendor_presets ?? []);
+      })
       .catch(() => {});
   }, []);
 
@@ -218,9 +211,9 @@ export function GatewaySection() {
       .finally(() => setBusy(false));
   };
 
-  const testGroup = (id: string) => {
+  const testGroup = (id: string, timeoutMs?: number) => {
     setTestResult((prev) => ({ ...prev, [id]: { ok: true, text: t("settings.gateway.group.testing") } }));
-    gatewayTestGroup(id)
+    gatewayTestGroup(id, timeoutMs)
       .then((r) => {
         setTestResult((prev) => ({
           ...prev,
@@ -256,7 +249,7 @@ export function GatewaySection() {
   const runTest = (id: string) => {
     const timeoutMs = parseInt(testTimeoutValue, 10) || 5000;
     setTestTimeoutOpen(null);
-    testGroup(id);
+    testGroup(id, timeoutMs);
     probeGroup(id, timeoutMs);
   };
 
@@ -406,6 +399,42 @@ export function GatewaySection() {
       {/* 组内模型 */}
       <div className="flex flex-col gap-1.5">
         <p className="text-xs font-semibold">{t("settings.gateway.form.modelsTitle")}</p>
+        {/* 厂商预设卡片(2026-09-14):选用户保存的预设厂商,
+            批量填充组内所有自定义模型的 provider+base_url+api_key。
+            预设在「厂商预设」tab 中管理。 */}
+        {vendorPresets.length > 0 && (
+          <div className="flex items-center gap-2 rounded-box border border-base-300 bg-base-200/50 p-2.5">
+            <label className="flex items-center gap-2 text-2xs whitespace-nowrap">
+              {t("settings.gateway.preset.title")}
+              <select
+                className="select select-xs"
+                onChange={(e) => {
+                  const preset = vendorPresets.find((p) => p.id === e.target.value);
+                  if (!preset) return;
+                  // 批量填充所有自定义模型(alias 为空)的 provider+base_url+api_key
+                  const models = edit.models.map((m) =>
+                    m.alias ? m : {
+                      ...m,
+                      provider: preset.provider || m.provider,
+                      base_url: preset.base_url || m.base_url,
+                      api_key: preset.api_key || m.api_key,
+                    }
+                  );
+                  setEdit({ ...edit, models });
+                  setFetched({});
+                  e.target.value = "";
+                }}
+                defaultValue=""
+              >
+                <option value="" disabled>{t("settings.gateway.preset.none")}</option>
+                {vendorPresets.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </label>
+            <span className="text-2xs text-base-content/40">{t("settings.gateway.preset.hint")}</span>
+          </div>
+        )}
         {edit.models.map((m, idx) => {
           const isRef = m.alias !== "";
           const health = status?.groups.find((g) => g.id === edit.id)?.models.find((x) => x.id === m.id);
@@ -493,32 +522,6 @@ export function GatewaySection() {
                 )
               ) : (
                 <div className="grid grid-cols-2 gap-2">
-                  {/* 厂商预设(2026-09-14):选场景自动填 provider+base_url,跨整行 */}
-                  <label className="col-span-2 flex flex-col gap-1 text-2xs">
-                    {t("settings.gateway.preset.title")}
-                    <select
-                      className="select select-xs w-full"
-                      value={VENDOR_PRESETS.find((p) => p.provider === m.provider && p.base_url === m.base_url)?.id ?? "custom"}
-                      onChange={(e) => {
-                        const preset = VENDOR_PRESETS.find((p) => p.id === e.target.value);
-                        if (!preset) return;
-                        const models = [...edit.models];
-                        models[idx] = {
-                          ...m,
-                          provider: preset.provider || m.provider,
-                          base_url: preset.base_url || m.base_url,
-                        };
-                        setEdit({ ...edit, models });
-                        setFetched((prev) => { const n = { ...prev }; delete n[idx]; return n; });
-                      }}
-                    >
-                      {VENDOR_PRESETS.map((p) => (
-                        <option key={p.id || "none"} value={p.id}>
-                          {p.id === "" || p.id === "custom" ? t(p.name as "settings.gateway.preset.none") : p.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
                   <label className="flex flex-col gap-1 text-2xs">
                     {t("settings.gateway.model.provider")}
                     <select

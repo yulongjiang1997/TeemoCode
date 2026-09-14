@@ -86,6 +86,7 @@ fn main() {
                 "gateway_regen_key",
                 "gateway_test_group",
                 "gateway_probe_group",
+                "gateway_save_vendors",
                 // 工作区记忆(memory.rs:.monkeycode/MEMORY.md 面板)
                 "memory_read",
                 "memory_write",

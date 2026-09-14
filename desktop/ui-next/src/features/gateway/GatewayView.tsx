@@ -14,8 +14,9 @@ import { useI18n } from "@/lib/i18n";
 import { GatewaySection } from "./GatewaySection";
 import { GatewayStatsPanel } from "./GatewayStatsPanel";
 import { ModelsTab } from "./ModelsTab";
+import { VendorsTab } from "./VendorsTab";
 
-type GatewayTab = "models" | "groups" | "stats";
+type GatewayTab = "vendors" | "groups" | "models" | "stats";
 
 export function GatewayView() {
   const { t } = useI18n();
@@ -31,6 +32,13 @@ export function GatewayView() {
             onClick={() => setTab("groups")}
           >
             {t("settings.gateway.groups.title")}
+          </button>
+          <button
+            type="button"
+            className={`btn btn-ghost btn-sm ${tab === "vendors" ? "text-primary" : ""}`}
+            onClick={() => setTab("vendors")}
+          >
+            {t("settings.gateway.vendors.title")}
           </button>
           <button
             type="button"
@@ -51,6 +59,8 @@ export function GatewayView() {
           <h1 className="sr-only">{t("gateway.view.title")}</h1>
           {tab === "groups" ? (
             <GatewaySection />
+          ) : tab === "vendors" ? (
+            <VendorsTab />
           ) : tab === "models" ? (
             <ModelsTab />
           ) : (
