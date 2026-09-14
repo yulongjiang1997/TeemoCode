@@ -1081,6 +1081,9 @@ fn probe_one(client: &reqwest::Client, cand: &ResolvedCandidate) -> u64 {
 }
 
 /// async 版 ping 探测(供 gateway_probe_group 并行调用)。
+/// 用 tokio::time::timeout 包裹整个请求(send + 读 body),确保超时精确生效——
+/// reqwest 的 .timeout() 只管 connect+send,不含读 body;且 Client 构建时的
+/// 全局 timeout 可能覆盖单请求值。tokio::time::timeout 是硬超时,到点即返回 Err。
 async fn probe_one_async(client: &reqwest::Client, cand: &ResolvedCandidate, timeout_ms: u64) -> (String, u64) {
     let body = serde_json::json!({
         "model": cand.model,
@@ -1088,18 +1091,25 @@ async fn probe_one_async(client: &reqwest::Client, cand: &ResolvedCandidate, tim
         "max_tokens": 1,
     });
     let started = std::time::Instant::now();
-    let timeout = std::time::Duration::from_millis(timeout_ms.max(1000));
-    let result = client
-        .post(format!("{}/v1/chat/completions", cand.base_url.trim_end_matches('/')))
-        .bearer_auth(&cand.api_key)
-        .json(&body)
-        .timeout(timeout)
-        .send()
-        .await;
+    let timeout = std::time::Duration::from_millis(timeout_ms.max(500));
+    let result = tokio::time::timeout(timeout, async {
+        client
+            .post(format!("{}/v1/chat/completions", cand.base_url.trim_end_matches('/')))
+            .bearer_auth(&cand.api_key)
+            .json(&body)
+            .send()
+            .await
+    })
+    .await;
     let latency = match result {
-        Ok(resp) if resp.status().is_success() => started.elapsed().as_millis() as u64,
-        Ok(_) => u64::MAX,
+        // tokio::time::timeout 超时 → Elapsed error → u64::MAX
         Err(_) => u64::MAX,
+        // 请求成功发出,但 HTTP 返回了错误 → u64::MAX
+        Ok(Err(_)) => u64::MAX,
+        // 请求成功且 HTTP 200 → 记录延迟
+        Ok(Ok(resp)) if resp.status().is_success() => started.elapsed().as_millis() as u64,
+        // HTTP 非 200 → u64::MAX
+        Ok(Ok(_)) => u64::MAX,
     };
     (cand.id.clone(), latency)
 }
