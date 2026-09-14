@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.43",
+    notes: "网关调度策略新增最快模式与负载均衡模式;厂商预设管理(CRUD);模型配置迁移到网关空间;模型按厂商分组+弹窗添加;测试超时弹窗;探测日志实时写入;延迟和健康状态回显",
+  },
+  {
     version: "0.1.42",
     notes: "网关调度策略新增最快模式(自动探测延迟,优选最低)与负载均衡模式(顺序轮转)",
   },
