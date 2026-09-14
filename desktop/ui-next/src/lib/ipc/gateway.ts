@@ -43,6 +43,8 @@ export interface GroupModelStatus extends GroupModel {
   /** 引用条目解析失败原因(已删除/缺模型标识) */
   unavailable: string | null;
   health: HealthState;
+  /** 延迟(毫秒),来自最快模式后台探测或手动测试;null = 未探测/失败 */
+  latency_ms: number | null;
 }
 
 export interface GroupCounters {

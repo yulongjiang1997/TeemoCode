@@ -1317,6 +1317,7 @@ fn status_payload(host: &GatewayHost) -> serde_json::Value {
     let snapshot = host.snapshot();
     let health = host.0.health.lock_ok();
     let counters = host.0.counters.lock_ok();
+    let lats = host.0.latencies.lock_ok();
     let server = host.0.server.lock_ok();
     let server_error = host.0.server_error.lock_ok().clone();
     let now = now_ms();
@@ -1332,6 +1333,7 @@ fn status_payload(host: &GatewayHost) -> serde_json::Value {
                     let cand = rg.candidates.iter().find(|c| c.id == m.id);
                     let key = format!("{}/{}", rg.group.id, m.id);
                     let state = health.get(&key).map(|h| h.state(now)).unwrap_or(sched::HealthState::Healthy);
+                    let latency = lats.get(&key).copied();
                     serde_json::json!({
                         "id": m.id, "enabled": m.enabled, "weight": m.weight, "alias": m.alias,
                         "provider": m.provider, "base_url": m.base_url, "model": m.model,
@@ -1339,6 +1341,7 @@ fn status_payload(host: &GatewayHost) -> serde_json::Value {
                         "upstream_model": cand.map(|c| c.model.clone()).unwrap_or_default(),
                         "unavailable": cand.and_then(|c| c.unavailable.clone()),
                         "health": state.as_str(),
+                        "latency_ms": latency,
                     })
                 })
                 .collect();

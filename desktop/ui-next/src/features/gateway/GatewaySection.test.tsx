@@ -41,7 +41,7 @@ const groupStatus = (over: Partial<GatewayStatus> = {}): GatewayStatus => ({
           label: "库模型",
           upstream_model: "m-lib",
           unavailable: null,
-          health: "healthy",
+          health: "healthy", latency_ms: null,
         },
         {
           id: "gm-2",
@@ -55,7 +55,7 @@ const groupStatus = (over: Partial<GatewayStatus> = {}): GatewayStatus => ({
           label: "旧模型",
           upstream_model: "",
           unavailable: "模型库中不存在「旧模型」(可能已删除或改名)",
-          health: "open",
+          health: "open", latency_ms: null,
         },
       ],
     },

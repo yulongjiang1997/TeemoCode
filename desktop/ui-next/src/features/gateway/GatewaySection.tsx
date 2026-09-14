@@ -820,12 +820,17 @@ export function GatewaySection() {
                           <span className="text-base-content/40">w{m.weight}</span>
                           {!m.enabled && <span className="badge badge-ghost badge-xs">{t("settings.gateway.group.disable")}</span>}
                           {m.unavailable && <span className="text-error">{m.unavailable}</span>}
-                          {/* 延迟数值(2026-09-13):探测后在此展示 */}
-                          {probeResult[g.id]?.[m.id] !== undefined && (
-                            <span className={`font-mono text-2xs ${probeResult[g.id]![m.id] === null ? "text-error" : "text-base-content/50"}`}>
-                              {probeResult[g.id]![m.id] === null ? "✕" : `${probeResult[g.id]![m.id]}ms`}
-                            </span>
-                          )}
+                          {/* 延迟数值:手动探测优先,否则用 status 里的后台延迟(fastest 模式) */}
+                          {(() => {
+                            const probe = probeResult[g.id]?.[m.id];
+                            const lat = probe !== undefined ? probe : (m.latency_ms ?? undefined);
+                            if (lat === undefined) return null;
+                            return (
+                              <span className={`font-mono text-2xs ${lat === null ? "text-error" : "text-base-content/50"}`}>
+                                {lat === null ? "✕" : `${lat}ms`}
+                              </span>
+                            );
+                          })()}
                         </li>
                       ))}
                     </ul>
