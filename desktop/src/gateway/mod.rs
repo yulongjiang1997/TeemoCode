@@ -1343,7 +1343,7 @@ pub async fn gateway_regen_key(app: AppHandle, id: String) -> Result<String, Str
 pub async fn gateway_test_group(app: AppHandle, id: String, timeout_ms: Option<u64>) -> Result<serde_json::Value, String> {
     let host = app.state::<GatewayHost>().inner().clone();
     let snapshot = host.snapshot();
-    let group = snapshot
+    let mut group = snapshot
         .group_by_id(&id)
         .ok_or_else(|| format!("模型组不存在: {id}"))?
         .clone();
@@ -1353,25 +1353,16 @@ pub async fn gateway_test_group(app: AppHandle, id: String, timeout_ms: Option<u
         "messages": [{ "role": "user", "content": "ping" }],
         "max_tokens": 16,
     });
-    // 弹窗设的超时(2026-09-14):用 tokio::time::timeout 包裹,
-    // 超过则放弃整组测试,标记为失败。
-    let probe_timeout_ms = timeout_ms.unwrap_or(0);
-    let result = if probe_timeout_ms > 0 {
-        match tokio::time::timeout(
-            std::time::Duration::from_millis(probe_timeout_ms),
-            server::run_buffered(&host, &group, body),
-        ).await {
-            Ok(r) => r,
-            Err(_) => Err(server::BufferedFail {
-                status: 408,
-                body: serde_json::json!({"error": {"message": format!("测试超时({probe_timeout_ms}ms)"), "type": "timeout"}}),
-                summary: format!("测试超时({probe_timeout_ms}ms)"),
-                attempts: 0,
-            }),
+    // 弹窗设的超时(2026-09-14):覆盖组级 timeout,使 run_buffered 内部
+    // 每个模型的上游调用都用此超时——模型1超时则切换试模型2,
+    // 不是整组总超时。
+    if let Some(ms) = timeout_ms {
+        if ms > 0 {
+            // 把毫秒转秒(向上取整,至少 1 秒)
+            group.group.timeout_seconds = ((ms + 999) / 1000) as u64;
         }
-    } else {
-        server::run_buffered(&host, &group, body).await
-    };
+    }
+    let result = server::run_buffered(&host, &group, body).await;
     let latency = started.elapsed().as_millis() as u64;
     Ok(match result {
         Ok(reply) => serde_json::json!({
