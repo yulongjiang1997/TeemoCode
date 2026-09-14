@@ -890,6 +890,30 @@ impl GatewayHost {
         }
     }
 
+    /// 按 model 字段精确匹配 pending 条目(2026-09-14:并行探测时
+    /// 每个模型有自己的 pending 条目,不能用"找最后一个 pending"逻辑)。
+    pub(crate) fn update_pending_for_model(
+        &self,
+        model: &str,
+        ok: bool,
+        status: Option<u16>,
+        latency_ms: u64,
+        error: Option<String>,
+    ) {
+        let mut log = self.0.log.lock_ok();
+        for entry in log.iter_mut().rev() {
+            if entry.pending && entry.model == model {
+                entry.ok = ok;
+                entry.status = status;
+                entry.latency_ms = latency_ms;
+                entry.error = error;
+                entry.pending = false;
+                entry.attempts = 1;
+                break;
+            }
+        }
+    }
+
     /// 调度用的随机数(进程级 xorshift 状态)。
     pub(crate) fn rng_next(&self) -> u64 {
         static SEED: std::sync::OnceLock<StdMutex<u64>> = std::sync::OnceLock::new();
@@ -1115,9 +1139,8 @@ async fn probe_one_async(client: &reqwest::Client, cand: &ResolvedCandidate, tim
 }
 
 /// 逐模型探测延迟(2026-09-13):对组内每个候选**并行**发一次真实请求,
-/// 走 run_buffered 调度链路(正确的 URL/协议/header),日志自动写入。
-/// 每个模型用弹窗设的 timeout_ms 超时(tokio::time::timeout 硬超时),
-/// 超时的模型记为 null(异常 ✕)。返回 [{ id, latency_ms }] 列表。
+/// 用 call_buffered(正确的 URL/协议/header),手动写日志。
+/// 每个模型用 tokio::time::timeout 硬超时,超时标记为 null(异常 ✕)。
 #[tauri::command]
 pub async fn gateway_probe_group(app: AppHandle, id: String, timeout_ms: Option<u64>) -> Result<serde_json::Value, String> {
     let host = app.state::<GatewayHost>().inner().clone();
@@ -1128,48 +1151,77 @@ pub async fn gateway_probe_group(app: AppHandle, id: String, timeout_ms: Option<
         .clone();
     let probe_timeout_ms = timeout_ms.unwrap_or(15000);
     let probe_timeout = std::time::Duration::from_millis(probe_timeout_ms.max(500));
-    let group_template = group.group.clone();
-    let candidates = group.candidates.clone();
-    // 对每个候选构造一个只含该候选的临时组,走 run_buffered 真实链路
-    let tasks: Vec<_> = candidates.iter().map(|cand| {
+    let ctx = upstream::GroupCtx::of(&group.group);
+    let client = host.client().clone();
+    // 并行探测:每个候选独立 call_buffered + 独立日志
+    let tasks: Vec<_> = group.candidates.iter().map(|cand| {
         let host = host.clone();
         let cand = cand.clone();
-        let group_id = group_template.id.clone();
-        let group_name = group_template.name.clone();
-        let mut tmp_group = group_template.clone();
+        let client = client.clone();
+        let ctx = ctx.clone();
+        let group_id = group.group.id.clone();
+        let group_name = group.group.name.clone();
         async move {
             if cand.unavailable.is_some() {
                 return (cand.id.clone(), None);
             }
-            tmp_group.timeout_seconds = ((probe_timeout_ms + 999) / 1000) as u64;
-            let rt = RuntimeGroup {
-                group: tmp_group,
-                candidates: vec![cand.clone()],
-            };
             let body = serde_json::json!({
-                "model": &group_id,
+                "model": &cand.model,
                 "messages": [{ "role": "user", "content": "hi" }],
                 "max_tokens": 1,
             });
             let started = std::time::Instant::now();
-            // 用 tokio::time::timeout 硬包裹,确保到点即返回
+            // 写 pending 日志(model = cand.model,可区分是哪个模型的请求)
+            host.push_log(LogEntry {
+                ts_ms: now_ms(),
+                group_id: group_id.clone(),
+                group_name: group_name.clone(),
+                stream: false,
+                ok: false,
+                status: None,
+                latency_ms: 0,
+                model: cand.model.clone(),
+                attempts: 0,
+                prompt_tokens: None,
+                completion_tokens: None,
+                error: None,
+                request_content: Some("hi".to_string()),
+                response_content: None,
+                pending: true,
+            });
+            // 用 tokio::time::timeout 硬超时包裹 call_buffered
             let result = tokio::time::timeout(
                 probe_timeout,
-                server::run_buffered(&host, &rt, body),
+                upstream::call_buffered(&client, &cand, &body, &ctx, probe_timeout),
             ).await;
-            let latency = match result {
-                // 超时
-                Err(_) => u64::MAX,
-                // run_buffered 成功
-                Ok(Ok(_)) => started.elapsed().as_millis() as u64,
-                // run_buffered 失败(含上游超时/HTTP错误)
-                Ok(Err(_)) => u64::MAX,
-            };
-            // 记录延迟到 latencies 表(fastest 模式可用)
-            if latency != u64::MAX {
-                host.record_latency(&group_id, &cand.id, latency);
+            let elapsed = started.elapsed().as_millis() as u64;
+            match result {
+                // tokio 超时
+                Err(_) => {
+                    // 更新该模型的 pending 条目为失败
+                    host.update_pending_for_model(
+                        &cand.model, false, Some(408), elapsed,
+                        Some(format!("探测超时({probe_timeout_ms}ms)")),
+                    );
+                    (cand.id.clone(), Some(u64::MAX))
+                }
+                Ok(Ok(reply)) => {
+                    host.update_pending_for_model(
+                        &cand.model, true, Some(200), elapsed,
+                        None,
+                    );
+                    host.record_latency(&group_id, &cand.id, elapsed);
+                    (cand.id.clone(), Some(elapsed))
+                }
+                Ok(Err(e)) => {
+                    let status = e.status().unwrap_or(502);
+                    host.update_pending_for_model(
+                        &cand.model, false, Some(status), elapsed,
+                        Some(e.message()),
+                    );
+                    (cand.id.clone(), Some(u64::MAX))
+                }
             }
-            (cand.id, Some(latency))
         }
     }).collect();
     let results = futures_util::future::join_all(tasks).await;
