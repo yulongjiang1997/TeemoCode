@@ -90,6 +90,8 @@ export function ModelsSection({
   // 供 model 输入框的 datalist 下拉选择。只读探测,失败信息行内显示。
   const [fetched, setFetched] = useState<Record<number, { ids: string[]; error?: string }>>({});
   const [fetching, setFetching] = useState<ReadonlySet<number>>(new Set());
+  /** 厂商级模型拉取(2026-09-14):key = base_url,value = { ids, checked, loading } */
+  const [vendorFetch, setVendorFetch] = useState<Record<string, { ids: string[]; checked: Set<string>; loading: boolean; error?: string }>>({});
   const fetchList = async (i: number) => {
     const m = draft.models[i];
     if (!m || fetching.has(i)) return;
@@ -106,6 +108,55 @@ export function ModelsSection({
       rest.delete(i);
       setFetching(rest);
     }
+  };
+
+  /** 厂商级模型拉取(2026-09-14):用厂商组内第一个模型的 provider/base_url/api_key
+   *  调 models_fetch,排除已有 model id,剩余供勾选添加。
+   *  base_url 作为厂商 key。 */
+  const vendorFetchList = async (base_url: string, firstModel: HostModel) => {
+    const existing = vendorFetch[base_url];
+    if (existing?.loading) return;
+    setVendorFetch((prev) => ({ ...prev, [base_url]: { ids: [], checked: new Set(), loading: true, error: prev[base_url]?.error } }));
+    try {
+      const ids = await fetchModelIds(firstModel.provider, firstModel.base_url, firstModel.api_key);
+      // 排除该厂商下已有的 model id
+      const have = new Set(
+        draft.models
+          .filter((m) => m.base_url === base_url)
+          .map((m) => m.model)
+      );
+      const available = ids.filter((id) => !have.has(id));
+      setVendorFetch((prev) => ({ ...prev, [base_url]: { ids: available, checked: new Set(), loading: false, error: available.length ? undefined : t("settings.models.fetch.empty") } }));
+    } catch (e) {
+      setVendorFetch((prev) => ({ ...prev, [base_url]: { ids: [], checked: new Set(), loading: false, error: e instanceof Error ? e.message : String(e) } }));
+    }
+  };
+
+  /** 厂商级勾选切换 */
+  const vendorToggle = (base_url: string, id: string) => {
+    setVendorFetch((prev) => {
+      const cur = prev[base_url];
+      if (!cur) return prev;
+      const next = new Set(cur.checked);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return { ...prev, [base_url]: { ...cur, checked: next } };
+    });
+  };
+
+  /** 厂商级确认添加:把勾选的 model id 批量加到 draft.models */
+  const vendorConfirm = (base_url: string, refModel: HostModel) => {
+    const cur = vendorFetch[base_url];
+    if (!cur || cur.checked.size === 0) return;
+    const newModels: HostModel[] = Array.from(cur.checked).map((id) => ({
+      name: id,
+      provider: refModel.provider,
+      base_url: refModel.base_url,
+      api_key: refModel.api_key,
+      model: id,
+    }));
+    onDraft((d) => ({ ...d, models: [...d.models, ...newModels] }));
+    // 清掉拉取状态(下次打开重新拉)
+    setVendorFetch((prev) => { const n = { ...prev }; delete n[base_url]; return n; });
   };
 
   // 模型连通性测试(「测试」按钮):发一次最小对话请求。结果按 行下标 缓存
@@ -668,22 +719,105 @@ export function ModelsSection({
                     const enabledCount = vg.items.filter(({ m }) => !m.locked).length;
                     return (
                       <div key={vk} className="rounded-box border border-base-300 bg-base-100 overflow-hidden">
-                        <button
-                          type="button"
-                          aria-expanded={vOpen}
-                          className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-base-200"
-                          onClick={() => toggleGroup(vKey)}
-                        >
-                          <IconChevronDown
-                            size={13}
-                            stroke={2}
-                            aria-hidden
-                            className={`shrink-0 transition-transform duration-150 ${vOpen ? "" : "-rotate-90"}`}
-                          />
-                          <span className="min-w-0 flex-1 truncate text-xs font-bold">{vLabel}</span>
-                          <span className="badge badge-ghost badge-xs shrink-0">{vg.items.length}</span>
-                          <span className="text-2xs text-base-content/40">{enabledCount}/{vg.items.length}</span>
-                        </button>
+                        <div className="flex items-center gap-1 px-3 py-2 hover:bg-base-200">
+                          <button
+                            type="button"
+                            aria-expanded={vOpen}
+                            className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                            onClick={() => toggleGroup(vKey)}
+                          >
+                            <IconChevronDown
+                              size={13}
+                              stroke={2}
+                              aria-hidden
+                              className={`shrink-0 transition-transform duration-150 ${vOpen ? "" : "-rotate-90"}`}
+                            />
+                            <span className="min-w-0 truncate text-xs font-bold">{vLabel}</span>
+                            <span className="badge badge-ghost badge-xs shrink-0">{vg.items.length}</span>
+                            <span className="text-2xs text-base-content/40">{enabledCount}/{vg.items.length}</span>
+                          </button>
+                          {/* 添加模型按钮(2026-09-14):拉取厂商模型列表,
+                              排除已有,勾选添加 */}
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-xs shrink-0"
+                            disabled={vendorFetch[vk]?.loading}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (!vendorFetch[vk]) {
+                                void vendorFetchList(vk, vg.items[0]!.m);
+                              } else {
+                                // 已拉取过:切换显示/隐藏
+                                setVendorFetch((prev) => { const n = { ...prev }; delete n[vk]; return n; });
+                              }
+                            }}
+                            title={t("settings.models.fetch")}
+                          >
+                            {vendorFetch[vk]?.loading ? (
+                              <span className="loading loading-spinner loading-xs" aria-hidden />
+                            ) : vendorFetch[vk] ? (
+                              <IconChevronDown size={12} stroke={2} aria-hidden className="rotate-180" />
+                            ) : (
+                              <IconPlus size={12} stroke={2} aria-hidden />
+                            )}
+                            {t("settings.models.add")}
+                          </button>
+                        </div>
+                        {/* 厂商级模型拉取面板 */}
+                        {vendorFetch[vk] && !vendorFetch[vk]!.loading && (
+                          <div className="border-t border-base-200 bg-base-200/30 px-3 py-2">
+                            {vendorFetch[vk]!.error ? (
+                              <p className="py-2 text-center text-2xs text-error">{vendorFetch[vk]!.error}</p>
+                            ) : vendorFetch[vk]!.ids.length === 0 ? (
+                              <p className="py-2 text-center text-2xs text-base-content/40">{t("settings.models.fetch.empty")}</p>
+                            ) : (
+                              <>
+                                <div className="max-h-48 overflow-y-auto">
+                                  {vendorFetch[vk]!.ids.map((id) => (
+                                    <label
+                                      key={id}
+                                      className="flex cursor-pointer items-center gap-2 px-2 py-1 hover:bg-base-200"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        className="checkbox checkbox-xs"
+                                        checked={vendorFetch[vk]!.checked.has(id)}
+                                        onChange={() => vendorToggle(vk, id)}
+                                      />
+                                      <span className="min-w-0 flex-1 truncate font-mono text-2xs">{id}</span>
+                                    </label>
+                                  ))}
+                                </div>
+                                <div className="flex items-center gap-2 pt-1.5">
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost btn-xs"
+                                    onClick={() => {
+                                      const all = vendorFetch[vk]!.ids;
+                                      const allChecked = vendorFetch[vk]!.checked.size === all.length;
+                                      setVendorFetch((prev) => ({
+                                        ...prev,
+                                        [vk]: { ...prev[vk]!, checked: allChecked ? new Set() : new Set(all) },
+                                      }));
+                                    }}
+                                  >
+                                    {vendorFetch[vk]!.checked.size === vendorFetch[vk]!.ids.length
+                                      ? t("settings.gateway.import.deselectAll")
+                                      : t("settings.gateway.import.selectAll")}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-primary btn-xs"
+                                    disabled={vendorFetch[vk]!.checked.size === 0}
+                                    onClick={() => vendorConfirm(vk, vg.items[0]!.m)}
+                                  >
+                                    {t("settings.gateway.import.import", { n: vendorFetch[vk]!.checked.size })}
+                                  </button>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )}
                         {vOpen && (
                           <div className="divide-y divide-base-200">
                             {vg.items.map(({ m, i }) => {
