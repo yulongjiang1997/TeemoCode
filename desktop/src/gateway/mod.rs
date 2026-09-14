@@ -419,6 +419,13 @@ pub struct LogEntry {
     pub completion_tokens: Option<i64>,
     /// 失败原因/尝试摘要(截断)。
     pub error: Option<String>,
+    /// 请求/响应内容(2026-09-14):pending 时不填;完成后写入。
+    /// 截断到 500 字符避免内存膨胀(环形缓冲只留 LOG_CAP 条)。
+    pub request_content: Option<String>,
+    pub response_content: Option<String>,
+    /// 请求是否仍在进行中(2026-09-14):true = 请求已发出但未收到响应。
+    /// 前端展示"请求中"态;完成后翻为 false。
+    pub pending: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize)]
@@ -670,6 +677,8 @@ pub(crate) struct GatewayInner {
     client: reqwest::Client,
     /// reload 串行闸(保存/重启并发时避免两个线程同时折腾监听线程)。
     reload_gate: StdMutex<()>,
+    /// 请求序号(用于 pending→complete 匹配)。
+    log_seq: StdMutex<u64>,
     /// 跨会话调用统计(按天 × 模型聚合落盘);生产由 `manage` 初始化,
     /// 单测路径(无 AppHandle)为 None,push_log 跳过持久化。
     log_stats: Option<Arc<GatewayLogStore>>,
@@ -700,6 +709,7 @@ impl GatewayHost {
             client,
             reload_gate: StdMutex::new(()),
             log_stats: build_log_store().map(Arc::new),
+            log_seq: StdMutex::new(0),
             latencies: StdMutex::new(HashMap::new()),
             rr_counters: StdMutex::new(HashMap::new()),
         }))
@@ -789,6 +799,40 @@ impl GatewayHost {
             c.fail += 1;
         }
         c.failovers += failovers;
+    }
+
+    /// 下一个请求序号(2026-09-14:pending→complete 日志匹配用)。
+    pub(crate) fn next_log_seq(&self) -> u64 {
+        let mut s = self.0.log_seq.lock_ok();
+        *s += 1;
+        *s
+    }
+
+    /// 请求收到响应后更新 pending 日志条目(2026-09-14)。
+    /// 按 seq 在环形缓冲中找到对应条目,原地更新状态/延迟/内容。
+    /// 找不到(已被挤出 LOG_CAP)则静默跳过——pending 只活几秒,极少被挤。
+    pub(crate) fn update_log(&self, seq: u64, ok: bool, status: Option<u16>, latency_ms: u64,
+        model: &str, attempts: u32, prompt_tokens: Option<i64>, completion_tokens: Option<i64>,
+        error: Option<String>, request_content: Option<String>, response_content: Option<String>,
+    ) {
+        let mut log = self.0.log.lock_ok();
+        // 从后往前找(pending 是最近推入的,逆序扫最快)
+        for entry in log.iter_mut().rev() {
+            if entry.pending {
+                entry.ok = ok;
+                entry.status = status;
+                entry.latency_ms = latency_ms;
+                if !model.is_empty() { entry.model = model.to_string(); }
+                entry.attempts = attempts;
+                entry.prompt_tokens = prompt_tokens;
+                entry.completion_tokens = completion_tokens;
+                entry.error = error;
+                entry.request_content = request_content;
+                entry.response_content = response_content;
+                entry.pending = false;
+                break;
+            }
+        }
     }
 
     /// 调度用的随机数(进程级 xorshift 状态)。

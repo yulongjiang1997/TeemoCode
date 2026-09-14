@@ -131,8 +131,8 @@ describe("GatewaySection", () => {
 
   it("请求日志按新到旧排列并带流式徽标", async () => {
     const entries: GatewayLogEntry[] = [
-      { ts_ms: 1_000, group_id: "mg-1", group_name: "主力组", stream: false, ok: true, status: 200, latency_ms: 120, model: "m-lib", attempts: 1, prompt_tokens: 3, completion_tokens: 5, error: null },
-      { ts_ms: 2_000, group_id: "mg-1", group_name: "主力组", stream: true, ok: false, status: 502, latency_ms: 900, model: "", attempts: 2, prompt_tokens: 3, completion_tokens: null, error: "全部失败" },
+      { ts_ms: 1_000, group_id: "mg-1", group_name: "主力组", stream: false, ok: true, status: 200, latency_ms: 120, model: "m-lib", attempts: 1, prompt_tokens: 3, completion_tokens: 5, error: null, request_content: null, response_content: null, pending: false },
+      { ts_ms: 2_000, group_id: "mg-1", group_name: "主力组", stream: true, ok: false, status: 502, latency_ms: 900, model: "", attempts: 2, prompt_tokens: 3, completion_tokens: null, error: "全部失败", request_content: null, response_content: null, pending: false },
     ];
     const calls: Array<{ cmd: string }> = [];
     (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {

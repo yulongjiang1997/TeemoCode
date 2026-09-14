@@ -368,6 +368,8 @@ fn push_log(
     attempts: u32,
     usage: &Usage,
     error: Option<String>,
+    request_content: Option<String>,
+    response_content: Option<String>,
 ) {
     host.push_log(LogEntry {
         ts_ms: super::now_ms(),
@@ -382,6 +384,54 @@ fn push_log(
         prompt_tokens: usage.prompt_tokens,
         completion_tokens: usage.completion_tokens,
         error: error.map(|e| e.chars().take(200).collect::<String>()),
+        request_content: request_content.map(|s| s.chars().take(500).collect()),
+        response_content: response_content.map(|s| s.chars().take(500).collect()),
+        pending: false,
+    });
+}
+
+/// 从 incoming 请求体提取用户最后一条消息内容(截断 500 字符)。
+fn extract_content(incoming: &Value) -> String {
+    incoming
+        .pointer("/messages")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.iter().rev().find(|m| m.pointer("/role").and_then(|r| r.as_str()) == Some("user")))
+        .and_then(|m| m.pointer("/content").and_then(|c| c.as_str()))
+        .unwrap_or("")
+        .chars()
+        .take(500)
+        .collect()
+}
+
+/// 从非流式响应体提取回答内容(截断 500 字符)。
+fn extract_response_content(body: &Value) -> String {
+    body.pointer("/choices/0/message/content")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .chars()
+        .take(500)
+        .collect()
+}
+
+/// 请求开始时推一条 pending 日志(2026-09-14):
+/// ok=false/pending=true/latency=0,前端展示"请求中"态。
+fn push_pending_log(host: &GatewayHost, group: &RuntimeGroup, stream: bool, request_content: Option<String>) {
+    host.push_log(LogEntry {
+        ts_ms: super::now_ms(),
+        group_id: group.group.id.clone(),
+        group_name: group.group.name.clone(),
+        stream,
+        ok: false,
+        status: None,
+        latency_ms: 0,
+        model: String::new(),
+        attempts: 0,
+        prompt_tokens: None,
+        completion_tokens: None,
+        error: None,
+        request_content: request_content.map(|s| s.chars().take(500).collect()),
+        response_content: None,
+        pending: true,
     });
 }
 
@@ -408,6 +458,8 @@ pub(crate) async fn run_buffered(
     incoming: Value,
 ) -> Result<BufferedOk, BufferedFail> {
     let started = std::time::Instant::now();
+    // 立即写一条 pending 日志(2026-09-14):前端可实时看到"请求中"态。
+    push_pending_log(host, group, false, Some(extract_content(&incoming)));
     let ctx = GroupCtx::of(&group.group);
     let timeout = group.group.effective_timeout();
     let mut attempts = unavailable_notes(group);
@@ -445,7 +497,8 @@ pub(crate) async fn run_buffered(
                     message: String::new(),
                 });
                 usage_out.merge(&reply.usage);
-                push_log(host, group, false, started, true, Some(200), reply.model.clone(), attempts.len() as u32, &usage_out, None);
+                push_log(host, group, false, started, true, Some(200), reply.model.clone(), attempts.len() as u32, &usage_out, None,
+                    Some(extract_content(&incoming)), Some(extract_response_content(&reply.body)));
                 return Ok(BufferedOk { body: reply.body, model: reply.model, attempts: attempts.len() });
             }
             Err(e) => {
@@ -479,6 +532,8 @@ pub(crate) async fn run_buffered(
         attempts_n,
         &usage_out,
         Some(summary.clone()),
+        Some(extract_content(&incoming)),
+        None,
     );
     Err(BufferedFail {
         status,
@@ -522,6 +577,8 @@ fn handle_streaming(
     incoming: Value,
     started: std::time::Instant,
 ) {
+    // 立即写一条 pending 日志(2026-09-14)。
+    push_pending_log(host, group, true, Some(extract_content(&incoming)));
     let ctx = GroupCtx::of(&group.group);
     let timeout = group.group.effective_timeout();
     let mut attempts = unavailable_notes(group);
@@ -646,6 +703,8 @@ fn handle_streaming(
         outcome.attempts as u32,
         &outcome.usage,
         outcome.error.clone(),
+        Some(extract_content(&incoming)),
+        None,
     );
 }
 

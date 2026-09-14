@@ -79,6 +79,11 @@ export interface GatewayLogEntry {
   prompt_tokens: number | null;
   completion_tokens: number | null;
   error: string | null;
+  /** 请求/响应内容(2026-09-14):pending 时只有 request;完成后有 response。截断 500 字符。 */
+  request_content: string | null;
+  response_content: string | null;
+  /** 请求是否仍在进行中(2026-09-14):true = 请求中。 */
+  pending: boolean;
 }
 
 export interface GatewayTestResult {

@@ -116,10 +116,14 @@ export function GatewaySection() {
   }, []);
 
   // 运行态/日志 5s 轮询(分区可见期间),卸载即停
+  // 日志刷新间隔(2026-09-14):有 pending 请求时 1.5s 快轮询让"请求中"态
+  // 快速翻为完成态;无 pending 时 5s 足够。
   useEffect(() => {
-    const timer = setInterval(refresh, 5000);
+    const hasPending = log.some((e) => e.pending);
+    const interval = hasPending ? 1500 : 5000;
+    const timer = setInterval(refresh, interval);
     return () => clearInterval(timer);
-  }, [refresh]);
+  }, [refresh, log]);
 
   useEffect(
     () => () => {
@@ -795,27 +799,45 @@ export function GatewaySection() {
                 <th>{t("settings.gateway.log.latency")}</th>
                 <th>{t("settings.gateway.log.attempts")}</th>
                 <th>{t("settings.gateway.log.tokens")}</th>
+                <th>{t("settings.gateway.log.requestContent")}</th>
+                <th>{t("settings.gateway.log.responseContent")}</th>
               </tr>
             </thead>
             <tbody>
               {[...log].reverse().map((e, i) => (
-                <tr key={`${e.ts_ms}-${i}`} title={e.error ?? undefined}>
+                <tr key={`${e.ts_ms}-${i}`} title={e.error ?? undefined} className={e.pending ? "animate-pulse" : ""}>
                   <td className="font-mono text-2xs">{hhmmss(e.ts_ms)}</td>
                   <td className="max-w-32 truncate font-mono text-2xs">{e.group_name}</td>
                   <td className="max-w-40 truncate font-mono text-2xs">
-                    {e.model} {e.stream && <span className="badge badge-ghost badge-xs">{t("settings.gateway.log.streamBadge")}</span>}
+                    {e.pending ? (
+                      <span className="loading loading-spinner loading-xs" aria-hidden />
+                    ) : (
+                      <>
+                        {e.model} {e.stream && <span className="badge badge-ghost badge-xs">{t("settings.gateway.log.streamBadge")}</span>}
+                      </>
+                    )}
                   </td>
                   <td>
-                    {e.ok ? (
+                    {e.pending ? (
+                      <span className="badge badge-warning badge-soft badge-xs">{t("settings.gateway.log.pending")}</span>
+                    ) : e.ok ? (
                       <span className="badge badge-success badge-soft badge-xs">{e.status ?? 200}</span>
                     ) : (
                       <span className="badge badge-error badge-soft badge-xs">{e.status ?? "ERR"}</span>
                     )}
                   </td>
-                  <td className="font-mono text-2xs">{e.latency_ms}ms</td>
-                  <td className="font-mono text-2xs">{e.attempts}</td>
                   <td className="font-mono text-2xs">
-                    {e.prompt_tokens ?? "—"}/{e.completion_tokens ?? "—"}
+                    {e.pending ? "…" : `${e.latency_ms}ms`}
+                  </td>
+                  <td className="font-mono text-2xs">{e.pending ? "—" : e.attempts}</td>
+                  <td className="font-mono text-2xs">
+                    {e.pending ? "—" : `${e.prompt_tokens ?? "—"}/${e.completion_tokens ?? "—"}`}
+                  </td>
+                  <td className="max-w-48 truncate text-2xs text-base-content/50" title={e.request_content ?? undefined}>
+                    {e.request_content ?? ""}
+                  </td>
+                  <td className="max-w-48 truncate text-2xs text-base-content/50" title={e.response_content ?? undefined}>
+                    {e.response_content ?? ""}
                   </td>
                 </tr>
               ))}
