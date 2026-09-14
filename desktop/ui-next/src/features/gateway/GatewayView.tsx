@@ -13,8 +13,9 @@ import { useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import { GatewaySection } from "./GatewaySection";
 import { GatewayStatsPanel } from "./GatewayStatsPanel";
+import { ModelsTab } from "./ModelsTab";
 
-type GatewayTab = "groups" | "stats";
+type GatewayTab = "models" | "groups" | "stats";
 
 export function GatewayView() {
   const { t } = useI18n();
@@ -33,6 +34,13 @@ export function GatewayView() {
           </button>
           <button
             type="button"
+            className={`btn btn-ghost btn-sm ${tab === "models" ? "text-primary" : ""}`}
+            onClick={() => setTab("models")}
+          >
+            {t("settings.nav.models")}
+          </button>
+          <button
+            type="button"
             className={`btn btn-ghost btn-sm ${tab === "stats" ? "text-primary" : ""}`}
             onClick={() => setTab("stats")}
           >
@@ -41,7 +49,13 @@ export function GatewayView() {
         </div>
         <div className="px-6 py-5">
           <h1 className="sr-only">{t("gateway.view.title")}</h1>
-          {tab === "groups" ? <GatewaySection /> : <GatewayStatsPanel />}
+          {tab === "groups" ? (
+            <GatewaySection />
+          ) : tab === "models" ? (
+            <ModelsTab />
+          ) : (
+            <GatewayStatsPanel />
+          )}
         </div>
       </div>
     </div>

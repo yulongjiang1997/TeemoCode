@@ -189,9 +189,10 @@ export interface GatewayProbeResult {
 }
 
 /** 逐模型探测延迟:对组内每个候选并行 ping,返回各模型延迟(毫秒)。
+ * timeout_ms:探测超时(毫秒),默认 5000;超过则标记为 null(异常)。
  * 前端在测试按钮后展示每个模型后的延迟数值。 */
-export async function gatewayProbeGroup(id: string): Promise<GatewayProbeResult> {
-  return invoke<GatewayProbeResult>("gateway_probe_group", { id });
+export async function gatewayProbeGroup(id: string, timeoutMs?: number): Promise<GatewayProbeResult> {
+  return invoke<GatewayProbeResult>("gateway_probe_group", { id, timeoutMs: timeoutMs ?? null });
 }
 
 /** 幂等自愈:enabled 但没在跑时按当前配置重建。工作区拉模型列表时调用,

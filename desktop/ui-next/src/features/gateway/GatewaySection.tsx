@@ -103,6 +103,9 @@ export function GatewaySection() {
   /** 逐模型延迟探测结果(2026-09-13):key = group_id, value = { model_id -> latency_ms } */
   const [probeResult, setProbeResult] = useState<Record<string, Record<string, string | null>>>({});
   const [probing, setProbing] = useState<Set<string>>(new Set());
+  /** 测试超时弹窗(2026-09-14):点测试按钮先弹输入超时,默认 5000ms。 */
+  const [testTimeoutOpen, setTestTimeoutOpen] = useState<string | null>(null);
+  const [testTimeoutValue, setTestTimeoutValue] = useState("5000");
   /** 远端模型列表拉取(2026-09-14):key = 行下标(idx),value = { ids, error } */
   const [fetched, setFetched] = useState<Record<number, { ids: string[]; error?: string }>>({});
   const [fetching, setFetching] = useState<Set<number>>(new Set());
@@ -233,10 +236,11 @@ export function GatewaySection() {
   };
 
   /** 逐模型延迟探测(2026-09-13):并行 ping 组内每个候选,延迟结果
-   *  写入 probeResult,在展开的模型列表中每个模型后展示毫秒数。 */
-  const probeGroup = (id: string) => {
+   *  写入 probeResult,在展开的模型列表中每个模型后展示毫秒数。
+   *  timeoutMs:探测超时(毫秒),超过则标记为 null(异常)。 */
+  const probeGroup = (id: string, timeoutMs?: number) => {
     setProbing((prev) => new Set(prev).add(id));
-    gatewayProbeGroup(id)
+    gatewayProbeGroup(id, timeoutMs)
       .then((r) => {
         const map: Record<string, string | null> = {};
         for (const m of r.models) map[m.id] = m.latency_ms;
@@ -246,6 +250,14 @@ export function GatewaySection() {
       .finally(() => {
         setProbing((prev) => { const n = new Set(prev); n.delete(id); return n; });
       });
+  };
+
+  /** 执行测试(含整组测试 + 逐模型延迟探测),用弹窗中的超时值。 */
+  const runTest = (id: string) => {
+    const timeoutMs = parseInt(testTimeoutValue, 10) || 5000;
+    setTestTimeoutOpen(null);
+    testGroup(id);
+    probeGroup(id, timeoutMs);
   };
 
   /** 拉取远端模型列表(2026-09-14):用当前行的 provider/base_url/api_key
@@ -617,6 +629,7 @@ export function GatewaySection() {
   );
 
   return (
+    <>
     <section aria-label={t("settings.nav.gateway")} className="flex flex-col gap-2">
       <p className="text-xs leading-relaxed text-base-content/50">{t("settings.gateway.hint")}</p>
       {loadError && (
@@ -727,8 +740,8 @@ export function GatewaySection() {
                   disabled={busy}
                   onClick={(e) => {
                     e.stopPropagation();
-                    testGroup(g.id);
-                    probeGroup(g.id);
+                    setTestTimeoutValue("5000");
+                    setTestTimeoutOpen(g.id);
                   }}
                 >
                   {probing.has(g.id) ? <span className="loading loading-spinner loading-xs" aria-hidden /> : null}
@@ -931,5 +944,37 @@ export function GatewaySection() {
         </div>
       )}
     </section>
+
+      {/* 测试超时弹窗(2026-09-14):点测试按钮先弹此框输入超时时间 */}
+      {testTimeoutOpen && (
+        <div className="modal modal-open" onClick={() => setTestTimeoutOpen(null)}>
+          <div className="modal-box modal-bottom sm:modal-middle" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-bold">{t("settings.gateway.testTimeout.title")}</h3>
+            <p className="py-2 text-xs text-base-content/50">{t("settings.gateway.testTimeout.hint")}</p>
+            <label className="flex items-center gap-2">
+              <input
+                type="number"
+                className="input input-sm w-32 font-mono"
+                value={testTimeoutValue}
+                onChange={(e) => setTestTimeoutValue(e.target.value)}
+                min={500}
+                step={500}
+                autoFocus
+                onKeyDown={(e) => { if (e.key === "Enter") runTest(testTimeoutOpen); }}
+              />
+              <span className="text-xs text-base-content/50">ms</span>
+            </label>
+            <div className="modal-action">
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setTestTimeoutOpen(null)}>
+                {t("settings.gateway.cancel")}
+              </button>
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => runTest(testTimeoutOpen)}>
+                {t("settings.gateway.group.test")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

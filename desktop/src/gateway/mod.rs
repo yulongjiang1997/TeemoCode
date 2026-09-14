@@ -1026,18 +1026,19 @@ fn probe_one(client: &reqwest::Client, cand: &ResolvedCandidate) -> u64 {
 }
 
 /// async 版 ping 探测(供 gateway_probe_group 并行调用)。
-async fn probe_one_async(client: &reqwest::Client, cand: &ResolvedCandidate) -> (String, u64) {
+async fn probe_one_async(client: &reqwest::Client, cand: &ResolvedCandidate, timeout_ms: u64) -> (String, u64) {
     let body = serde_json::json!({
         "model": cand.model,
         "messages": [{ "role": "user", "content": "hi" }],
         "max_tokens": 1,
     });
     let started = std::time::Instant::now();
+    let timeout = std::time::Duration::from_millis(timeout_ms.max(1000));
     let result = client
         .post(format!("{}/v1/chat/completions", cand.base_url.trim_end_matches('/')))
         .bearer_auth(&cand.api_key)
         .json(&body)
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(timeout)
         .send()
         .await;
     let latency = match result {
@@ -1051,13 +1052,14 @@ async fn probe_one_async(client: &reqwest::Client, cand: &ResolvedCandidate) -> 
 /// 逐模型探测延迟(2026-09-13):对组内每个候选并行发 ping,返回
 /// [{ id, latency_ms }] 列表。前端在测试按钮后展示每个模型的延迟。
 #[tauri::command]
-pub async fn gateway_probe_group(app: AppHandle, id: String) -> Result<serde_json::Value, String> {
+pub async fn gateway_probe_group(app: AppHandle, id: String, timeout_ms: Option<u64>) -> Result<serde_json::Value, String> {
     let host = app.state::<GatewayHost>().inner().clone();
     let snapshot = host.snapshot();
     let group = snapshot
         .group_by_id(&id)
         .ok_or_else(|| format!("模型组不存在: {id}"))?
         .clone();
+    let probe_timeout = timeout_ms.unwrap_or(15000);
     // 并行探测所有候选(unavailable 的跳过,记为 null)
     let tasks: Vec<_> = group.candidates.iter().map(|c| {
         let client = host.client().clone();
@@ -1066,7 +1068,7 @@ pub async fn gateway_probe_group(app: AppHandle, id: String) -> Result<serde_jso
             if cand.unavailable.is_some() {
                 return (cand.id, None);
             }
-            let (_, ms) = probe_one_async(&client, &cand).await;
+            let (_, ms) = probe_one_async(&client, &cand, probe_timeout).await;
             (cand.id, Some(ms))
         }
     }).collect();
