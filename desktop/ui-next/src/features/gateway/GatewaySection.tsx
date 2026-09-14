@@ -27,6 +27,7 @@ import {
 } from "@/lib/ipc/gateway";
 import { inDesktopShell } from "@/lib/ipc/ipc";
 import { copyText } from "@/lib/util/clipboard";
+import { modelDisplay } from "@/lib/models/modelMenu";
 import { VendorImportDialog } from "./VendorImportDialog";
 
 function errText(e: unknown): string {
@@ -480,11 +481,14 @@ export function GatewaySection() {
                       setEdit({ ...edit, models });
                     }}
                   >
-                    {library.map((lm) => (
-                      <option key={lm.name} value={lm.name}>
-                        {lm.name} ({lm.model})
-                      </option>
-                    ))}
+                    {library.map((lm) => {
+                      const d = modelDisplay({ name: lm.name, model: lm.model, source: lm.source });
+                      return (
+                        <option key={lm.name} value={lm.name}>
+                          {d.label.trim() || lm.name} ({lm.model})
+                        </option>
+                      );
+                    })}
                   </select>
                 )
               ) : (
@@ -822,7 +826,9 @@ export function GatewaySection() {
                           <span className={`badge badge-soft badge-xs ${HEALTH_BADGE[m.health] ?? ""}`}>
                             {t(`gateway.health.${m.health}`)}
                           </span>
-                          <span className="font-mono">{m.alias || m.model}</span>
+                          <span className="font-mono">
+                            {m.alias ? modelDisplay({ name: m.alias, model: m.model, source: "monkeycode" }).label : m.model}
+                          </span>
                           <span className="text-base-content/40">w{m.weight}</span>
                           {!m.enabled && <span className="badge badge-ghost badge-xs">{t("settings.gateway.group.disable")}</span>}
                           {m.unavailable && <span className="text-error">{m.unavailable}</span>}
