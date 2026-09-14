@@ -647,7 +647,90 @@ export function ModelsSection({
             {/* 组 = 一个 list 容器,行间分隔线;不再每行一个独立小盒子。
                 overflow-hidden 同 McpSection:行 rounded-none 方角,daisyUI .list
                 不裁剪,首/末行 hover 底色否则盖出圆角轮廓 */}
-            {!empty && groupOpen && (
+            {/* 自定义组(!source):按厂商(base_url)二次分组,可折叠展开,
+                每个模型行带勾选框(勾选 = 启用,取消 = 禁用但不删除) */}
+            {!empty && groupOpen && g.key === "" && (() => {
+              // 按 base_url 分组自定义模型
+              const vendorMap = new Map<string, { items: Array<{ m: HostModel; i: number }> }>();
+              g.items.forEach(({ m, i }) => {
+                const vk = m.base_url || "(no base_url)";
+                let vg = vendorMap.get(vk);
+                if (!vg) { vg = { items: [] }; vendorMap.set(vk, vg); }
+                vg.items.push({ m, i });
+              });
+              const vendorGroups = [...vendorMap.entries()];
+              return (
+                <div className="flex flex-col gap-1.5">
+                  {vendorGroups.map(([vk, vg]) => {
+                    const vKey = `vendor:${vk}`;
+                    const vOpen = !collapsedGroups.has(vKey);
+                    const vLabel = vk.replace(/^https?:\/\//, "").replace(/\/v1$/, "").replace(/\/api.*$/, "") || vk;
+                    const enabledCount = vg.items.filter(({ m }) => !m.locked).length;
+                    return (
+                      <div key={vk} className="rounded-box border border-base-300 bg-base-100 overflow-hidden">
+                        <button
+                          type="button"
+                          aria-expanded={vOpen}
+                          className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-base-200"
+                          onClick={() => toggleGroup(vKey)}
+                        >
+                          <IconChevronDown
+                            size={13}
+                            stroke={2}
+                            aria-hidden
+                            className={`shrink-0 transition-transform duration-150 ${vOpen ? "" : "-rotate-90"}`}
+                          />
+                          <span className="min-w-0 flex-1 truncate text-xs font-bold">{vLabel}</span>
+                          <span className="badge badge-ghost badge-xs shrink-0">{vg.items.length}</span>
+                          <span className="text-2xs text-base-content/40">{enabledCount}/{vg.items.length}</span>
+                        </button>
+                        {vOpen && (
+                          <div className="divide-y divide-base-200">
+                            {vg.items.map(({ m, i }) => {
+                              const open = expanded === i;
+                              return (
+                                <div key={m.name || `row-${i}`}>
+                                  <div className="flex items-center gap-2 px-3 py-1.5 hover:bg-base-200/40">
+                                    <input
+                                      type="checkbox"
+                                      className="checkbox checkbox-xs"
+                                      checked={!m.locked}
+                                      onChange={(e) => patch(i, { locked: !e.target.checked || undefined })}
+                                    />
+                                    <button
+                                      type="button"
+                                      className="flex min-w-0 flex-1 items-center gap-2 text-left cursor-pointer"
+                                      onClick={() => setExpanded(open ? null : i)}
+                                    >
+                                      <IconChevronDown
+                                        size={11}
+                                        stroke={2}
+                                        aria-hidden
+                                        className={`shrink-0 transition-transform ${open ? "" : "-rotate-90"}`}
+                                      />
+                                      <span className={`min-w-0 truncate text-xs ${m.locked ? "text-base-content/40" : ""}`}>{m.name}</span>
+                                      <span className="min-w-0 truncate font-mono text-2xs text-base-content/40">{m.model}</span>
+                                      <span className="badge badge-ghost badge-xs shrink-0">{m.provider}</span>
+                                    </button>
+                                  </div>
+                                  {open && (
+                                    <ul className="list divide-y divide-base-300 border-t border-base-200">
+                                      {row(m, i)}
+                                    </ul>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+            {/* 非自定义组:原有渲染逻辑 */}
+            {!empty && groupOpen && g.key !== "" && (
               <ul className="list divide-y divide-base-300 overflow-hidden rounded-box border border-base-300 bg-base-100">
                 {memberSections
                   ? memberSections.map((s) => [
