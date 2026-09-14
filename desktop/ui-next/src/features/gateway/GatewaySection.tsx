@@ -7,6 +7,7 @@ import { IconArrowsExchange, IconChevronDown, IconCopy, IconPlus, IconRefresh, I
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
+import { fetchModelIds } from "@/lib/ipc/config";
 import { getConfig, type HostModel } from "@/lib/ipc/config";
 import {
   gatewayDeleteGroup,
@@ -87,6 +88,9 @@ export function GatewaySection() {
   /** 逐模型延迟探测结果(2026-09-13):key = group_id, value = { model_id -> latency_ms } */
   const [probeResult, setProbeResult] = useState<Record<string, Record<string, string | null>>>({});
   const [probing, setProbing] = useState<Set<string>>(new Set());
+  /** 远端模型列表拉取(2026-09-14):key = 行下标(idx),value = { ids, error } */
+  const [fetched, setFetched] = useState<Record<number, { ids: string[]; error?: string }>>({});
+  const [fetching, setFetching] = useState<Set<number>>(new Set());
   const [log, setLog] = useState<GatewayLogEntry[]>([]);
   // 端口草稿:与保存值不同时出现「应用」按钮
   const [portDraft, setPortDraft] = useState<string | null>(null);
@@ -227,6 +231,23 @@ export function GatewaySection() {
       .finally(() => {
         setProbing((prev) => { const n = new Set(prev); n.delete(id); return n; });
       });
+  };
+
+  /** 拉取远端模型列表(2026-09-14):用当前行的 provider/base_url/api_key
+   *  调 models_fetch,结果存入 fetched 供 datalist 下拉选择。 */
+  const fetchList = async (idx: number) => {
+    if (!edit || fetching.has(idx)) return;
+    const m = edit.models[idx];
+    if (!m) return;
+    const next = new Set(fetching); next.add(idx); setFetching(next);
+    try {
+      const ids = await fetchModelIds(m.provider, m.base_url, m.api_key);
+      setFetched((prev) => ({ ...prev, [idx]: ids.length ? { ids } : { ids: [], error: t("settings.models.fetch.empty") } }));
+    } catch (e) {
+      setFetched((prev) => ({ ...prev, [idx]: { ids: [], error: e instanceof Error ? e.message : String(e) } }));
+    } finally {
+      const rest = new Set(fetching); rest.delete(idx); setFetching(rest);
+    }
   };
 
   // 重置 Key 两段确认(Tauri 下 window.confirm 是 dialog 插件命令,未放行
@@ -463,15 +484,38 @@ export function GatewaySection() {
                   </label>
                   <label className="flex flex-col gap-1 text-2xs">
                     {t("settings.gateway.model.model")}
-                    <input
-                      className="input input-xs w-full font-mono"
-                      value={m.model}
-                      onChange={(e) => {
-                        const models = [...edit.models];
-                        models[idx] = { ...m, model: e.target.value };
-                        setEdit({ ...edit, models });
-                      }}
-                    />
+                    <div className="flex gap-1">
+                      <input
+                        className="input input-xs min-w-0 flex-1 font-mono"
+                        list={`gw-models-${idx}`}
+                        value={m.model}
+                        onChange={(e) => {
+                          const models = [...edit.models];
+                          models[idx] = { ...m, model: e.target.value };
+                          setEdit({ ...edit, models });
+                        }}
+                      />
+                      <datalist id={`gw-models-${idx}`}>
+                        {fetched[idx]?.ids.map((id) => (
+                          <option key={id} value={id} />
+                        ))}
+                      </datalist>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs shrink-0"
+                        disabled={fetching.has(idx)}
+                        onClick={() => fetchList(idx)}
+                        title={t("settings.models.fetch")}
+                      >
+                        {fetching.has(idx)
+                          ? <span className="loading loading-spinner loading-xs" aria-hidden />
+                          : <IconRefresh size={12} stroke={1.75} aria-hidden />}
+                        {t("settings.models.fetch")}
+                      </button>
+                    </div>
+                    {fetched[idx]?.error && (
+                      <span className="text-error text-2xs">{fetched[idx]!.error}</span>
+                    )}
                   </label>
                   <label className="flex flex-col gap-1 text-2xs">
                     {t("settings.gateway.model.baseUrl")}
