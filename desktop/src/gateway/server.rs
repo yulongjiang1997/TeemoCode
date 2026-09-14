@@ -497,7 +497,9 @@ pub(crate) async fn run_buffered(
                     message: String::new(),
                 });
                 usage_out.merge(&reply.usage);
-                push_log(host, group, false, started, true, Some(200), reply.model.clone(), attempts.len() as u32, &usage_out, None,
+                // 更新 pending 条目(而不是追加新条目),使前端"请求中"态翻为完成
+                host.update_log_inner(false, true, Some(200), started.elapsed().as_millis() as u64,
+                    &reply.model, attempts.len() as u32, &usage_out, None,
                     Some(extract_content(&incoming)), Some(extract_response_content(&reply.body)));
                 return Ok(BufferedOk { body: reply.body, model: reply.model, attempts: attempts.len() });
             }
@@ -521,20 +523,10 @@ pub(crate) async fn run_buffered(
     };
     let status = last_error.as_ref().and_then(|e| e.status()).unwrap_or(502);
     let model = attempts.last().map(|a| a.model.clone()).unwrap_or_default();
-    push_log(
-        host,
-        group,
-        false,
-        started,
-        false,
-        Some(status),
-        model.clone(),
-        attempts_n,
-        &usage_out,
-        Some(summary.clone()),
-        Some(extract_content(&incoming)),
-        None,
-    );
+    // 更新 pending 条目(而不是追加新条目)
+    host.update_log_inner(false, false, Some(status), started.elapsed().as_millis() as u64,
+        &model, attempts_n, &usage_out, Some(summary.clone()),
+        Some(extract_content(&incoming)), None);
     Err(BufferedFail {
         status,
         body: openai_error(&summary, "gateway_error", "all_models_failed"),
@@ -692,14 +684,13 @@ fn handle_streaming(
             error: Some(summary),
         }
     });
-    push_log(
-        host,
-        group,
+    // 更新 pending 条目(而不是追加新条目),与 run_buffered 同款
+    host.update_log_inner(
         true,
-        started,
         outcome.ok,
         outcome.status,
-        outcome.model.clone(),
+        started.elapsed().as_millis() as u64,
+        &outcome.model,
         outcome.attempts as u32,
         &outcome.usage,
         outcome.error.clone(),

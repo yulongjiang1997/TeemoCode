@@ -855,6 +855,41 @@ impl GatewayHost {
         }
     }
 
+    /// 内部版:直接接收 Usage 结构(server.rs 调用路径)。
+    /// 找最后一个 pending=true 的条目原地更新。找不到则静默跳过。
+    pub(crate) fn update_log_inner(
+        &self,
+        stream: bool,
+        ok: bool,
+        status: Option<u16>,
+        latency_ms: u64,
+        model: &str,
+        attempts: u32,
+        usage: &upstream::Usage,
+        error: Option<String>,
+        request_content: Option<String>,
+        response_content: Option<String>,
+    ) {
+        let mut log = self.0.log.lock_ok();
+        for entry in log.iter_mut().rev() {
+            if entry.pending {
+                entry.stream = stream;
+                entry.ok = ok;
+                entry.status = status;
+                entry.latency_ms = latency_ms;
+                if !model.is_empty() { entry.model = model.to_string(); }
+                entry.attempts = attempts;
+                entry.prompt_tokens = usage.prompt_tokens;
+                entry.completion_tokens = usage.completion_tokens;
+                entry.error = error;
+                entry.request_content = request_content;
+                entry.response_content = response_content;
+                entry.pending = false;
+                break;
+            }
+        }
+    }
+
     /// 调度用的随机数(进程级 xorshift 状态)。
     pub(crate) fn rng_next(&self) -> u64 {
         static SEED: std::sync::OnceLock<StdMutex<u64>> = std::sync::OnceLock::new();
