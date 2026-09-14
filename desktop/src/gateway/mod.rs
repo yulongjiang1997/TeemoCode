@@ -1118,16 +1118,19 @@ fn spawn_latency_probe(host: GatewayHost, snapshot: &RuntimeSnapshot) {
                                 host.update_pending_for_model(&cand.model, false, Some(408), elapsed,
                                     Some(format!("fastest 探测超时")));
                                 host.record_latency(&group_id, &cand.id, u64::MAX);
+                                host.record_attempt(&group_id, &cand.id, false);
                             }
                             Ok(Ok(_)) => {
                                 host.update_pending_for_model(&cand.model, true, Some(200), elapsed, None);
                                 host.record_latency(&group_id, &cand.id, elapsed);
+                                host.record_attempt(&group_id, &cand.id, true);
                             }
                             Ok(Err(e)) => {
                                 let status = e.status().unwrap_or(502);
                                 host.update_pending_for_model(&cand.model, false, Some(status), elapsed,
                                     Some(e.message()));
                                 host.record_latency(&group_id, &cand.id, u64::MAX);
+                                host.record_attempt(&group_id, &cand.id, false);
                             }
                         }
                     });
@@ -1264,19 +1267,21 @@ pub async fn gateway_probe_group(app: AppHandle, id: String, timeout_ms: Option<
             match result {
                 // tokio 超时
                 Err(_) => {
-                    // 更新该模型的 pending 条目为失败
                     host.update_pending_for_model(
                         &cand.model, false, Some(408), elapsed,
                         Some(format!("探测超时({probe_timeout_ms}ms)")),
                     );
+                    host.record_latency(&group_id, &cand.id, u64::MAX);
+                    host.record_attempt(&group_id, &cand.id, false);
                     (cand.id.clone(), Some(u64::MAX))
                 }
-                Ok(Ok(reply)) => {
+                Ok(Ok(_reply)) => {
                     host.update_pending_for_model(
                         &cand.model, true, Some(200), elapsed,
                         None,
                     );
                     host.record_latency(&group_id, &cand.id, elapsed);
+                    host.record_attempt(&group_id, &cand.id, true);
                     (cand.id.clone(), Some(elapsed))
                 }
                 Ok(Err(e)) => {
@@ -1285,6 +1290,8 @@ pub async fn gateway_probe_group(app: AppHandle, id: String, timeout_ms: Option<
                         &cand.model, false, Some(status), elapsed,
                         Some(e.message()),
                     );
+                    host.record_latency(&group_id, &cand.id, u64::MAX);
+                    host.record_attempt(&group_id, &cand.id, false);
                     (cand.id.clone(), Some(u64::MAX))
                 }
             }
@@ -1333,7 +1340,7 @@ fn status_payload(host: &GatewayHost) -> serde_json::Value {
                     let cand = rg.candidates.iter().find(|c| c.id == m.id);
                     let key = format!("{}/{}", rg.group.id, m.id);
                     let state = health.get(&key).map(|h| h.state(now)).unwrap_or(sched::HealthState::Healthy);
-                    let latency = lats.get(&key).copied();
+                    let latency = lats.get(&key).copied().filter(|&v| v != u64::MAX);
                     serde_json::json!({
                         "id": m.id, "enabled": m.enabled, "weight": m.weight, "alias": m.alias,
                         "provider": m.provider, "base_url": m.base_url, "model": m.model,

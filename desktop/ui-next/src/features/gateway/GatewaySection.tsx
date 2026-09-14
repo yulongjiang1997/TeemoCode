@@ -823,11 +823,20 @@ export function GatewaySection() {
                           {/* 延迟数值:手动探测优先,否则用 status 里的后台延迟(fastest 模式) */}
                           {(() => {
                             const probe = probeResult[g.id]?.[m.id];
-                            const lat = probe !== undefined ? probe : (m.latency_ms ?? undefined);
-                            if (lat === undefined) return null;
+                            // 手动探测优先;否则用 status 里的后台延迟
+                            // (null = 探测失败, undefined = 未探测)
+                            const lat: string | number | null | undefined =
+                              probe !== undefined ? probe : m.latency_ms;
+                            if (lat === undefined || lat === null) {
+                              // null = 探测过但失败 → ✕;undefined = 未探测 → 不显示
+                              if (lat === null) {
+                                return <span className="font-mono text-2xs text-error">✕</span>;
+                              }
+                              return null;
+                            }
                             return (
-                              <span className={`font-mono text-2xs ${lat === null ? "text-error" : "text-base-content/50"}`}>
-                                {lat === null ? "✕" : `${lat}ms`}
+                              <span className="font-mono text-2xs text-base-content/50">
+                                {lat}ms
                               </span>
                             );
                           })()}
