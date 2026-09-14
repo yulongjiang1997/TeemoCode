@@ -38,6 +38,21 @@ const HEALTH_BADGE: Record<string, string> = {
   probing: "badge-info",
 };
 
+/** 厂商预设(2026-09-14):选场景后自动填 provider + base_url,
+ *  用户只需贴 api_key + 获取模型列表。列表内置常见厂商,
+ *  仍可自定义(provider/base_url 可手改)。 */
+const VENDOR_PRESETS: { id: string; name: string; provider: string; base_url: string }[] = [
+  { id: "", name: "settings.gateway.preset.none", provider: "", base_url: "" },
+  { id: "openai", name: "OpenAI 官方", provider: "openai", base_url: "https://api.openai.com" },
+  { id: "deepseek", name: "DeepSeek", provider: "openai", base_url: "https://api.deepseek.com" },
+  { id: "siliconflow", name: "硅基流动", provider: "openai", base_url: "https://api.siliconflow.cn" },
+  { id: "openrouter", name: "OpenRouter", provider: "openai", base_url: "https://openrouter.ai/api" },
+  { id: "moonshot", name: "Moonshot (Kimi)", provider: "openai", base_url: "https://api.moonshot.cn" },
+  { id: "anthropic", name: "Anthropic Claude", provider: "anthropic", base_url: "https://api.anthropic.com" },
+  { id: "zhipu", name: "智谱 GLM", provider: "openai", base_url: "https://open.bigmodel.cn/api/paas/v4" },
+  { id: "custom", name: "自定义", provider: "", base_url: "" },
+];
+
 function emptyGroup(): ModelGroup {
   return {
     id: "",
@@ -466,6 +481,32 @@ export function GatewaySection() {
                 )
               ) : (
                 <div className="grid grid-cols-2 gap-2">
+                  {/* 厂商预设(2026-09-14):选场景自动填 provider+base_url,跨整行 */}
+                  <label className="col-span-2 flex flex-col gap-1 text-2xs">
+                    {t("settings.gateway.preset.title")}
+                    <select
+                      className="select select-xs w-full"
+                      value={VENDOR_PRESETS.find((p) => p.provider === m.provider && p.base_url === m.base_url)?.id ?? "custom"}
+                      onChange={(e) => {
+                        const preset = VENDOR_PRESETS.find((p) => p.id === e.target.value);
+                        if (!preset) return;
+                        const models = [...edit.models];
+                        models[idx] = {
+                          ...m,
+                          provider: preset.provider || m.provider,
+                          base_url: preset.base_url || m.base_url,
+                        };
+                        setEdit({ ...edit, models });
+                        setFetched((prev) => { const n = { ...prev }; delete n[idx]; return n; });
+                      }}
+                    >
+                      {VENDOR_PRESETS.map((p) => (
+                        <option key={p.id || "none"} value={p.id}>
+                          {p.id === "" || p.id === "custom" ? t(p.name as "settings.gateway.preset.none") : p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   <label className="flex flex-col gap-1 text-2xs">
                     {t("settings.gateway.model.provider")}
                     <select
