@@ -808,6 +808,15 @@ impl GatewayHost {
         }
     }
 
+    /// 人工解除模型弃用状态(2026-09-15):复位健康簿,模型恢复可用。
+    pub(crate) fn reset_model_health(&self, group_id: &str, model_id: &str) {
+        let key = format!("{group_id}/{model_id}");
+        let mut health = self.0.health.lock_ok();
+        if let Some(h) = health.get_mut(&key) {
+            h.reset_abandoned();
+        }
+    }
+
     pub(crate) fn push_log(&self, entry: LogEntry) {
         let group_id = entry.group_id.clone();
         let ok = entry.ok;
@@ -1058,21 +1067,28 @@ pub fn reload(app: &AppHandle) {
     spawn_latency_probe(host.clone(), &snapshot);
 }
 
-/// 探测间隔(秒)。太短浪费上游配额;太长延迟变化反应慢。
-const PROBE_INTERVAL_SECS: u64 = 60;
+/// 正常模型探测间隔(秒)。
+const PROBE_INTERVAL_NORMAL_SECS: u64 = 30;
+/// 异常模型探测间隔(秒)——给故障模型更多恢复时间。
+const PROBE_INTERVAL_DEGRADED_SECS: u64 = 120;
+/// 连续失败多少次后永久弃用(不再自动探测)。
+use sched::ABANDON_THRESHOLD;
 
 /// fastest 模式后台探测线程(2026-09-14):遍历所有 strategy=fastest 的组,
 /// 对每个候选**并行**发 call_buffered 真实请求,记录延迟 + 写日志。
-/// 探测超时/失败的模型延迟记为 u64::MAX,日志标记失败。
+/// 正常模型 30s 探测一次,异常模型 2min 探测一次;
+/// 连续失败超过 10 次(ABANDON_THRESHOLD)永久弃用,不再探测,需人工解除。
 fn spawn_latency_probe(host: GatewayHost, snapshot: &RuntimeSnapshot) {
     let has_fastest = snapshot.groups.iter().any(|g| g.group.effective_strategy() == STRATEGY_FASTEST);
     if !has_fastest {
         return;
     }
     tauri::async_runtime::spawn(async move {
+        // 记录每个模型下次探测时间(key = group_id/model_id)
+        let mut next_probe: HashMap<String, u64> = HashMap::new();
         loop {
+            let now = now_ms();
             let snap = host.snapshot();
-            // 收集所有 fastest 组的候选,并行探测
             let mut tasks: Vec<_> = vec![];
             for rg in &snap.groups {
                 if rg.group.effective_strategy() != STRATEGY_FASTEST {
@@ -1086,12 +1102,26 @@ fn spawn_latency_probe(host: GatewayHost, snapshot: &RuntimeSnapshot) {
                     if cand.unavailable.is_some() {
                         continue;
                     }
+                    let key = format!("{}/{}", rg.group.id, cand.id);
+                    // 检查健康状态:abandoned 跳过,degraded 用更长间隔
+                    let health_guard = host.health_map();
+                    let h = health_guard.get(&key).copied();
+                    drop(health_guard);
+                    if h.map(|h| h.abandoned).unwrap_or(false) {
+                        continue; // 永久弃用,跳过
+                    }
+                    // 检查是否到了探测时间
+                    let next = next_probe.get(&key).copied().unwrap_or(0);
+                    if now < next {
+                        continue; // 还没到探测时间
+                    }
                     let host = host.clone();
                     let cand = cand.clone();
                     let ctx = ctx.clone();
                     let client = client.clone();
                     let group_id = group_id.clone();
                     let group_name = group_name.clone();
+                    let key_clone = key.clone();
                     tasks.push(async move {
                         let body = serde_json::json!({
                             "model": &cand.model,
@@ -1100,49 +1130,44 @@ fn spawn_latency_probe(host: GatewayHost, snapshot: &RuntimeSnapshot) {
                         });
                         let timeout = std::time::Duration::from_secs(15);
                         let started = std::time::Instant::now();
-                        // 写 pending 日志(log_enabled=false 时跳过)
                         if rg.group.log_enabled {
                             host.push_log(LogEntry {
-                            ts_ms: now_ms(),
-                            group_id: group_id.clone(),
-                            group_name: group_name.clone(),
-                            stream: false,
-                            ok: false,
-                            status: None,
-                            latency_ms: 0,
-                            model: cand.model.clone(),
-                            attempts: 0,
-                            prompt_tokens: None,
-                            completion_tokens: None,
-                            error: None,
-                            request_content: Some("[fastest 探测]".to_string()),
-                            response_content: None,
-                            pending: true,
-                        });
+                                ts_ms: now_ms(),
+                                group_id: group_id.clone(),
+                                group_name: group_name.clone(),
+                                stream: false, ok: false, status: None,
+                                latency_ms: 0, model: cand.model.clone(),
+                                attempts: 0, prompt_tokens: None,
+                                completion_tokens: None, error: None,
+                                request_content: Some("[fastest 探测]".to_string()),
+                                response_content: None, pending: true,
+                            });
                         }
                         let result = tokio::time::timeout(timeout, {
                             let client = client.clone();
                             let cand = cand.clone();
                             let body = body.clone();
                             let ctx = ctx.clone();
-                            async move {
-                                upstream::call_buffered(&client, &cand, &body, &ctx, timeout).await
-                            }
+                            async move { upstream::call_buffered(&client, &cand, &body, &ctx, timeout).await }
                         }).await;
                         let elapsed = started.elapsed().as_millis() as u64;
+                        let is_fail;
                         match result {
                             Err(_) => {
+                                is_fail = true;
                                 host.update_pending_for_model(&cand.model, false, Some(408), elapsed,
                                     Some(format!("fastest 探测超时")));
                                 host.record_latency(&group_id, &cand.id, u64::MAX);
                                 host.record_attempt(&group_id, &cand.id, false);
                             }
                             Ok(Ok(_)) => {
+                                is_fail = false;
                                 host.update_pending_for_model(&cand.model, true, Some(200), elapsed, None);
                                 host.record_latency(&group_id, &cand.id, elapsed);
                                 host.record_attempt(&group_id, &cand.id, true);
                             }
                             Ok(Err(e)) => {
+                                is_fail = true;
                                 let status = e.status().unwrap_or(502);
                                 host.update_pending_for_model(&cand.model, false, Some(status), elapsed,
                                     Some(e.message()));
@@ -1150,13 +1175,26 @@ fn spawn_latency_probe(host: GatewayHost, snapshot: &RuntimeSnapshot) {
                                 host.record_attempt(&group_id, &cand.id, false);
                             }
                         }
+                        // 返回 (key, is_fail) 供主循环设置下次探测时间
+                        (key_clone, is_fail)
                     });
                 }
             }
             if !tasks.is_empty() {
-                futures_util::future::join_all(tasks).await;
+                let results = futures_util::future::join_all(tasks).await;
+                // 根据探测结果设置下次探测时间:
+                // 成功 → 30s 后;失败 → 120s 后
+                for (key, is_fail) in results {
+                    let interval = if is_fail { PROBE_INTERVAL_DEGRADED_SECS } else { PROBE_INTERVAL_NORMAL_SECS };
+                    next_probe.insert(key, now_ms() + interval * 1000);
+                }
+            } else {
+                // 没有任务(全弃用或未到时间)→ 等 5s 再检查
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                continue;
             }
-            tokio::time::sleep(std::time::Duration::from_secs(PROBE_INTERVAL_SECS)).await;
+            // 短暂睡眠后进入下一轮检查(可能有模型到了探测时间)
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         }
     });
 }
@@ -1625,6 +1663,15 @@ pub fn gateway_save_vendors(app: AppHandle, vendors: Vec<VendorPreset>) -> Resul
         cfg.gateway.vendor_presets = vendors.clone();
     })?;
     Ok(vendors)
+}
+
+/// 人工解除模型弃用状态(2026-09-15):连续失败超阈值被永久弃用后,
+/// 用户确认问题已修复可手动解除,模型恢复可用并重新探测。
+#[tauri::command]
+pub fn gateway_reset_model_health(app: AppHandle, group_id: String, model_id: String) -> Result<(), String> {
+    let host = app.state::<GatewayHost>();
+    host.reset_model_health(&group_id, &model_id);
+    Ok(())
 }
 
 #[cfg(test)]

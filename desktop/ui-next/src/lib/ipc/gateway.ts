@@ -36,7 +36,7 @@ export interface ModelGroup {
   models: GroupModel[];
 }
 
-export type HealthState = "healthy" | "degraded" | "open" | "probing";
+export type HealthState = "healthy" | "degraded" | "open" | "probing" | "abandoned";
 
 /** 运行态下带健康注记的模型条目(gateway_status 返回)。 */
 export interface GroupModelStatus extends GroupModel {
@@ -212,6 +212,12 @@ export interface VendorPreset {
 /** 保存厂商预设列表(全量替换)。返回含新生成 id 的归一化列表。 */
 export async function gatewaySaveVendors(vendors: VendorPreset[]): Promise<VendorPreset[]> {
   return invoke<VendorPreset[]>("gateway_save_vendors", { vendors });
+}
+
+/** 人工解除模型弃用状态(2026-09-15):连续失败超阈值被永久弃用后,
+ * 用户确认问题已修复可手动解除,模型恢复可用。 */
+export async function gatewayResetModelHealth(groupId: string, modelId: string): Promise<void> {
+  return invoke<void>("gateway_reset_model_health", { groupId, modelId });
 }
 
 /** 逐模型探测延迟:对组内每个候选并行 ping,返回各模型延迟(毫秒)。

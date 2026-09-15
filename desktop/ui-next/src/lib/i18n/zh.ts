@@ -441,6 +441,8 @@ export const zh = {
   "gateway.health.degraded": "波动",
   "gateway.health.open": "熔断中",
   "gateway.health.probing": "探测中",
+  "gateway.health.abandoned": "已弃用",
+  "settings.gateway.health.reset": "解除弃用",
   "gateway.counters.total": "请求",
   "gateway.counters.ok": "成功",
   "gateway.counters.fail": "失败",

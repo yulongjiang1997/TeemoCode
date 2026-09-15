@@ -15,6 +15,7 @@ import {
   gatewayLog,
   gatewayProbeGroup,
   gatewayRegenKey,
+  gatewayResetModelHealth,
   gatewaySaveGroup,
   gatewayStatus,
   gatewayUpdateSettings,
@@ -38,6 +39,7 @@ const HEALTH_BADGE: Record<string, string> = {
   degraded: "badge-warning",
   open: "badge-error",
   probing: "badge-info",
+  abandoned: "badge-error",
 };
 
 
@@ -835,6 +837,18 @@ export function GatewaySection() {
                           <span className="text-base-content/40">w{m.weight}</span>
                           {!m.enabled && <span className="badge badge-ghost badge-xs">{t("settings.gateway.group.disable")}</span>}
                           {m.unavailable && <span className="text-error">{m.unavailable}</span>}
+                          {/* 永久弃用模型:显示「解除」按钮(2026-09-15) */}
+                          {m.health === "abandoned" && (
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-xs text-warning"
+                              onClick={() => {
+                                gatewayResetModelHealth(g.id, m.id).then(() => refresh());
+                              }}
+                            >
+                              {t("settings.gateway.health.reset")}
+                            </button>
+                          )}
                           {/* 延迟数值:手动探测优先,否则用 status 里的后台延迟(fastest 模式) */}
                           {(() => {
                             const probe = probeResult[g.id]?.[m.id];

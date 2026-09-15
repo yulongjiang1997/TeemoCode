@@ -63,6 +63,7 @@
             "allow-gateway-test-group",
             "allow-gateway-probe-group",
             "allow-gateway-save-vendors",
+            "allow-gateway-reset-model-health",
             "allow-gateway-update-settings",
             "allow-get-config",
             "allow-git-import",

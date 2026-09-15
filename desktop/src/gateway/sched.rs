@@ -15,16 +15,21 @@
 use super::ResolvedCandidate;
 use std::collections::HashMap;
 
-/// 连续失败多少次后开断。
+/// 连续失败多少次后开断(冷却)。
 pub const FAILURE_THRESHOLD: u32 = 3;
 /// 开断持续时长(毫秒)。
 pub const COOLDOWN_MS: u64 = 30_000;
+/// 连续失败多少次后**永久弃用**(需人工解除)。
+pub const ABANDON_THRESHOLD: u32 = 10;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ModelHealth {
     pub consecutive_failures: u32,
     /// 最近一次开断的时刻(毫秒);None = 未开断。
     pub opened_at_ms: Option<u64>,
+    /// 永久弃用(2026-09-15):连续失败超过 ABANDON_THRESHOLD 后标记,
+    /// 不再自动探测/调度,需人工解除(reset_abandoned)。
+    pub abandoned: bool,
 }
 
 impl ModelHealth {
@@ -38,9 +43,21 @@ impl ModelHealth {
         if self.consecutive_failures >= FAILURE_THRESHOLD {
             self.opened_at_ms = Some(now_ms);
         }
+        // 连续失败超过阈值 → 永久弃用
+        if self.consecutive_failures >= ABANDON_THRESHOLD {
+            self.abandoned = true;
+        }
+    }
+
+    /// 人工解除弃用状态(2026-09-15):复位健康簿。
+    pub fn reset_abandoned(&mut self) {
+        *self = ModelHealth::default();
     }
 
     pub fn state(&self, now_ms: u64) -> HealthState {
+        if self.abandoned {
+            return HealthState::Abandoned;
+        }
         if self.consecutive_failures == 0 {
             return HealthState::Healthy;
         }
@@ -56,6 +73,10 @@ impl ModelHealth {
     /// 调度可见性:Open(冷却中)不可用;Probing(冷却期满半开)放行下一次
     /// 尝试——并发的多个探测都会放行,探测代价由请求方自理,不做单探针闸。
     pub fn is_available(&self, now_ms: u64) -> bool {
+        // 永久弃用的模型不可用(需人工解除)
+        if self.abandoned {
+            return false;
+        }
         !matches!(self.state(now_ms), HealthState::Open)
     }
 }
@@ -66,6 +87,8 @@ pub enum HealthState {
     Degraded,
     Open,
     Probing,
+    /// 永久弃用(连续失败超阈值,需人工解除)。
+    Abandoned,
 }
 
 impl HealthState {
@@ -75,6 +98,7 @@ impl HealthState {
             HealthState::Degraded => "degraded",
             HealthState::Open => "open",
             HealthState::Probing => "probing",
+            HealthState::Abandoned => "abandoned",
         }
     }
 }
