@@ -864,15 +864,23 @@ export function ModelsSection({
         <VendorImportDialog
           vendors={vendorPresets}
           onClose={() => setImportFromVendor(false)}
-          onConfirm={(models) => {
-            // 厂商导入的模型是自定义条目(provider/base_url/api_key 已填好),
-            // 转成 HostModel 格式追加到 draft.models
-            const newModels = models.map((m) => ({
+          onConfirm={(models, preset) => {
+            // 厂商导入的模型是自定义条目,预设参数(context_window/max_output/
+            // vision/think)填入每个模型;think 超最高钳到 max
+            const thinkClamp = (t?: string): string => {
+              const valid = ["", "off", "low", "medium", "high", "max"];
+              return valid.includes(t ?? "") ? (t ?? "") : "max";
+            };
+            const newModels: HostModel[] = models.map((m) => ({
               name: m.alias || m.model,
               provider: m.provider,
               base_url: m.base_url,
               api_key: m.api_key,
               model: m.model,
+              context_window: preset?.context_window || undefined,
+              max_output: preset?.max_output || undefined,
+              vision: preset?.vision || undefined,
+              think: thinkClamp(preset?.think),
             }));
             onDraft((d) => ({ ...d, models: [...d.models, ...newModels] }));
             setImportFromVendor(false);
