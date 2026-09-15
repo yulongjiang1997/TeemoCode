@@ -12,9 +12,11 @@
 // 条目派生的话,一个模型都没有的新装用户恰恰看不到该去哪里同步。会员组仍
 // 只在有条目时出现(引导在账号页卡片,不在这里堆空态)。
 import { IconChevronDown, IconEye, IconEyeOff, IconPlus, IconRefresh, IconPlugConnected } from "@tabler/icons-react";
-import { useState } from "react";
-import { fetchModelIds, testModel } from "@/lib/ipc/config";
+import { useEffect, useState } from "react";
+import { fetchModelIds, getConfig, testModel } from "@/lib/ipc/config";
 import { readSyncedExcluded, writeSyncedExcluded } from "@/lib/util/prefs";
+import type { VendorPreset } from "@/lib/ipc/gateway";
+import { VendorImportDialog } from "@/features/gateway/VendorImportDialog";
 
 import { useI18n } from "@/lib/i18n";
 import type { HostModel } from "@/lib/ipc/config";
@@ -72,6 +74,16 @@ export function ModelsSection({
   const [revealedKeys, setRevealedKeys] = useState<ReadonlySet<string>>(new Set());
   // 组折叠(旧工程 Section 折叠开关的等价物):默认全展开,点组头收起
   const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(new Set());
+  /** 厂商预设(2026-09-15):从 config.json 加载,供从厂商导入按钮使用 */
+  const [vendorPresets, setVendorPresets] = useState<VendorPreset[]>([]);
+  /** 从厂商导入弹窗 */
+  const [importFromVendor, setImportFromVendor] = useState(false);
+
+  useEffect(() => {
+    getConfig()
+      .then((cfg) => setVendorPresets(cfg?.gateway?.vendor_presets ?? []))
+      .catch(() => {});
+  }, []);
   const toggleGroup = (key: string) =>
     setCollapsedGroups((prev) => {
       const next = new Set(prev);
@@ -830,11 +842,43 @@ export function ModelsSection({
           </div>
         );
       })}
-      {/* 「添加模型」恒在(自定义组恒在,空态也要有落点),不再随条目数显隐 */}
-      <button type="button" className="btn btn-sm btn-outline w-fit" onClick={add}>
-        <IconPlus size={14} stroke={2} aria-hidden />
-        {t("settings.models.add")}
-      </button>
+      <div className="flex items-center gap-2">
+        <button type="button" className="btn btn-sm btn-outline w-fit" onClick={add}>
+          <IconPlus size={14} stroke={2} aria-hidden />
+          {t("settings.models.add")}
+        </button>
+        {vendorPresets.length > 0 && (
+          <button
+            type="button"
+            className="btn btn-sm btn-outline w-fit"
+            onClick={() => setImportFromVendor(true)}
+          >
+            <IconPlus size={14} stroke={2} aria-hidden />
+            {t("settings.gateway.import.fromVendor")}
+          </button>
+        )}
+      </div>
+
+      {/* 从厂商导入弹窗(2026-09-15) */}
+      {importFromVendor && (
+        <VendorImportDialog
+          vendors={vendorPresets}
+          onClose={() => setImportFromVendor(false)}
+          onConfirm={(models) => {
+            // 厂商导入的模型是自定义条目(provider/base_url/api_key 已填好),
+            // 转成 HostModel 格式追加到 draft.models
+            const newModels = models.map((m) => ({
+              name: m.alias || m.model,
+              provider: m.provider,
+              base_url: m.base_url,
+              api_key: m.api_key,
+              model: m.model,
+            }));
+            onDraft((d) => ({ ...d, models: [...d.models, ...newModels] }));
+            setImportFromVendor(false);
+          }}
+        />
+      )}
 
       {/* 厂商级模型拉取弹窗(2026-09-14):搜索 + 勾选 + 批量添加 */}
       {vendorModal && (() => {
