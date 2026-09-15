@@ -804,6 +804,20 @@ export function ModelsSection({
                                       <span className={`min-w-0 truncate text-xs ${m.locked ? "text-base-content/40" : ""}`}>{m.name}</span>
                                       <span className="min-w-0 truncate font-mono text-2xs text-base-content/40">{m.model}</span>
                                       <span className="badge badge-ghost badge-xs shrink-0">{m.provider}</span>
+                                      {/* 折叠态:测试结果徽标(与 row() 同款) */}
+                                      {testState[i]?.running && (
+                                        <span className="loading loading-spinner loading-xs shrink-0 text-info" aria-label={t("settings.models.test.running")} />
+                                      )}
+                                      {!testState[i]?.running && testState[i]?.result?.ok === true && (
+                                        <span className="badge badge-success badge-soft badge-xs shrink-0" title={t("settings.models.test.passHint", { ms: (testState[i]!.result as { ms: number }).ms })}>
+                                          ✓ {t("settings.models.test.pass", { ms: (testState[i]!.result as { ms: number }).ms })}
+                                        </span>
+                                      )}
+                                      {!testState[i]?.running && testState[i]?.result?.ok === false && (
+                                        <span className="badge badge-error badge-soft badge-xs shrink-0 cursor-help" title={(testState[i]!.result as { error: string }).error}>
+                                          ✕ {t("settings.models.test.fail")}
+                                        </span>
+                                      )}
                                     </button>
                                   </div>
                                   {open && (
