@@ -54,6 +54,7 @@ function emptyGroup(): ModelGroup {
     temperature: null,
     system_prompt: "",
     timeout_seconds: 120,
+    log_enabled: true,
     models: [],
   };
 }
@@ -374,6 +375,16 @@ export function GatewaySection() {
               value={edit.timeout_seconds}
               min={1}
               onChange={(e) => setEdit({ ...edit, timeout_seconds: Number(e.target.value) || 0 })}
+            />
+          </label>
+          {/* 探测日志开关(2026-09-14) */}
+          <label className="flex items-center gap-2 text-2xs">
+            {t("settings.gateway.form.logEnabled")}
+            <input
+              type="checkbox"
+              className="toggle toggle-xs"
+              checked={edit.log_enabled !== false}
+              onChange={(e) => setEdit({ ...edit, log_enabled: e.target.checked })}
             />
           </label>
         </div>

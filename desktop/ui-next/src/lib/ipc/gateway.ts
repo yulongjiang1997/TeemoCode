@@ -31,6 +31,8 @@ export interface ModelGroup {
   temperature: number | null;
   system_prompt: string;
   timeout_seconds: number;
+  /** 是否记录探测/调用日志(2026-09-14) */
+  log_enabled?: boolean;
   models: GroupModel[];
 }
 

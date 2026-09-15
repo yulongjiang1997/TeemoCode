@@ -464,6 +464,7 @@ export const en: Record<MessageKey, string> = {
   "settings.gateway.form.temperature": "Default temperature",
   "settings.gateway.form.temperaturePlaceholder": "Unset",
   "settings.gateway.form.timeout": "Per-attempt timeout (s)",
+  "settings.gateway.form.logEnabled": "Log probe results",
   "settings.gateway.form.systemPrompt": "Group system prompt",
   "settings.gateway.form.systemPromptPlaceholder": "Optional; prepended to every request when set",
   "settings.gateway.form.modelsTitle": "Models in group (scheduled by weight)",

@@ -548,6 +548,16 @@ export function App() {
       setCloudTask(null);
       setCloudReload((n) => n + 1);
     });
+    // 窗口焦点切换(2026-09-14):失焦时移除 data-tauri-drag-region,
+    // 聚焦时恢复——修复窗口在后台被遮挡时点击标题栏变成拖动而非聚焦的问题。
+    const offFocus = listen<boolean>("window-focus-changed", (focused) => {
+      const els = document.querySelectorAll<HTMLElement>("[data-tauri-drag-region]");
+      if (focused) {
+        els.forEach((el) => el.setAttribute("data-tauri-drag-region", ""));
+      } else {
+        els.forEach((el) => el.removeAttribute("data-tauri-drag-region"));
+      }
+    });
     refresh();
     // D5 首启向导:桌面壳里模型清单为空 → 自动打开设置页。只在挂载时判一次:
     // 用户关掉设置页不再纠缠,配好模型后自然不会再触发。
@@ -612,6 +622,7 @@ export function App() {
       offMcpReloaded();
       offMcpTimeout();
       offMcTransport();
+      offFocus();
       shellTimers.current.forEach(window.clearTimeout);
       shellTimers.current.clear();
       noticeTimers.current.forEach(window.clearTimeout);

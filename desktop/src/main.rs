@@ -2072,6 +2072,14 @@ fn main() {
             if matches!(event, WindowEvent::Resized(_)) {
                 update_main_window_runtime(window.app_handle(), window);
             }
+            // 窗口失焦时发事件,前端据此移除 data-tauri-drag-region(2026-09-14:
+            // 修复窗口在后台被遮挡时点击标题栏变成拖动而非聚焦前台的问题)。
+            // Tauri 的 drag-region 在 Windows 上不检查焦点,失焦状态下点击仍触发拖动。
+            if let WindowEvent::Focused(focused) = event {
+                if window.label() == "main" {
+                    let _ = window.app_handle().emit("window-focus-changed", *focused);
+                }
+            }
             // 主窗口:引擎在跑且托盘可用时关窗只隐藏(任务继续跑);引擎不在位
             // (崩溃/退避中/启动失败)则放行销毁——那时没有任务要护着,留一个
             // 隐藏的陈旧页面反而挡住重建。**注意关窗不等于退出进程**:

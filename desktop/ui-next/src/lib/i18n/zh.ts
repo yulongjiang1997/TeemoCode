@@ -477,6 +477,7 @@ export const zh = {
   "settings.gateway.form.temperature": "默认温度",
   "settings.gateway.form.temperaturePlaceholder": "不指定",
   "settings.gateway.form.timeout": "单次尝试超时(秒)",
+  "settings.gateway.form.logEnabled": "记录探测日志",
   "settings.gateway.form.systemPrompt": "组级系统提示词",
   "settings.gateway.form.systemPromptPlaceholder": "可选;非空时前置到每个请求",
   "settings.gateway.form.modelsTitle": "组内模型(按权重调度)",

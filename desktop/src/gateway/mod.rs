@@ -168,6 +168,9 @@ pub struct ModelGroup {
     /// 单次上游尝试的超时(秒),含连接与(非流式)完整应答。
     #[serde(default = "default_timeout_seconds")]
     pub timeout_seconds: u64,
+    /// 是否记录探测/调用日志(2026-09-14);false 时探测不写日志。
+    #[serde(default = "default_true")]
+    pub log_enabled: bool,
     #[serde(default)]
     pub models: Vec<GroupModel>,
 }
@@ -1085,8 +1088,9 @@ fn spawn_latency_probe(host: GatewayHost, snapshot: &RuntimeSnapshot) {
                         });
                         let timeout = std::time::Duration::from_secs(15);
                         let started = std::time::Instant::now();
-                        // 写 pending 日志
-                        host.push_log(LogEntry {
+                        // 写 pending 日志(log_enabled=false 时跳过)
+                        if rg.group.log_enabled {
+                            host.push_log(LogEntry {
                             ts_ms: now_ms(),
                             group_id: group_id.clone(),
                             group_name: group_name.clone(),
@@ -1103,6 +1107,7 @@ fn spawn_latency_probe(host: GatewayHost, snapshot: &RuntimeSnapshot) {
                             response_content: None,
                             pending: true,
                         });
+                        }
                         let result = tokio::time::timeout(timeout, {
                             let client = client.clone();
                             let cand = cand.clone();
@@ -1240,8 +1245,9 @@ pub async fn gateway_probe_group(app: AppHandle, id: String, timeout_ms: Option<
                 "max_tokens": 1,
             });
             let started = std::time::Instant::now();
-            // 写 pending 日志(model = cand.model,可区分是哪个模型的请求)
-            host.push_log(LogEntry {
+            // 写 pending 日志(log_enabled=false 时跳过)
+            if group.group.log_enabled {
+                host.push_log(LogEntry {
                 ts_ms: now_ms(),
                 group_id: group_id.clone(),
                 group_name: group_name.clone(),
@@ -1258,6 +1264,7 @@ pub async fn gateway_probe_group(app: AppHandle, id: String, timeout_ms: Option<
                 response_content: None,
                 pending: true,
             });
+            }
             // 用 tokio::time::timeout 硬超时包裹 call_buffered
             let result = tokio::time::timeout(
                 probe_timeout,
