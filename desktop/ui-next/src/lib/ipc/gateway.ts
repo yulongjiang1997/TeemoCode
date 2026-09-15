@@ -199,6 +199,14 @@ export interface VendorPreset {
   provider: string;
   base_url: string;
   api_key: string;
+  /** 上下文窗口(token);0 = 缺省 */
+  context_window?: number;
+  /** 最大输出(token);0 = 缺省 */
+  max_output?: number;
+  /** 是否支持图片输入 */
+  vision?: boolean;
+  /** 思考模式:off | low | medium | high | max;空串 = 缺省 */
+  think?: string;
 }
 
 /** 保存厂商预设列表(全量替换)。返回含新生成 id 的归一化列表。 */

@@ -6,7 +6,7 @@ import { useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
 import { fetchModelIds } from "@/lib/ipc/config";
-import type { VendorPreset, GroupModel } from "@/lib/ipc/gateway";
+import type { VendorPreset, GroupModel, ModelGroup } from "@/lib/ipc/gateway";
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -23,13 +23,22 @@ function emptyModel(preset: VendorPreset): GroupModel {
   };
 }
 
+/** 从厂商预设提取组级参数(2026-09-15):导入时填入新组的 context_window 等。 */
+export function presetGroupParams(preset: VendorPreset): Partial<ModelGroup> {
+  return {
+    context_window: preset.context_window || 0,
+    max_output: preset.max_output || 0,
+    system_prompt: "",
+  };
+}
+
 export function VendorImportDialog({
   vendors,
   onConfirm,
   onClose,
 }: {
   vendors: VendorPreset[];
-  onConfirm: (models: GroupModel[]) => void;
+  onConfirm: (models: GroupModel[], preset?: VendorPreset) => void;
   onClose: () => void;
 }) {
   const { t } = useI18n();
@@ -79,7 +88,7 @@ export function VendorImportDialog({
   const confirm = () => {
     if (!selectedPreset) return;
     const models = Array.from(checked).map((id) => ({ ...emptyModel(selectedPreset), model: id }));
-    onConfirm(models);
+    onConfirm(models, selectedPreset);
   };
 
   return (

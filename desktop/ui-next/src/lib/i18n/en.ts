@@ -318,11 +318,13 @@ export const en: Record<MessageKey, string> = {
   "settings.models.vision.hint":
     "The model accepts image input (vision). When unchecked, images in a conversation are passed as file paths and the model never sees their content.",
   "settings.models.think": "Thinking effort",
+  "settings.models.think.label": "Thinking mode",
   "settings.models.think.default": "Default (low)",
   "settings.models.think.off": "Off",
   "settings.models.think.low": "Low",
   "settings.models.think.medium": "Medium",
   "settings.models.think.high": "High",
+  "settings.models.think.max": "Max",
   "settings.models.default": "Default",
   "settings.models.lockedBadge": "Locked",
   "settings.models.sum.ctx": "ctx {n}",

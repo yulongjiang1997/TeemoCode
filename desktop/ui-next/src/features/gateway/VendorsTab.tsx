@@ -13,7 +13,7 @@ import { gatewaySaveVendors, type VendorPreset } from "@/lib/ipc/gateway";
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 function emptyPreset(): VendorPreset {
-  return { id: "", name: "", provider: "openai", base_url: "", api_key: "" };
+  return { id: "", name: "", provider: "openai", base_url: "", api_key: "", context_window: 0, max_output: 0, vision: false, think: "" };
 }
 
 export function VendorsTab() {
@@ -184,6 +184,53 @@ export function VendorsTab() {
                           onChange={(e) => update(idx, { api_key: e.target.value })}
                         />
                       </label>
+                      {/* 预设上下文参数(2026-09-15):导入模型时默认填入 */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="flex flex-col gap-1 text-2xs">
+                          {t("settings.gateway.form.contextWindow")}
+                          <input
+                            type="number"
+                            className="input input-xs w-full font-mono"
+                            placeholder="0 = 缺省"
+                            value={v.context_window ?? 0}
+                            onChange={(e) => update(idx, { context_window: Number(e.target.value) || 0 })}
+                          />
+                        </label>
+                        <label className="flex flex-col gap-1 text-2xs">
+                          {t("settings.gateway.form.maxOutput")}
+                          <input
+                            type="number"
+                            className="input input-xs w-full font-mono"
+                            placeholder="0 = 缺省"
+                            value={v.max_output ?? 0}
+                            onChange={(e) => update(idx, { max_output: Number(e.target.value) || 0 })}
+                          />
+                        </label>
+                        <label className="flex items-center gap-2 text-2xs">
+                          {t("settings.models.vision")}
+                          <input
+                            type="checkbox"
+                            className="toggle toggle-xs"
+                            checked={!!v.vision}
+                            onChange={(e) => update(idx, { vision: e.target.checked })}
+                          />
+                        </label>
+                        <label className="flex flex-col gap-1 text-2xs">
+                          {t("settings.models.think.label")}
+                          <select
+                            className="select select-xs w-full"
+                            value={v.think ?? ""}
+                            onChange={(e) => update(idx, { think: e.target.value })}
+                          >
+                            <option value="">{t("settings.models.think.default")}</option>
+                            <option value="off">{t("settings.models.think.off")}</option>
+                            <option value="low">{t("settings.models.think.low")}</option>
+                            <option value="medium">{t("settings.models.think.medium")}</option>
+                            <option value="high">{t("settings.models.think.high")}</option>
+                            <option value="max">{t("settings.models.think.max")}</option>
+                          </select>
+                        </label>
+                      </div>
                     </div>
                     {/* 测试获取模型列表 */}
                     <div className="flex items-center gap-2">

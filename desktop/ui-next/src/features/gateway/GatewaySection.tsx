@@ -428,15 +428,19 @@ export function GatewaySection() {
                 <label className="flex items-center gap-1 text-2xs">
                   {t("settings.gateway.model.weight")}
                   <input
-                    type="number"
+                    type="text"
                     className="input input-xs w-16 font-mono"
-                    min={1}
-                    max={100}
                     value={m.weight}
                     title={t("settings.gateway.model.weightHint")}
                     onChange={(e) => {
                       const models = [...edit.models];
-                      models[idx] = { ...m, weight: Number(e.target.value) || 1 };
+                      models[idx] = { ...m, weight: e.target.value as unknown as number };
+                      setEdit({ ...edit, models });
+                    }}
+                    onBlur={(e) => {
+                      const n = parseInt(e.target.value, 10);
+                      const models = [...edit.models];
+                      models[idx] = { ...m, weight: Number.isFinite(n) && n > 0 ? n : 1 };
                       setEdit({ ...edit, models });
                     }}
                   />
@@ -990,11 +994,16 @@ export function GatewaySection() {
         <VendorImportDialog
           vendors={vendorPresets}
           onClose={() => setImportDialog(null)}
-          onConfirm={(models) => {
+          onConfirm={(models, preset) => {
             if (importDialog === "create") {
-              // 新建组:填入模型 + 展开编辑表单
+              // 新建组:填入模型 + 预设参数 + 展开编辑表单
               setExpanded(null);
-              setEdit({ ...emptyGroup(), models });
+              const g = { ...emptyGroup(), models };
+              if (preset) {
+                if (preset.context_window) g.context_window = preset.context_window;
+                if (preset.max_output) g.max_output = preset.max_output;
+              }
+              setEdit(g);
             } else if (edit) {
               // 编辑组:追加模型
               setEdit({ ...edit, models: [...edit.models, ...models] });

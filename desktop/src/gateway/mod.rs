@@ -60,7 +60,7 @@ pub const DEFAULT_CONTEXT_WINDOW: i64 = 128_000;
 pub const DEFAULT_MAX_OUTPUT: i64 = 32_768;
 pub const DEFAULT_TIMEOUT_SECONDS: u64 = 120;
 /// 单组模型条目上限(权重顺序列表,再多调度意义与可读性都崩)。
-pub const MAX_GROUP_MODELS: usize = 16;
+pub const MAX_GROUP_MODELS: usize = 256;
 /// 模型组数量上限。
 pub const MAX_GROUPS: usize = 32;
 pub const MAX_NAME_LEN: usize = 64;
@@ -128,6 +128,18 @@ pub struct VendorPreset {
     pub base_url: String,
     /// API Key(明文存 config.json,与模型组同款)。
     pub api_key: String,
+    /// 上下文窗口(token);0 = 缺省。
+    #[serde(default)]
+    pub context_window: u64,
+    /// 最大输出(token);0 = 缺省。
+    #[serde(default)]
+    pub max_output: u64,
+    /// 是否支持图片输入。
+    #[serde(default)]
+    pub vision: bool,
+    /// 思考模式:off | low | medium | high | max;空串 = 缺省。
+    #[serde(default)]
+    pub think: String,
 }
 
 impl Default for GatewaySettings {
