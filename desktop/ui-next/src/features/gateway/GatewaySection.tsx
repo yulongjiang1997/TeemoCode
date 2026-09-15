@@ -84,6 +84,8 @@ function hhmmss(tsMs: number): string {
 export function GatewaySection() {
   const { t } = useI18n();
   const [status, setStatus] = useState<GatewayStatus | null>(null);
+  /** 是否有弃用模型(2026-09-15):控制「解除所有弃用」按钮显示 */
+  const hasAbandoned = (status?.groups ?? []).some((g) => g.models.some((m) => m.health === "abandoned"));
   const [loadError, setLoadError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -686,6 +688,23 @@ export function GatewaySection() {
       <div className="mt-1 flex w-fit items-center gap-1.5 px-1 text-xs font-bold text-base-content/60">
         {t("settings.gateway.groups.title")}
       </div>
+      {/* 解除所有弃用模型(2026-09-15) */}
+      {hasAbandoned && (
+        <button
+          type="button"
+          className="btn btn-ghost btn-xs w-fit text-warning"
+          onClick={() => {
+            const groups = status?.groups ?? [];
+            Promise.all(
+              groups.flatMap((g) =>
+                g.models.filter((m) => m.health === "abandoned").map((m) => gatewayResetModelHealth(g.id, m.id))
+              )
+            ).then(() => refresh());
+          }}
+        >
+          {t("settings.gateway.health.resetAll")}
+        </button>
+      )}
       {(status?.groups.length ?? 0) === 0 && (
         <div className="rounded-box border border-dashed border-base-300 px-4 py-6">
           <p className="text-center text-xs leading-relaxed text-base-content/50">{t("settings.gateway.groups.empty")}</p>

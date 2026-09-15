@@ -443,6 +443,7 @@ export const zh = {
   "gateway.health.probing": "探测中",
   "gateway.health.abandoned": "已弃用",
   "settings.gateway.health.reset": "解除弃用",
+  "settings.gateway.health.resetAll": "解除所有弃用模型",
   "gateway.counters.total": "请求",
   "gateway.counters.ok": "成功",
   "gateway.counters.fail": "失败",

@@ -430,6 +430,7 @@ export const en: Record<MessageKey, string> = {
   "gateway.health.probing": "Probing",
   "gateway.health.abandoned": "Abandoned",
   "settings.gateway.health.reset": "Reset",
+  "settings.gateway.health.resetAll": "Reset all abandoned",
   "gateway.counters.total": "Requests",
   "gateway.counters.ok": "OK",
   "gateway.counters.fail": "Failed",
