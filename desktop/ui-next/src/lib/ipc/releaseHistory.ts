@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.46",
+    notes: "修复模型组编辑时api_key丢失(status_payload遗漏字段);修复模型名称输入框每输入一字符失焦;模型功能厂商分组增加批量删除按钮;厂商导入api_key防御性补全",
+  },
+  {
     version: "0.1.45",
     notes: "探测分级间隔(正常30秒/异常2分钟)+异常10次永久弃用需人工解除;组列表上方增加解除所有弃用按钮;厂商分组折叠态恢复测试结果徽标显示",
   },
