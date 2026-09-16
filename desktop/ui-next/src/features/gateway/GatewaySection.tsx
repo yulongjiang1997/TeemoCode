@@ -772,6 +772,7 @@ export function GatewaySection() {
                       temperature: g.temperature,
                       system_prompt: g.system_prompt,
                       timeout_seconds: g.timeout_seconds,
+                      log_enabled: g.log_enabled,
                       models: g.models.map((m) => ({
                         id: m.id,
                         enabled: m.enabled,

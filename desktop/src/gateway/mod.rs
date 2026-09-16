@@ -1400,7 +1400,7 @@ fn status_payload(host: &GatewayHost) -> serde_json::Value {
                     let latency = lats.get(&key).copied().filter(|&v| v != u64::MAX);
                     serde_json::json!({
                         "id": m.id, "enabled": m.enabled, "weight": m.weight, "alias": m.alias,
-                        "provider": m.provider, "base_url": m.base_url, "model": m.model,
+                        "provider": m.provider, "base_url": m.base_url, "api_key": m.api_key, "model": m.model,
                         "label": cand.map(|c| c.label.clone()).unwrap_or_else(|| m.alias.clone()),
                         "upstream_model": cand.map(|c| c.model.clone()).unwrap_or_default(),
                         "unavailable": cand.and_then(|c| c.unavailable.clone()),
@@ -1415,7 +1415,8 @@ fn status_payload(host: &GatewayHost) -> serde_json::Value {
                 "context_window": rg.group.effective_context_window(),
                 "max_output": rg.group.effective_max_output(),
                 "temperature": rg.group.temperature, "system_prompt": rg.group.system_prompt,
-                "timeout_seconds": rg.group.timeout_seconds, "models": models,
+                "timeout_seconds": rg.group.timeout_seconds, "log_enabled": rg.group.log_enabled,
+                "models": models,
                 "counters": counters.get(&rg.group.id).copied().unwrap_or_default(),
             })
         })
