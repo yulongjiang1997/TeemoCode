@@ -782,7 +782,7 @@ export function ModelsSection({
                             {vg.items.map(({ m, i }) => {
                               const open = expanded === i;
                               return (
-                                <div key={m.name || `row-${i}`}>
+                                <div key={`row-${i}`}>
                                   <div className="flex items-center gap-2 px-3 py-1.5 hover:bg-base-200/40">
                                     <input
                                       type="checkbox"
