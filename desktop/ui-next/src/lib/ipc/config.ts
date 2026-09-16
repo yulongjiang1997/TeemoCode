@@ -10,6 +10,7 @@
 // 浏览器模式语义与旧工程 host.ts 一致:读降级(null / 默认值),写抛
 // 「浏览器模式下配置只读」。
 import { inDesktopShell, invoke, listen } from "./ipc";
+import type { VendorPreset } from "./gateway";
 
 /** 壳配置里的一个模型条目(设置视图编辑,壳原样写盘、内核消费)。 */
 export interface HostModel {
@@ -71,7 +72,7 @@ export interface DesktopConfig {
   gateway?: {
     enabled?: boolean;
     port?: number;
-    vendor_presets?: { id: string; name: string; provider: string; base_url: string; api_key: string }[];
+    vendor_presets?: VendorPreset[];
   };
 }
 

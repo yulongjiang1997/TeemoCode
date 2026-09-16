@@ -1031,15 +1031,22 @@ export function GatewaySection() {
             if (importDialog === "create") {
               // 新建组:填入模型 + 预设参数 + 展开编辑表单
               setExpanded(null);
-              const g = { ...emptyGroup(), models };
+              // 确保 api_key 不丢失(防御性:从 preset 补)
+              const safeModels = preset
+                ? models.map((m) => ({ ...m, api_key: m.api_key || preset.api_key }))
+                : models;
+              const g = { ...emptyGroup(), models: safeModels };
               if (preset) {
                 if (preset.context_window) g.context_window = preset.context_window;
                 if (preset.max_output) g.max_output = preset.max_output;
               }
               setEdit(g);
             } else if (edit) {
-              // 编辑组:追加模型
-              setEdit({ ...edit, models: [...edit.models, ...models] });
+              // 编辑组:追加模型(防御性:从 preset 补 api_key)
+              const safeModels = preset
+                ? models.map((m) => ({ ...m, api_key: m.api_key || preset.api_key }))
+                : models;
+              setEdit({ ...edit, models: [...edit.models, ...safeModels] });
             }
             setImportDialog(null);
           }}

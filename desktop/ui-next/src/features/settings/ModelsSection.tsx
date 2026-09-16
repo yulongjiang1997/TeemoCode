@@ -889,7 +889,7 @@ export function ModelsSection({
               name: m.alias || m.model,
               provider: m.provider,
               base_url: m.base_url,
-              api_key: m.api_key,
+              api_key: m.api_key || preset?.api_key || "",
               model: m.model,
               context_window: preset?.context_window || undefined,
               max_output: preset?.max_output || undefined,
