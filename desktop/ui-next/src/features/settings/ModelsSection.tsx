@@ -11,7 +11,7 @@
 // 与自定义组恒在(空了也出组头 + 引导卡):组是"模型从哪来"的说明位,按现有
 // 条目派生的话,一个模型都没有的新装用户恰恰看不到该去哪里同步。会员组仍
 // 只在有条目时出现(引导在账号页卡片,不在这里堆空态)。
-import { IconChevronDown, IconEye, IconEyeOff, IconPlus, IconRefresh, IconPlugConnected } from "@tabler/icons-react";
+import { IconChevronDown, IconEye, IconEyeOff, IconPlus, IconRefresh, IconPlugConnected, IconTrash } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 import { fetchModelIds, getConfig, testModel } from "@/lib/ipc/config";
 import { readSyncedExcluded, writeSyncedExcluded } from "@/lib/util/prefs";
@@ -775,6 +775,30 @@ export function ModelsSection({
                               <IconPlus size={12} stroke={2} aria-hidden />
                             )}
                             {t("settings.models.add")}
+                          </button>
+                          {/* 删除该厂商下所有模型(2026-09-16) */}
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-xs shrink-0 text-error"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const indices = new Set(vg.items.map(({ i }) => i));
+                              onDraft((d) => ({
+                                ...d,
+                                models: d.models.filter((_, j) => !indices.has(j)),
+                                defaultIdx: (() => {
+                                  // 默认模型被删时重置
+                                  if (indices.has(d.defaultIdx)) return 0;
+                                  // 默认模型在删除组之后,下标前移
+                                  const before = vg.items.filter(({ i }) => i < d.defaultIdx).length;
+                                  return d.defaultIdx - before;
+                                })(),
+                              }));
+                              setExpanded(null);
+                            }}
+                            title={t("settings.models.deleteVendor")}
+                          >
+                            <IconTrash size={12} stroke={2} aria-hidden />
                           </button>
                         </div>
                         {vOpen && (

@@ -342,6 +342,7 @@ export const zh = {
   "settings.models.setDefault": "设为默认",
   "settings.models.duplicate": "复制模型(名称+copy)",
   "settings.models.delete": "删除",
+  "settings.models.deleteVendor": "删除该厂商下所有模型",
   "settings.models.deleteSyncedTip": "删除该同步模型,下次同步不重新拉回",
   "settings.models.deleteLockedTip": "从本地配置移除(解锁后不会自动恢复)",
   "settings.models.deleteMemberTip": "从本地配置移除(会员到期后不会自动恢复)",
