@@ -115,6 +115,20 @@ export function fetchModelIds(provider: string, baseUrl: string, apiKey: string)
   return invoke<string[]>("models_fetch", { provider, baseUrl, apiKey });
 }
 
+/** models.dev 模型参数自动填充(2026-09-16):
+ *  传入 base_url + model_ids,返回每个模型的 context_window/max_output/
+ *  vision/reasoning_effort_values。三级 fallback:models.dev → 厂商预设 → 默认。 */
+export interface ModelDevEntry {
+  context_window: number;
+  max_output: number;
+  vision: boolean;
+  reasoning_effort_values: string[];
+}
+
+export async function modelsDevEnrich(baseUrl: string, modelIds: string[]): Promise<Record<string, ModelDevEntry>> {
+  return invoke<Record<string, ModelDevEntry>>("models_dev_enrich", { baseUrl, modelIds });
+}
+
 /** 模型连通性测试(设置页「测试」):发一次最小对话请求,返回耗时 ms;
  *  失败抛壳侧中文错误(HTTP 状态/网关 message)。 */
 export function testModel(provider: string, baseUrl: string, apiKey: string, model: string): Promise<number> {

@@ -27,6 +27,7 @@ fn main() {
                 "save_config",
                 "pet_recreate",
                 "models_fetch",
+                "models_dev_enrich",
                 "model_test",
                 "reveal_path",
                 "take_ui_intent",

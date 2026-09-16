@@ -1028,16 +1028,20 @@ export function GatewaySection() {
         <VendorImportDialog
           vendors={vendorPresets}
           onClose={() => setImportDialog(null)}
-          onConfirm={(models, preset) => {
+          onConfirm={async (models, preset) => {
             if (importDialog === "create") {
               // 新建组:填入模型 + 预设参数 + 展开编辑表单
               setExpanded(null);
-              // 确保 api_key 不丢失(防御性:从 preset 补)
+              // 三级 fallback:models.dev → 厂商预设 → 默认值
               const safeModels = preset
-                ? models.map((m) => ({ ...m, api_key: m.api_key || preset.api_key }))
+                ? models.map((m) => ({
+                    ...m,
+                    api_key: m.api_key || preset.api_key,
+                  }))
                 : models;
               const g = { ...emptyGroup(), models: safeModels };
               if (preset) {
+                // 组级 context_window/max_output:厂商预设值(models.dev 的是模型级)
                 if (preset.context_window) g.context_window = preset.context_window;
                 if (preset.max_output) g.max_output = preset.max_output;
               }

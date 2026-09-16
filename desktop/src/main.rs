@@ -20,6 +20,7 @@ mod driver;
 mod gateway;
 mod git;
 mod memory;
+mod models_dev;
 mod import_mc;
 #[cfg(target_os = "windows")]
 mod native_pet;
@@ -664,6 +665,15 @@ async fn model_test(provider: String, base_url: String, api_key: String, model: 
         return Err(format!("HTTP {status}{}", if msg.is_empty() { String::new() } else { format!(": {msg}") }));
     }
     Ok(started.elapsed().as_millis() as u64)
+}
+
+/// models.dev 模型参数自动填充(2026-09-16):
+/// 传入 base_url + model_ids,返回每个模型的 context_window/max_output/
+/// vision/reasoning_effort_values。三级 fallback:models.dev → 厂商预设 → 默认。
+#[tauri::command]
+async fn models_dev_enrich(app: AppHandle, base_url: String, model_ids: Vec<String>) -> Result<serde_json::Value, String> {
+    let config_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    models_dev::enrich_models(&config_dir, &base_url, &model_ids).await
 }
 
 /// 保存配置并重启引擎。内容不做业务校验(壳零字段知识):表单校验在设置
@@ -1817,6 +1827,7 @@ fn main() {
             get_config,
             save_config,
             models_fetch,
+            models_dev_enrich,
             model_test,
             reveal_path,
             take_ui_intent,

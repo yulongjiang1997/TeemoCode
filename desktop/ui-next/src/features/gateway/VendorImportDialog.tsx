@@ -5,7 +5,8 @@
 import { useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
-import { fetchModelIds } from "@/lib/ipc/config";
+import { fetchModelIds, modelsDevEnrich } from "@/lib/ipc/config";
+import type { ModelDevEntry } from "@/lib/ipc/config";
 import type { VendorPreset, GroupModel, ModelGroup } from "@/lib/ipc/gateway";
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -38,7 +39,7 @@ export function VendorImportDialog({
   onClose,
 }: {
   vendors: VendorPreset[];
-  onConfirm: (models: GroupModel[], preset?: VendorPreset) => void;
+  onConfirm: (models: GroupModel[], preset?: VendorPreset, devData?: Record<string, ModelDevEntry>) => void;
   onClose: () => void;
 }) {
   const { t } = useI18n();
@@ -85,10 +86,18 @@ export function VendorImportDialog({
     ? modelIds.filter((id) => id.toLowerCase().includes(search.toLowerCase()))
     : modelIds;
 
-  const confirm = () => {
+  const confirm = async () => {
     if (!selectedPreset) return;
-    const models = Array.from(checked).map((id) => ({ ...emptyModel(selectedPreset), model: id }));
-    onConfirm(models, selectedPreset);
+    const ids = Array.from(checked);
+    const models = ids.map((id) => ({ ...emptyModel(selectedPreset), model: id }));
+    // 从 models.dev 拉取模型参数(三级 fallback 的第一级)
+    let devData: Record<string, ModelDevEntry> | undefined;
+    try {
+      devData = await modelsDevEnrich(selectedPreset.base_url, ids);
+    } catch {
+      // 网络不可用时不阻塞导入,后续用厂商预设/默认值替补
+    }
+    onConfirm(models, selectedPreset, devData);
   };
 
   return (

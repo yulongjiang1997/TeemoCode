@@ -14,12 +14,12 @@
 import { IconChevronDown, IconEye, IconEyeOff, IconPlus, IconRefresh, IconPlugConnected, IconTrash } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 import { fetchModelIds, getConfig, testModel } from "@/lib/ipc/config";
+import type { HostModel } from "@/lib/ipc/config";
 import { readSyncedExcluded, writeSyncedExcluded } from "@/lib/util/prefs";
 import type { VendorPreset } from "@/lib/ipc/gateway";
 import { VendorImportDialog } from "@/features/gateway/VendorImportDialog";
 
 import { useI18n } from "@/lib/i18n";
-import type { HostModel } from "@/lib/ipc/config";
 import type { ModelInfo } from "@/lib/ipc/sessions";
 import { groupMemberSections, modelDisplay, modelSourceRank, SOURCE_BAIZHI, SOURCE_MONKEYCODE } from "@/lib/models/modelMenu";
 import { emptyModel, type SettingsDraft } from "./settingsForm";
@@ -902,24 +902,37 @@ export function ModelsSection({
         <VendorImportDialog
           vendors={vendorPresets}
           onClose={() => setImportFromVendor(false)}
-          onConfirm={(models, preset) => {
-            // 厂商导入的模型是自定义条目,预设参数(context_window/max_output/
-            // vision/think)填入每个模型;think 超最高钳到 max
+          onConfirm={async (models, preset, devData) => {
+            // 三级 fallback:models.dev → 厂商预设 → 默认值(undefined)
             const thinkClamp = (t?: string): string => {
               const valid = ["", "off", "low", "medium", "high", "max"];
               return valid.includes(t ?? "") ? (t ?? "") : "max";
             };
-            const newModels: HostModel[] = models.map((m) => ({
-              name: m.alias || m.model,
-              provider: m.provider,
-              base_url: m.base_url,
-              api_key: m.api_key || preset?.api_key || "",
-              model: m.model,
-              context_window: preset?.context_window || undefined,
-              max_output: preset?.max_output || undefined,
-              vision: preset?.vision || undefined,
-              think: thinkClamp(preset?.think),
-            }));
+            const newModels: HostModel[] = models.map((m) => {
+              const dev = devData?.[m.model];
+              // context_window: models.dev > 厂商预设 > undefined
+              const context_window = dev?.context_window || preset?.context_window || undefined;
+              // max_output: models.dev > 厂商预设 > undefined
+              const max_output = dev?.max_output || preset?.max_output || undefined;
+              // vision: models.dev > 厂商预设 > undefined
+              const vision = dev?.vision || preset?.vision || undefined;
+              // think: models.dev reasoning_effort_values 钳到有效值 > 厂商预设 > 默认
+              const devThink = dev?.reasoning_effort_values?.length
+                ? dev.reasoning_effort_values[dev.reasoning_effort_values.length - 1]
+                : undefined;
+              const think = thinkClamp(devThink || preset?.think);
+              return {
+                name: m.alias || m.model,
+                provider: m.provider,
+                base_url: m.base_url,
+                api_key: m.api_key || preset?.api_key || "",
+                model: m.model,
+                context_window,
+                max_output,
+                vision,
+                think,
+              };
+            });
             onDraft((d) => ({ ...d, models: [...d.models, ...newModels] }));
             setImportFromVendor(false);
           }}

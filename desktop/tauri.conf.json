@@ -116,6 +116,7 @@
             "allow-git-is-clean",
             "allow-git-checkout",
             "allow-models-fetch",
+            "allow-models-dev-enrich",
             "allow-model-test",
             "allow-reveal-path",
             "allow-save-config",
