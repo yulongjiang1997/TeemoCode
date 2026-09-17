@@ -86,10 +86,11 @@ describe("GatewaySection", () => {
     stubShell(groupStatus());
     render(<GatewaySection />);
     expect(await screen.findByText("http://127.0.0.1:8317/v1")).toBeDefined();
-    expect(await screen.findByText("主力组")).toBeDefined();
+    expect(await screen.findAllByText("主力组")).toBeDefined();
     // 行内即有熔断徽标;明细(不可用原因)在展开视图里
     expect(screen.getByText("熔断中")).toBeDefined();
-    await userEvent.click(screen.getByText("主力组"));
+    // 筛选下拉框中也含"主力组",用 getAllByText 取第一个(span,即组行)
+    await userEvent.click(screen.getAllByText("主力组")[0]!);
     expect(await screen.findByText("模型库中不存在「旧模型」(可能已删除或改名)")).toBeDefined();
     expect(screen.getByText("tgk-abc")).toBeDefined();
   });
@@ -119,7 +120,7 @@ describe("GatewaySection", () => {
   it("删除走两段确认:第一下只布防,第二下才真删", async () => {
     const { calls } = stubShell(groupStatus());
     render(<GatewaySection />);
-    await screen.findByText("主力组");
+    await screen.findAllByText("主力组");
     // 悬停才可见,但按钮一直在 DOM:删除按钮的类里有 hover:text-error
     const del = screen.getAllByRole("button").find((b) => b.className.includes("hover:text-error"));
     expect(del).toBeDefined();

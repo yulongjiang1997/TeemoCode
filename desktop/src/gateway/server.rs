@@ -498,9 +498,11 @@ pub(crate) async fn run_buffered(
                 });
                 usage_out.merge(&reply.usage);
                 // 更新 pending 条目(而不是追加新条目),使前端"请求中"态翻为完成
-                host.update_log_inner(false, true, Some(200), started.elapsed().as_millis() as u64,
+                // Use complete_and_persist to also write to JSONL with full bodies.
+                host.complete_and_persist(false, true, Some(200), started.elapsed().as_millis() as u64,
                     &reply.model, attempts.len() as u32, &usage_out, None,
-                    Some(extract_content(&incoming)), Some(extract_response_content(&reply.body)));
+                    Some(extract_content(&incoming)), Some(extract_response_content(&reply.body)),
+                    Some(incoming.to_string()), Some(reply.body.to_string()));
                 return Ok(BufferedOk { body: reply.body, model: reply.model, attempts: attempts.len() });
             }
             Err(e) => {
@@ -524,9 +526,11 @@ pub(crate) async fn run_buffered(
     let status = last_error.as_ref().and_then(|e| e.status()).unwrap_or(502);
     let model = attempts.last().map(|a| a.model.clone()).unwrap_or_default();
     // 更新 pending 条目(而不是追加新条目)
-    host.update_log_inner(false, false, Some(status), started.elapsed().as_millis() as u64,
+    // Use complete_and_persist to also write to JSONL (no response body on failure).
+    host.complete_and_persist(false, false, Some(status), started.elapsed().as_millis() as u64,
         &model, attempts_n, &usage_out, Some(summary.clone()),
-        Some(extract_content(&incoming)), None);
+        Some(extract_content(&incoming)), None,
+        Some(incoming.to_string()), None);
     Err(BufferedFail {
         status,
         body: openai_error(&summary, "gateway_error", "all_models_failed"),
@@ -685,7 +689,10 @@ fn handle_streaming(
         }
     });
     // 更新 pending 条目(而不是追加新条目),与 run_buffered 同款
-    host.update_log_inner(
+    // Use complete_and_persist to also write to JSONL. For streaming, the
+    // response body is relayed byte-by-byte and not captured here, so
+    // raw_response is None (only response_content truncated text is available).
+    host.complete_and_persist(
         true,
         outcome.ok,
         outcome.status,
@@ -695,6 +702,8 @@ fn handle_streaming(
         &outcome.usage,
         outcome.error.clone(),
         Some(extract_content(&incoming)),
+        None,
+        Some(incoming.to_string()),
         None,
     );
 }

@@ -83,11 +83,15 @@ export interface GatewayLogEntry {
   prompt_tokens: number | null;
   completion_tokens: number | null;
   error: string | null;
-  /** 请求/响应内容(2026-09-14):pending 时只有 request;完成后有 response。截断 500 字符。 */
+  /** Request/response content (truncated: 500 chars in memory, 2000 in persisted). */
   request_content: string | null;
   response_content: string | null;
-  /** 请求是否仍在进行中(2026-09-14):true = 请求中。 */
+  /** Whether request is still in progress. */
   pending: boolean;
+  /** Full request body (up to 10KB). Only present in persisted (filtered) entries. */
+  raw_request?: string | null;
+  /** Full response body (up to 10KB). Only present in persisted (filtered) entries. */
+  raw_response?: string | null;
 }
 
 export interface GatewayTestResult {
@@ -147,9 +151,41 @@ export async function gatewayStatus(): Promise<GatewayStatus | null> {
   return invoke<GatewayStatus>("gateway_status");
 }
 
-export async function gatewayLog(limit?: number): Promise<GatewayLogEntry[]> {
+/** Filter parameters for querying gateway logs. */
+export interface GatewayLogFilter {
+  group_id?: string | null;
+  model?: string | null;
+  ok?: boolean | null;
+  search?: string | null;
+  limit?: number | null;
+  offset?: number | null;
+}
+
+export async function gatewayLog(
+  filter?: GatewayLogFilter,
+): Promise<GatewayLogEntry[]> {
   if (!inDesktopShell()) return [];
-  return invoke<GatewayLogEntry[]>("gateway_log", { limit: limit ?? null });
+  return invoke<GatewayLogEntry[]>("gateway_log", {
+    limit: filter?.limit ?? null,
+    group_id: filter?.group_id ?? null,
+    model: filter?.model ?? null,
+    ok: filter?.ok ?? null,
+    search: filter?.search ?? null,
+    offset: filter?.offset ?? null,
+  });
+}
+
+/** Total count of persisted log entries matching filters (for pagination). */
+export async function gatewayLogCount(
+  filter?: Omit<GatewayLogFilter, "limit" | "offset">,
+): Promise<number> {
+  if (!inDesktopShell()) return 0;
+  return invoke<number>("gateway_log_count", {
+    group_id: filter?.group_id ?? null,
+    model: filter?.model ?? null,
+    ok: filter?.ok ?? null,
+    search: filter?.search ?? null,
+  });
 }
 
 /** 跨会话调用统计(2026-09-12):按模型 + 范围聚合 tokens/调用/总时长 + 全量热力图。

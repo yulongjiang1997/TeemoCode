@@ -3,7 +3,7 @@
 // save_config 保存条——本分区"改了即生效",没有脏状态管理。
 // 行形态照 SkillsSection(list-row + 行内展开编辑);删除用两段确认
 // (第一次点变红为"确认删除",失焦/超时还原),不引入弹窗。
-import { IconArrowsExchange, IconChevronDown, IconCopy, IconDownload, IconPlus, IconRefresh, IconTrash } from "@tabler/icons-react";
+import { IconArrowsExchange, IconChevronDown, IconCopy, IconDownload, IconPlus, IconRefresh, IconTrash, IconSearch, IconX } from "@tabler/icons-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
@@ -13,6 +13,7 @@ import {
   gatewayDeleteGroup,
   gatewayEndpoint,
   gatewayLog,
+  gatewayLogCount,
   gatewayProbeGroup,
   gatewayRegenKey,
   gatewayResetModelHealth,
@@ -20,6 +21,7 @@ import {
   gatewayStatus,
   gatewayUpdateSettings,
   type GatewayLogEntry,
+  type GatewayLogFilter,
   type GatewayStatus,
   type GroupModel,
   type ModelGroup,
@@ -81,6 +83,15 @@ function hhmmss(tsMs: number): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+/** Pretty-print a JSON string; return original text if parse fails. */
+function prettyJson(text: string): string {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
+}
+
 export function GatewaySection() {
   const { t } = useI18n();
   const [status, setStatus] = useState<GatewayStatus | null>(null);
@@ -108,11 +119,41 @@ export function GatewaySection() {
   const [fetched, setFetched] = useState<Record<number, { ids: string[]; error?: string }>>({});
   const [fetching, setFetching] = useState<Set<number>>(new Set());
   const [log, setLog] = useState<GatewayLogEntry[]>([]);
+  /** Log filter state. When any filter is active, queries go to disk. */
+  const [logFilter, setLogFilter] = useState<{
+    group_id: string;
+    model: string;
+    ok: "" | "true" | "false";
+    search: string;
+  }>({ group_id: "", model: "", ok: "", search: "" });
+  /** Total count for pagination (only relevant when filters are active). */
+  const [logTotal, setLogTotal] = useState(0);
+  /** Current page (0-indexed) for paginated disk queries. */
+  const [logPage, setLogPage] = useState(0);
+  /** Selected log entry for detail modal. */
+  const [logDetail, setLogDetail] = useState<GatewayLogEntry | null>(null);
   // 端口草稿:与保存值不同时出现「应用」按钮
   const [portDraft, setPortDraft] = useState<string | null>(null);
   // 两段确认删除:记下待确认的组 id
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** Whether any filter is active (triggers disk-based query path). */
+  const logFilterActive = !!logFilter.group_id || !!logFilter.model || !!logFilter.search || logFilter.ok !== "";
+  const LOG_PAGE_SIZE = 50;
+
+  /** Build GatewayLogFilter from current filter state. */
+  const buildLogFilter = useCallback((): GatewayLogFilter => {
+    if (!logFilterActive) return { limit: 50 };
+    return {
+      group_id: logFilter.group_id || null,
+      model: logFilter.model || null,
+      ok: logFilter.ok === "" ? null : logFilter.ok === "true",
+      search: logFilter.search || null,
+      limit: LOG_PAGE_SIZE,
+      offset: logPage * LOG_PAGE_SIZE,
+    };
+  }, [logFilter, logFilterActive, logPage]);
 
   const refresh = useCallback(() => {
     gatewayStatus()
@@ -121,11 +162,27 @@ export function GatewaySection() {
         setLoadError(null);
       })
       .catch((e) => setLoadError(errText(e)));
-    gatewayLog(50)
+    const filter = buildLogFilter();
+    gatewayLog(filter)
       .then(setLog)
       .catch(() => {});
-  }, []);
+    if (logFilterActive) {
+      gatewayLogCount({
+        group_id: logFilter.group_id || null,
+        model: logFilter.model || null,
+        ok: logFilter.ok === "" ? null : logFilter.ok === "true",
+        search: logFilter.search || null,
+      })
+        .then(setLogTotal)
+        .catch(() => {});
+    }
+  }, [buildLogFilter, logFilterActive, logFilter]);
   useEffect(refresh, [refresh]);
+
+  // Reset to page 0 when filters change (avoid out-of-range offset).
+  useEffect(() => {
+    setLogPage(0);
+  }, [logFilter]);
 
   // 模型库清单(引用条目的下拉来源;浏览器模式为空)
   useEffect(() => {
@@ -929,7 +986,71 @@ export function GatewaySection() {
         <button type="button" className="btn btn-ghost btn-xs" onClick={refresh} title={t("settings.gateway.log.refresh")}>
           <IconRefresh size={12} stroke={1.75} aria-hidden />
         </button>
+        {logFilterActive && (
+          <span className="badge badge-info badge-xs">{t("settings.gateway.log.filter.active")}</span>
+        )}
       </div>
+
+      {/* Filter bar */}
+      <div className="mt-1 flex flex-wrap items-center gap-2 px-1">
+        {/* Group filter dropdown */}
+        <select
+          className="select select-bordered select-xs w-auto"
+          value={logFilter.group_id}
+          onChange={(e) => setLogFilter((f) => ({ ...f, group_id: e.target.value }))}
+          title={t("settings.gateway.log.filter.group")}
+        >
+          <option value="">{t("settings.gateway.log.filter.groupAll")}</option>
+          {(status?.groups ?? []).map((g) => (
+            <option key={g.id} value={g.id}>{g.name}</option>
+          ))}
+        </select>
+        {/* Model filter input */}
+        <input
+          type="text"
+          className="input input-bordered input-xs w-32"
+          placeholder={t("settings.gateway.log.filter.modelPlaceholder")}
+          value={logFilter.model}
+          onChange={(e) => setLogFilter((f) => ({ ...f, model: e.target.value }))}
+          title={t("settings.gateway.log.filter.model")}
+        />
+        {/* Status filter dropdown */}
+        <select
+          className="select select-bordered select-xs w-auto"
+          value={logFilter.ok}
+          onChange={(e) => setLogFilter((f) => ({ ...f, ok: e.target.value as "" | "true" | "false" }))}
+          title={t("settings.gateway.log.filter.status")}
+        >
+          <option value="">{t("settings.gateway.log.filter.statusAll")}</option>
+          <option value="true">{t("settings.gateway.log.filter.statusSuccess")}</option>
+          <option value="false">{t("settings.gateway.log.filter.statusFail")}</option>
+        </select>
+        {/* Search input */}
+        <div className="relative">
+          <IconSearch size={12} stroke={1.75} aria-hidden className="absolute left-2 top-1/2 -translate-y-1/2 text-base-content/30" />
+          <input
+            type="text"
+            className="input input-bordered input-xs w-48 pl-7"
+            placeholder={t("settings.gateway.log.filter.searchPlaceholder")}
+            value={logFilter.search}
+            onChange={(e) => setLogFilter((f) => ({ ...f, search: e.target.value }))}
+            title={t("settings.gateway.log.filter.search")}
+          />
+        </div>
+        {/* Clear filters button */}
+        {logFilterActive && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs"
+            onClick={() => setLogFilter({ group_id: "", model: "", ok: "", search: "" })}
+            title={t("settings.gateway.log.filter.clear")}
+          >
+            <IconX size={12} stroke={1.75} aria-hidden />
+            {t("settings.gateway.log.filter.clear")}
+          </button>
+        )}
+      </div>
+
       {log.length === 0 ? (
         <p className="px-1 text-2xs text-base-content/40">{t("settings.gateway.log.empty")}</p>
       ) : (
@@ -949,8 +1070,13 @@ export function GatewaySection() {
               </tr>
             </thead>
             <tbody>
-              {[...log].reverse().map((e, i) => (
-                <tr key={`${e.ts_ms}-${i}`} title={e.error ?? undefined} className={e.pending ? "animate-pulse" : ""}>
+              {(!logFilterActive ? [...log].reverse() : log).map((e, i) => (
+                <tr
+                  key={`${e.ts_ms}-${i}`}
+                  title={e.error ?? undefined}
+                  className={`cursor-pointer hover:bg-base-200 ${e.pending ? "animate-pulse" : ""}`}
+                  onClick={() => !e.pending && setLogDetail(e)}
+                >
                   <td className="font-mono text-2xs">{hhmmss(e.ts_ms)}</td>
                   <td className="max-w-32 truncate font-mono text-2xs">{e.group_name}</td>
                   <td className="max-w-40 truncate font-mono text-2xs">
@@ -988,6 +1114,165 @@ export function GatewaySection() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Pagination controls (only when filters are active and reading from disk) */}
+      {logFilterActive && logTotal > LOG_PAGE_SIZE && (
+        <div className="mt-1 flex items-center gap-2 px-1 text-2xs">
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs"
+            disabled={logPage === 0}
+            onClick={() => setLogPage((p) => Math.max(0, p - 1))}
+          >
+            {t("settings.gateway.log.page.prev")}
+          </button>
+          <span className="text-base-content/50">
+            {t("settings.gateway.log.page.info", {
+              page: logPage + 1,
+              total: Math.ceil(logTotal / LOG_PAGE_SIZE),
+              count: logTotal,
+            })}
+          </span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs"
+            disabled={(logPage + 1) * LOG_PAGE_SIZE >= logTotal}
+            onClick={() => setLogPage((p) => p + 1)}
+          >
+            {t("settings.gateway.log.page.next")}
+          </button>
+        </div>
+      )}
+
+      {/* Log detail modal */}
+      {logDetail && (
+        <div className="modal modal-open" onClick={() => setLogDetail(null)}>
+          <div
+            className="modal-box modal-bottom sm:modal-middle max-w-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-sm font-bold">{t("settings.gateway.log.detail.title")}</h3>
+            <div className="py-2 space-y-3 max-h-[70vh] overflow-y-auto">
+              {/* Basic info */}
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div>
+                  <span className="text-base-content/50">{t("settings.gateway.log.time")}:</span>{" "}
+                  <span className="font-mono">{hhmmss(logDetail.ts_ms)}</span>
+                </div>
+                <div>
+                  <span className="text-base-content/50">{t("settings.gateway.log.group")}:</span>{" "}
+                  <span className="font-mono">{logDetail.group_name}</span>
+                </div>
+                <div>
+                  <span className="text-base-content/50">{t("settings.gateway.log.model")}:</span>{" "}
+                  <span className="font-mono">{logDetail.model || "—"}</span>
+                </div>
+                <div>
+                  <span className="text-base-content/50">{t("settings.gateway.log.status")}:</span>{" "}
+                  {logDetail.ok ? (
+                    <span className="badge badge-success badge-soft badge-xs">{logDetail.status ?? 200}</span>
+                  ) : (
+                    <span className="badge badge-error badge-soft badge-xs">{logDetail.status ?? "ERR"}</span>
+                  )}
+                  {logDetail.stream && (
+                    <span className="badge badge-ghost badge-xs ml-1">{t("settings.gateway.log.streamBadge")}</span>
+                  )}
+                </div>
+              </div>
+              {/* Timing */}
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div>
+                  <span className="text-base-content/50">{t("settings.gateway.log.detail.latency")}:</span>{" "}
+                  <span className="font-mono">{logDetail.latency_ms}ms</span>
+                </div>
+                <div>
+                  <span className="text-base-content/50">{t("settings.gateway.log.detail.attempts")}:</span>{" "}
+                  <span className="font-mono">{logDetail.attempts}</span>
+                </div>
+              </div>
+              {/* Token usage */}
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div>
+                  <span className="text-base-content/50">{t("settings.gateway.log.detail.promptTokens")}:</span>{" "}
+                  <span className="font-mono">{logDetail.prompt_tokens ?? "—"}</span>
+                </div>
+                <div>
+                  <span className="text-base-content/50">{t("settings.gateway.log.detail.completionTokens")}:</span>{" "}
+                  <span className="font-mono">{logDetail.completion_tokens ?? "—"}</span>
+                </div>
+              </div>
+              {/* Error */}
+              {logDetail.error && (
+                <div className="text-xs">
+                  <div className="font-bold text-error">{t("settings.gateway.log.detail.error")}</div>
+                  <pre className="mt-1 whitespace-pre-wrap break-words rounded bg-base-200 p-2 font-mono text-2xs text-error">
+                    {logDetail.error}
+                  </pre>
+                </div>
+              )}
+              {/* Raw request (full body) */}
+              {logDetail.raw_request ? (
+                <div className="text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold">{t("settings.gateway.log.detail.rawRequest")}</span>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => copyText(logDetail.raw_request ?? "")}
+                      title={t("settings.gateway.log.detail.copy")}
+                    >
+                      <IconCopy size={12} stroke={1.75} aria-hidden />
+                    </button>
+                  </div>
+                  <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-base-200 p-2 font-mono text-2xs">
+                    {prettyJson(logDetail.raw_request)}
+                  </pre>
+                </div>
+              ) : logDetail.request_content ? (
+                <div className="text-xs">
+                  <div className="font-bold">{t("settings.gateway.log.detail.request")}</div>
+                  <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-base-200 p-2 font-mono text-2xs">
+                    {logDetail.request_content}
+                  </pre>
+                </div>
+              ) : (
+                <div className="text-xs text-base-content/40">{t("settings.gateway.log.detail.noBody")}</div>
+              )}
+              {/* Raw response (full body) */}
+              {logDetail.raw_response ? (
+                <div className="text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold">{t("settings.gateway.log.detail.rawResponse")}</span>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => copyText(logDetail.raw_response ?? "")}
+                      title={t("settings.gateway.log.detail.copy")}
+                    >
+                      <IconCopy size={12} stroke={1.75} aria-hidden />
+                    </button>
+                  </div>
+                  <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-base-200 p-2 font-mono text-2xs">
+                    {prettyJson(logDetail.raw_response)}
+                  </pre>
+                </div>
+              ) : logDetail.response_content ? (
+                <div className="text-xs">
+                  <div className="font-bold">{t("settings.gateway.log.detail.response")}</div>
+                  <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-base-200 p-2 font-mono text-2xs">
+                    {logDetail.response_content}
+                  </pre>
+                </div>
+              ) : null}
+            </div>
+            <div className="modal-action">
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setLogDetail(null)}>
+                {t("settings.gateway.log.detail.close")}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </section>

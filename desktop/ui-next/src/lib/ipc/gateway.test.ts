@@ -56,9 +56,9 @@ describe("gateway 契约:命令与参数", () => {
     const status = await gatewayStatus();
     expect(status?.running).toBe(true);
     expect(calls[0]?.cmd).toBe("gateway_status");
-    await gatewayLog(20);
+    await gatewayLog({ limit: 20 });
     expect(calls[1]?.cmd).toBe("gateway_log");
-    expect(calls[1]?.args).toEqual({ limit: 20 });
+    expect(calls[1]?.args).toEqual({ limit: 20, group_id: null, model: null, ok: null, search: null, offset: null });
   });
 
   it("save/update/delete/regen/test 的参数形状", async () => {
