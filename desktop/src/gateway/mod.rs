@@ -817,6 +817,24 @@ impl GatewayHost {
         }
     }
 
+    /// 探测专用:只更新延迟,不影响 health(熔断器)。
+    /// 探测失败不写 record_attempt,避免与实际请求互相干扰——
+    /// 探测失败可能只是 max_tokens=1 的 ping 被拒绝,不代表模型真正不可用。
+    /// 探测成功时复位 health(让临时熔断的模型提前恢复)。
+    pub(crate) fn record_probe_result(&self, group_id: &str, model_id: &str, ok: bool, latency_ms: u64) {
+        self.record_latency(group_id, model_id, latency_ms);
+        if ok {
+            // 探测成功:复位健康簿(让临时熔断的模型提前恢复)
+            let key = format!("{group_id}/{model_id}");
+            let mut health = self.0.health.lock_ok();
+            if let Some(h) = health.get_mut(&key) {
+                h.record_success();
+            }
+        }
+        // 探测失败:只记延迟(u64::MAX),不写 record_attempt,
+        // 避免探测失败累计 consecutive_failures 导致熔断/弃用
+    }
+
     pub(crate) fn push_log(&self, entry: LogEntry) {
         let group_id = entry.group_id.clone();
         let ok = entry.ok;
@@ -1103,12 +1121,17 @@ fn spawn_latency_probe(host: GatewayHost, snapshot: &RuntimeSnapshot) {
                         continue;
                     }
                     let key = format!("{}/{}", rg.group.id, cand.id);
-                    // 检查健康状态:abandoned 跳过,degraded 用更长间隔
+                    // 检查健康状态:abandoned 和 Open(熔断中)都跳过探测
                     let health_guard = host.health_map();
                     let h = health_guard.get(&key).copied();
                     drop(health_guard);
                     if h.map(|h| h.abandoned).unwrap_or(false) {
                         continue; // 永久弃用,跳过
+                    }
+                    // 熔断中(Open)的模型也跳过:避免探测失败继续累计,
+                    // 导致从 3 次很快到 10 次永久弃用
+                    if h.map(|h| !h.is_available(now)).unwrap_or(false) {
+                        continue; // 熔断中,跳过
                     }
                     // 检查是否到了探测时间
                     let next = next_probe.get(&key).copied().unwrap_or(0);
@@ -1157,22 +1180,20 @@ fn spawn_latency_probe(host: GatewayHost, snapshot: &RuntimeSnapshot) {
                                 is_fail = true;
                                 host.update_pending_for_model(&cand.model, false, Some(408), elapsed,
                                     Some(format!("fastest 探测超时")));
-                                host.record_latency(&group_id, &cand.id, u64::MAX);
-                                host.record_attempt(&group_id, &cand.id, false);
+                                // 探测只更新延迟,不写 health(避免与实际请求互相干扰)
+                                host.record_probe_result(&group_id, &cand.id, false, u64::MAX);
                             }
                             Ok(Ok(_)) => {
                                 is_fail = false;
                                 host.update_pending_for_model(&cand.model, true, Some(200), elapsed, None);
-                                host.record_latency(&group_id, &cand.id, elapsed);
-                                host.record_attempt(&group_id, &cand.id, true);
+                                host.record_probe_result(&group_id, &cand.id, true, elapsed);
                             }
                             Ok(Err(e)) => {
                                 is_fail = true;
                                 let status = e.status().unwrap_or(502);
                                 host.update_pending_for_model(&cand.model, false, Some(status), elapsed,
                                     Some(e.message()));
-                                host.record_latency(&group_id, &cand.id, u64::MAX);
-                                host.record_attempt(&group_id, &cand.id, false);
+                                host.record_probe_result(&group_id, &cand.id, false, u64::MAX);
                             }
                         }
                         // 返回 (key, is_fail) 供主循环设置下次探测时间
