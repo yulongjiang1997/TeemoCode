@@ -147,6 +147,10 @@ pub fn plan(
     let available: Vec<&ResolvedCandidate> = candidates
         .iter()
         .filter(|c| {
+            // 停用(unavailable)的候选不参与调度
+            if c.unavailable.is_some() {
+                return false;
+            }
             let h = health.get(&format!("{group_id}/{}", c.id));
             // 无记录 = 全新条目,可用。
             h.map(|h| h.is_available(now_ms)).unwrap_or(true)
