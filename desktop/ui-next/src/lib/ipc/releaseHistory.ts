@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.47",
+    notes: "接入models.dev自动填充模型参数(三级fallback:models.dev→厂商预设→默认值);修复探测不干扰熔断器+跳过熔断中模型(探测失败不再累计consecutive_failures)",
+  },
+  {
     version: "0.1.46",
     notes: "修复模型组编辑时api_key丢失(status_payload遗漏字段);修复模型名称输入框每输入一字符失焦;模型功能厂商分组增加批量删除按钮;厂商导入api_key防御性补全",
   },
