@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.48",
+    notes: "网关请求日志持久化(JSONL存储+10000条上限);筛选栏(组/模型/状态/搜索);请求/响应详情弹窗(JSON美化+复制);plan()过滤unavailable候选;探测跳过熔断中模型",
+  },
+  {
     version: "0.1.47",
     notes: "接入models.dev自动填充模型参数(三级fallback:models.dev→厂商预设→默认值);修复探测不干扰熔断器+跳过熔断中模型(探测失败不再累计consecutive_failures)",
   },
