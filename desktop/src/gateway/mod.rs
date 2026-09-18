@@ -440,6 +440,9 @@ pub(crate) fn build_snapshot(
 
 #[derive(Clone, Debug, Serialize)]
 pub struct LogEntry {
+    /// 仅用于把 pending 条目与同一个请求的完成回调关联起来；不对外暴露。
+    #[serde(skip)]
+    pub(crate) request_id: u64,
     pub ts_ms: u64,
     pub group_id: String,
     pub group_name: String,
@@ -695,26 +698,58 @@ impl GatewayLogStore {
     }
 }
 
-// ==================== Per-request log persistence (JSONL) ====================
+// ==================== Per-request log persistence (JSONL + sidecar) ====================
 //
-// 2026-09-17 requirement: persist individual completed log entries to
-// `gateway-requests.jsonl` (JSON Lines, one entry per line) in the app data
-// dir. Keeps max 10000 entries on disk (rotation trims oldest). The memory
-// ring buffer (LOG_CAP=100) remains the fast path for recent requests when no
-// filters are set; disk is queried only when filters are active.
+// 完成的请求写入 `gateway-requests.jsonl`(元数据 + 短摘要)。完整请求/响应体
+// 另存 `gateway-request-bodies/{id}.json`,详情打开时再读,避免列表轮询拖 1MB
+// 级 body。内存环(LOG_CAP=100)只给「请求中」占位;重启后列表一律走磁盘。
 
 /// Maximum entries kept on disk before rotation trims oldest.
-const PERSISTED_LOG_CAP: usize = 10_000;
-/// Truncation limit for raw request/response bodies persisted to JSONL (10KB).
-const RAW_BODY_CAP: usize = 10_240;
+const PERSISTED_LOG_CAP: usize = 2_000;
+/// Sidecar 中原始请求/响应体上限(字节)。超出会截断并标注原长度。
+const RAW_BODY_CAP: usize = 512 * 1024;
+/// JSONL 里留给搜索用的 body 摘要。
+const RAW_SNIPPET_CAP: usize = 4_096;
 /// Truncation limit for request/response content in persisted entries (2000 chars).
 const PERSISTED_CONTENT_CAP: usize = 2_000;
 
-/// A complete log entry persisted to the JSONL file. Extends LogEntry with full
-/// raw request/response bodies (truncated to 10KB each) that are NOT kept in
-/// the memory ring buffer.
+fn truncate_bytes(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        return s.to_string();
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}\n…(truncated, {} bytes)", &s[..end], s.len())
+}
+
+fn persisted_entry_key(entry: &PersistedLogEntry) -> String {
+    if entry.id.is_empty() {
+        format!("{}-{}", entry.ts_ms, entry.group_id)
+    } else {
+        entry.id.clone()
+    }
+}
+
+fn safe_body_id(id: &str) -> Option<&str> {
+    if id.is_empty() || id.len() > 96 {
+        return None;
+    }
+    if id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        Some(id)
+    } else {
+        None
+    }
+}
+
+/// A complete log entry persisted to the JSONL file. Extends LogEntry with
+/// request/response snippets; full bodies live in a sidecar keyed by `id`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PersistedLogEntry {
+    /// `{ts_ms}-{request_id}`; 旧文件缺省时由 ts_ms+group_id 合成。
+    #[serde(default)]
+    pub id: String,
     // --- same fields as LogEntry ---
     pub ts_ms: u64,
     pub group_id: String,
@@ -732,6 +767,9 @@ pub struct PersistedLogEntry {
     pub request_content: Option<String>,
     /// Truncated to 2000 chars for persisted entries (vs 500 in memory).
     pub response_content: Option<String>,
+    /// Persisted entries are always complete; retained for a uniform UI shape.
+    #[serde(default)]
+    pub pending: bool,
     // --- extra fields only in persisted entries ---
     /// Full request body (truncated to 10KB). Only in JSONL, not in memory.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -753,7 +791,7 @@ pub struct LogQuery {
     /// Filter by success/failure: true = only success, false = only fail.
     #[serde(default)]
     pub ok: Option<bool>,
-    /// Text search in request_content + response_content (case-insensitive).
+    /// 搜索组名/模型/错误/摘要/body 片段(大小写不敏感)。
     #[serde(default)]
     pub search: Option<String>,
     /// Max entries to return (default 200).
@@ -771,23 +809,64 @@ fn default_log_limit() -> usize {
 /// Manages the `gateway-requests.jsonl` file: append-only writes with rotation.
 pub struct GatewayLogPersistence {
     path: PathBuf,
+    bodies_dir: PathBuf,
+    io: StdMutex<()>,
 }
 
 impl GatewayLogPersistence {
     fn new(config_dir: &Path) -> Self {
         let path = config_dir.join("gateway-requests.jsonl");
-        Self { path }
+        let bodies_dir = config_dir.join("gateway-request-bodies");
+        let _ = std::fs::create_dir_all(&bodies_dir);
+        Self { path, bodies_dir, io: StdMutex::new(()) }
+    }
+
+    fn body_path(&self, id: &str) -> Option<PathBuf> {
+        safe_body_id(id).map(|id| self.bodies_dir.join(format!("{id}.json")))
+    }
+
+    fn write_sidecar_locked(&self, id: &str, raw_request: Option<&str>, raw_response: Option<&str>) {
+        let Some(path) = self.body_path(id) else { return };
+        if raw_request.is_none() && raw_response.is_none() {
+            return;
+        }
+        let body = serde_json::json!({
+            "request": raw_request.map(|s| truncate_bytes(s, RAW_BODY_CAP)),
+            "response": raw_response.map(|s| truncate_bytes(s, RAW_BODY_CAP)),
+        });
+        if let Ok(data) = serde_json::to_vec(&body) {
+            let _ = crate::config::atomic_write_private(&path, &data);
+        }
+    }
+
+    fn read_sidecar_locked(&self, id: &str) -> Option<(Option<String>, Option<String>)> {
+        let path = self.body_path(id)?;
+        let text = std::fs::read_to_string(path).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+        let req = v.get("request").and_then(|x| x.as_str()).map(|s| s.to_string());
+        let resp = v.get("response").and_then(|x| x.as_str()).map(|s| s.to_string());
+        Some((req, resp))
     }
 
     /// Append a completed entry to the JSONL file. After appending, if the file
     /// exceeds PERSISTED_LOG_CAP lines, rewrite it with only the last
     /// PERSISTED_LOG_CAP entries (trim oldest).
-    fn append(&self, entry: &PersistedLogEntry) {
-        let line = match serde_json::to_string(entry) {
+    fn append(&self, mut entry: PersistedLogEntry, raw_request: Option<&str>, raw_response: Option<&str>) {
+        let _guard = self.io.lock_ok();
+        if entry.id.is_empty() {
+            entry.id = persisted_entry_key(&entry);
+        }
+        if entry.raw_request.is_none() {
+            entry.raw_request = raw_request.map(|s| truncate_bytes(s, RAW_SNIPPET_CAP));
+        }
+        if entry.raw_response.is_none() {
+            entry.raw_response = raw_response.map(|s| truncate_bytes(s, RAW_SNIPPET_CAP));
+        }
+        self.write_sidecar_locked(&entry.id, raw_request, raw_response);
+        let line = match serde_json::to_string(&entry) {
             Ok(s) => s,
             Err(_) => return,
         };
-        // Append to file (create if missing).
         let append_result = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -799,13 +878,10 @@ impl GatewayLogPersistence {
         if append_result.is_err() {
             return;
         }
-        // Rotation check: count lines, trim if over cap.
-        self.rotate_if_needed();
+        self.rotate_if_needed_locked();
     }
 
-    /// Count lines in the file; if > PERSISTED_LOG_CAP, rewrite with last
-    /// PERSISTED_LOG_CAP entries.
-    fn rotate_if_needed(&self) {
+    fn rotate_if_needed_locked(&self) {
         let content = match std::fs::read_to_string(&self.path) {
             Ok(s) => s,
             Err(_) => return,
@@ -814,24 +890,35 @@ impl GatewayLogPersistence {
         if lines.len() <= PERSISTED_LOG_CAP {
             return;
         }
-        let keep = &lines[lines.len() - PERSISTED_LOG_CAP..];
+        let drop_n = lines.len() - PERSISTED_LOG_CAP;
+        for line in &lines[..drop_n] {
+            if let Ok(entry) = serde_json::from_str::<PersistedLogEntry>(line) {
+                if let Some(path) = self.body_path(&entry.id) {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
+        let keep = &lines[drop_n..];
         let rewritten = keep.join("\n") + "\n";
-        let _ = std::fs::write(&self.path, rewritten);
+        let _ = crate::config::atomic_write_private(&self.path, rewritten.as_bytes());
     }
 
     /// Query persisted entries with filters. Returns (matching entries, total
     /// count). Entries are returned newest-first (reverse file order).
     fn query(&self, q: &LogQuery) -> (Vec<PersistedLogEntry>, usize) {
+        let _guard = self.io.lock_ok();
         let content = match std::fs::read_to_string(&self.path) {
             Ok(s) => s,
             Err(_) => return (vec![], 0),
         };
         let lines: Vec<&str> = content.lines().filter(|l| !l.is_empty()).collect();
-        // Parse and filter; collect into a Vec so we can count total.
         let mut all: Vec<PersistedLogEntry> = Vec::with_capacity(lines.len());
         for line in lines.iter().rev() {
-            if let Ok(entry) = serde_json::from_str::<PersistedLogEntry>(line) {
+            if let Ok(mut entry) = serde_json::from_str::<PersistedLogEntry>(line) {
                 if Self::matches(&entry, q) {
+                    if entry.id.is_empty() {
+                        entry.id = persisted_entry_key(&entry);
+                    }
                     all.push(entry);
                 }
             }
@@ -843,6 +930,39 @@ impl GatewayLogPersistence {
         (page, total)
     }
 
+    fn get(&self, id: &str) -> Option<PersistedLogEntry> {
+        let id = id.trim();
+        if id.is_empty() {
+            return None;
+        }
+        let _guard = self.io.lock_ok();
+        let content = std::fs::read_to_string(&self.path).ok()?;
+        for line in content.lines().rev() {
+            if line.is_empty() {
+                continue;
+            }
+            let Ok(mut entry) = serde_json::from_str::<PersistedLogEntry>(line) else {
+                continue;
+            };
+            if persisted_entry_key(&entry) != id {
+                continue;
+            }
+            if entry.id.is_empty() {
+                entry.id = id.to_string();
+            }
+            if let Some((req, resp)) = self.read_sidecar_locked(&entry.id) {
+                if req.as_ref().is_some_and(|s| !s.is_empty()) {
+                    entry.raw_request = req;
+                }
+                if resp.as_ref().is_some_and(|s| !s.is_empty()) {
+                    entry.raw_response = resp;
+                }
+            }
+            return Some(entry);
+        }
+        None
+    }
+
     /// Check if an entry matches the query filters.
     fn matches(entry: &PersistedLogEntry, q: &LogQuery) -> bool {
         if let Some(ref gid) = q.group_id {
@@ -851,7 +971,8 @@ impl GatewayLogPersistence {
             }
         }
         if let Some(ref model) = q.model {
-            if !entry.model.to_lowercase().contains(&model.to_lowercase()) {
+            let needle = model.to_lowercase();
+            if !entry.model.to_lowercase().contains(&needle) {
                 return false;
             }
         }
@@ -862,17 +983,16 @@ impl GatewayLogPersistence {
         }
         if let Some(ref search) = q.search {
             let needle = search.to_lowercase();
-            let in_req = entry
-                .request_content
-                .as_ref()
-                .map(|s| s.to_lowercase().contains(&needle))
-                .unwrap_or(false);
-            let in_resp = entry
-                .response_content
-                .as_ref()
-                .map(|s| s.to_lowercase().contains(&needle))
-                .unwrap_or(false);
-            if !in_req && !in_resp {
+            let hay = [
+                entry.group_name.as_str(),
+                entry.model.as_str(),
+                entry.error.as_deref().unwrap_or(""),
+                entry.request_content.as_deref().unwrap_or(""),
+                entry.response_content.as_deref().unwrap_or(""),
+                entry.raw_request.as_deref().unwrap_or(""),
+                entry.raw_response.as_deref().unwrap_or(""),
+            ];
+            if !hay.iter().any(|s| s.to_lowercase().contains(&needle)) {
                 return false;
             }
         }
@@ -881,14 +1001,14 @@ impl GatewayLogPersistence {
 }
 
 /// Build a PersistedLogEntry from a LogEntry + optional full raw bodies.
-/// Content fields are re-truncated to PERSISTED_CONTENT_CAP (2000 chars) for
-/// the persisted copy (memory ring keeps 500).
+/// JSONL 只留摘要;完整 body 由 append 写入 sidecar。
 fn to_persisted(
     entry: &LogEntry,
     raw_request: Option<&str>,
     raw_response: Option<&str>,
 ) -> PersistedLogEntry {
     PersistedLogEntry {
+        id: format!("{}-{}", entry.ts_ms, entry.request_id),
         ts_ms: entry.ts_ms,
         group_id: entry.group_id.clone(),
         group_name: entry.group_name.clone(),
@@ -901,7 +1021,6 @@ fn to_persisted(
         prompt_tokens: entry.prompt_tokens,
         completion_tokens: entry.completion_tokens,
         error: entry.error.clone(),
-        // Re-truncate to 2000 chars for persisted copy.
         request_content: entry
             .request_content
             .as_ref()
@@ -910,9 +1029,9 @@ fn to_persisted(
             .response_content
             .as_ref()
             .map(|s| s.chars().take(PERSISTED_CONTENT_CAP).collect()),
-        // Full bodies truncated to 10KB.
-        raw_request: raw_request.map(|s| s.chars().take(RAW_BODY_CAP).collect()),
-        raw_response: raw_response.map(|s| s.chars().take(RAW_BODY_CAP).collect()),
+        pending: false,
+        raw_request: raw_request.map(|s| truncate_bytes(s, RAW_SNIPPET_CAP)),
+        raw_response: raw_response.map(|s| truncate_bytes(s, RAW_SNIPPET_CAP)),
     }
 }
 
@@ -1079,21 +1198,25 @@ impl GatewayHost {
                 log.pop_front();
             }
         }
-        // 跨会话持久化聚合(2026-09-12 统计面板数据源)。与内存日志解耦:
-        // 内存只留 LOG_CAP 条供「最近请求」表,persist 按 天×模型 累加落盘。
-        // 单测路径(manage 未初始化)log_stats=None,跳过持久化不落盘文件。
-        if let Some(store) = &self.0.log_stats {
-            store.record(&entry);
+        // pending 只是占位，不应提前计入成功/失败/统计；完成时由
+        // complete_and_persist 统一记一次，避免 pending + completed 双计数。
+        if !entry.pending {
+            // 跨会话持久化聚合(2026-09-12 统计面板数据源)。与内存日志解耦:
+            // 内存只留 LOG_CAP 条供「最近请求」表,persist 按 天×模型 累加落盘。
+            // 单测路径(manage 未初始化)log_stats=None,跳过持久化不落盘文件。
+            if let Some(store) = &self.0.log_stats {
+                store.record(&entry);
+            }
+            let mut counters = self.0.counters.lock_ok();
+            let c = counters.entry(group_id).or_default();
+            c.total += 1;
+            if ok {
+                c.ok += 1;
+            } else {
+                c.fail += 1;
+            }
+            c.failovers += failovers;
         }
-        let mut counters = self.0.counters.lock_ok();
-        let c = counters.entry(group_id).or_default();
-        c.total += 1;
-        if ok {
-            c.ok += 1;
-        } else {
-            c.fail += 1;
-        }
-        c.failovers += failovers;
     }
 
     /// 下一个请求序号(2026-09-14:pending→complete 日志匹配用)。
@@ -1165,13 +1288,15 @@ impl GatewayHost {
         }
     }
 
-    /// Like update_log_inner but also persists the completed entry to the
-    /// JSONL file with full raw request/response bodies (up to 10KB each).
+    /// Like update_log_inner but also persists the completed entry to JSONL + sidecar.
     /// Called from server.rs when a real gateway request completes.
     /// For probe requests (which don't have full bodies), use update_log_inner
     /// or update_pending_for_model instead — probes are not persisted.
     pub(crate) fn complete_and_persist(
         &self,
+        request_id: u64,
+        group_id: &str,
+        group_name: &str,
         stream: bool,
         ok: bool,
         status: Option<u16>,
@@ -1185,12 +1310,11 @@ impl GatewayHost {
         raw_request: Option<String>,
         raw_response: Option<String>,
     ) {
-        // Step 1: update memory ring buffer (same as update_log_inner).
         let mut persisted_entry: Option<PersistedLogEntry> = None;
         {
             let mut log = self.0.log.lock_ok();
             for entry in log.iter_mut().rev() {
-                if entry.pending {
+                if entry.pending && entry.request_id == request_id {
                     entry.stream = stream;
                     entry.ok = ok;
                     entry.status = status;
@@ -1203,7 +1327,6 @@ impl GatewayHost {
                     entry.request_content = request_content.clone();
                     entry.response_content = response_content.clone();
                     entry.pending = false;
-                    // Build the persisted entry from the now-complete memory entry.
                     persisted_entry = Some(to_persisted(
                         entry,
                         raw_request.as_deref(),
@@ -1213,38 +1336,67 @@ impl GatewayHost {
                 }
             }
         }
-        // Step 2: persist to JSONL file (only if we found and updated the entry).
-        if let Some(persisted) = persisted_entry {
-            if let Some(persistence) = &self.0.log_persistence {
-                persistence.append(&persisted);
-            }
-            // Also record aggregated stats (same as push_log does for direct entries).
-            if let Some(store) = &self.0.log_stats {
-                store.record(&LogEntry {
-                    ts_ms: persisted.ts_ms,
-                    group_id: persisted.group_id.clone(),
-                    group_name: persisted.group_name.clone(),
-                    stream: persisted.stream,
-                    ok: persisted.ok,
-                    status: persisted.status,
-                    latency_ms: persisted.latency_ms,
-                    model: persisted.model.clone(),
-                    attempts: persisted.attempts,
-                    prompt_tokens: persisted.prompt_tokens,
-                    completion_tokens: persisted.completion_tokens,
-                    error: persisted.error.clone(),
-                    request_content: None,
-                    response_content: None,
-                    pending: false,
-                });
-            }
+        let persisted = persisted_entry.unwrap_or_else(|| PersistedLogEntry {
+            id: format!("{}-{}", now_ms(), request_id),
+            ts_ms: now_ms(),
+            group_id: group_id.to_string(),
+            group_name: group_name.to_string(),
+            stream,
+            ok,
+            status,
+            latency_ms,
+            model: model.to_string(),
+            attempts,
+            prompt_tokens: usage.prompt_tokens,
+            completion_tokens: usage.completion_tokens,
+            error: error.clone(),
+            request_content: request_content.as_ref().map(|s| s.chars().take(PERSISTED_CONTENT_CAP).collect()),
+            response_content: response_content.as_ref().map(|s| s.chars().take(PERSISTED_CONTENT_CAP).collect()),
+            pending: false,
+            raw_request: raw_request.as_deref().map(|s| truncate_bytes(s, RAW_SNIPPET_CAP)),
+            raw_response: raw_response.as_deref().map(|s| truncate_bytes(s, RAW_SNIPPET_CAP)),
+        });
+        if let Some(persistence) = &self.0.log_persistence {
+            persistence.append(persisted.clone(), raw_request.as_deref(), raw_response.as_deref());
         }
+        if let Some(store) = &self.0.log_stats {
+            store.record(&LogEntry {
+                request_id: 0,
+                ts_ms: persisted.ts_ms,
+                group_id: persisted.group_id.clone(),
+                group_name: persisted.group_name.clone(),
+                stream: persisted.stream,
+                ok: persisted.ok,
+                status: persisted.status,
+                latency_ms: persisted.latency_ms,
+                model: persisted.model.clone(),
+                attempts: persisted.attempts,
+                prompt_tokens: persisted.prompt_tokens,
+                completion_tokens: persisted.completion_tokens,
+                error: persisted.error.clone(),
+                request_content: None,
+                response_content: None,
+                pending: false,
+            });
+        }
+        let mut counters = self.0.counters.lock_ok();
+        let c = counters.entry(persisted.group_id.clone()).or_default();
+        c.total += 1;
+        if persisted.ok {
+            c.ok += 1;
+        } else {
+            c.fail += 1;
+        }
+        c.failovers += persisted.attempts.saturating_sub(1) as u64;
     }
 
     /// Query persisted log entries with filters. Returns (entries, total count).
-    /// Used by the gateway_log command when filters are active.
     pub(crate) fn query_persisted(&self, q: &LogQuery) -> Option<(Vec<PersistedLogEntry>, usize)> {
         self.0.log_persistence.as_ref().map(|p| p.query(q))
+    }
+
+    pub(crate) fn get_persisted(&self, id: &str) -> Option<PersistedLogEntry> {
+        self.0.log_persistence.as_ref().and_then(|p| p.get(id))
     }
 
     /// Check whether log persistence is available (config dir initialized).
@@ -1273,6 +1425,17 @@ impl GatewayHost {
                 entry.attempts = 1;
                 break;
             }
+        }
+    }
+
+    /// 更新真实请求当前尝试的模型，供请求进行中日志即时展示。
+    pub(crate) fn update_pending_model(&self, request_id: u64, model: &str) {
+        if model.is_empty() {
+            return;
+        }
+        let mut log = self.0.log.lock_ok();
+        if let Some(entry) = log.iter_mut().rev().find(|e| e.pending && e.request_id == request_id) {
+            entry.model = model.to_string();
         }
     }
 
@@ -1475,6 +1638,7 @@ fn spawn_latency_probe(host: GatewayHost, snapshot: &RuntimeSnapshot) {
                         let started = std::time::Instant::now();
                         if rg.group.log_enabled {
                             host.push_log(LogEntry {
+                                request_id: 0,
                                 ts_ms: now_ms(),
                                 group_id: group_id.clone(),
                                 group_name: group_name.clone(),
@@ -1639,7 +1803,8 @@ pub async fn gateway_probe_group(app: AppHandle, id: String, timeout_ms: Option<
             // 写 pending 日志(log_enabled=false 时跳过)
             if group.group.log_enabled {
                 host.push_log(LogEntry {
-                ts_ms: now_ms(),
+                    request_id: 0,
+                    ts_ms: now_ms(),
                 group_id: group_id.clone(),
                 group_name: group_name.clone(),
                 stream: false,
@@ -1778,11 +1943,76 @@ pub fn gateway_status(app: AppHandle) -> Result<serde_json::Value, String> {
     Ok(status_payload(&host))
 }
 
-/// 最近请求日志。Two modes:
-/// - No filters: return from memory ring buffer (fast path, LOG_CAP entries).
-/// - With filters: read from persisted JSONL file with filtering + pagination.
-/// Returns serde_json::Value because the persisted entries have extra fields
-/// (raw_request/raw_response) that LogEntry doesn't have.
+fn log_query(
+    group_id: Option<String>,
+    model: Option<String>,
+    ok: Option<bool>,
+    search: Option<String>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+) -> LogQuery {
+    LogQuery {
+        group_id: non_empty_filter(group_id),
+        model: non_empty_filter(model),
+        ok,
+        search: non_empty_filter(search),
+        limit: limit.map(|n| n as usize).unwrap_or(50),
+        offset: offset.map(|n| n as usize).unwrap_or(0),
+    }
+}
+
+fn memory_matches(entry: &LogEntry, q: &LogQuery) -> bool {
+    if let Some(ref gid) = q.group_id {
+        if entry.group_id != *gid {
+            return false;
+        }
+    }
+    if let Some(ref model) = q.model {
+        if !entry.model.to_lowercase().contains(&model.to_lowercase()) {
+            return false;
+        }
+    }
+    if let Some(ok) = q.ok {
+        if entry.ok != ok {
+            return false;
+        }
+    }
+    if let Some(ref search) = q.search {
+        let needle = search.to_lowercase();
+        let hay = [
+            entry.group_name.as_str(),
+            entry.model.as_str(),
+            entry.error.as_deref().unwrap_or(""),
+            entry.request_content.as_deref().unwrap_or(""),
+            entry.response_content.as_deref().unwrap_or(""),
+        ];
+        if !hay.iter().any(|s| s.to_lowercase().contains(&needle)) {
+            return false;
+        }
+    }
+    true
+}
+
+fn strip_raw_for_list(mut entry: PersistedLogEntry) -> PersistedLogEntry {
+    entry.raw_request = None;
+    entry.raw_response = None;
+    entry
+}
+
+fn pending_log_values(host: &GatewayHost, q: &LogQuery) -> Vec<serde_json::Value> {
+    if q.ok.is_some() {
+        return vec![];
+    }
+    let log = host.0.log.lock_ok();
+    log.iter()
+        .rev()
+        .filter(|e| e.pending && memory_matches(e, q))
+        .filter_map(|e| serde_json::to_value(e).ok())
+        .collect()
+}
+
+/// 最近请求日志:默认读磁盘(重启不丢)。offset=0 时把内存里的 pending 插到最前。
+/// 列表不带完整 body,点详情走 gateway_log_detail。
 #[tauri::command]
 pub fn gateway_log(
     app: AppHandle,
@@ -1794,46 +2024,30 @@ pub fn gateway_log(
     offset: Option<u32>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let host = app.state::<GatewayHost>();
-    // Check if any filter is active.
-    let has_filters = group_id.is_some()
-        || model.is_some()
-        || ok.is_some()
-        || search.is_some();
-    if has_filters {
-        // Filtered path: read from persisted JSONL.
-        let q = LogQuery {
-            group_id,
-            model,
-            ok,
-            search,
-            limit: limit.map(|n| n as usize).unwrap_or(200),
-            offset: offset.map(|n| n as usize).unwrap_or(0),
-        };
-        match host.query_persisted(&q) {
-            Some((entries, _total)) => {
-                // Serialize PersistedLogEntry as JSON Value (includes raw fields).
-                Ok(entries
-                    .into_iter()
-                    .filter_map(|e| serde_json::to_value(e).ok())
-                    .collect())
-            }
-            None => Ok(vec![]),
+    let q = log_query(group_id, model, ok, search, limit, offset);
+    if let Some((entries, _)) = host.query_persisted(&q) {
+        let mut out: Vec<serde_json::Value> = entries
+            .into_iter()
+            .filter_map(|e| serde_json::to_value(strip_raw_for_list(e)).ok())
+            .collect();
+        if q.offset == 0 {
+            let mut pending = pending_log_values(&host, &q);
+            pending.append(&mut out);
+            out = pending;
         }
-    } else {
-        // Fast path: return from memory ring buffer.
-        let log = host.0.log.lock_ok();
-        let take = limit.map(|n| n as usize).unwrap_or(usize::MAX);
-        let start = log.len().saturating_sub(take);
-        Ok(log
-            .iter()
-            .skip(start)
-            .filter_map(|e| serde_json::to_value(e).ok())
-            .collect())
+        return Ok(out);
     }
+    let log = host.0.log.lock_ok();
+    let matched: Vec<&LogEntry> = log.iter().rev().filter(|e| memory_matches(e, &q)).collect();
+    let start = q.offset.min(matched.len());
+    let end = start.saturating_add(q.limit).min(matched.len());
+    Ok(matched[start..end]
+        .iter()
+        .filter_map(|e| serde_json::to_value(*e).ok())
+        .collect())
 }
 
 /// Total count of persisted log entries matching filters (for pagination).
-/// When no filters, returns the count of memory ring buffer entries.
 #[tauri::command]
 pub fn gateway_log_count(
     app: AppHandle,
@@ -1843,27 +2057,30 @@ pub fn gateway_log_count(
     search: Option<String>,
 ) -> Result<u64, String> {
     let host = app.state::<GatewayHost>();
-    let has_filters = group_id.is_some()
-        || model.is_some()
-        || ok.is_some()
-        || search.is_some();
-    if has_filters {
-        let q = LogQuery {
-            group_id,
-            model,
-            ok,
-            search,
-            limit: usize::MAX,
-            offset: 0,
+    let q = log_query(group_id, model, ok, search, Some(0), Some(0));
+    if let Some((_, total)) = host.query_persisted(&q) {
+        let extra = if q.ok.is_none() {
+            pending_log_values(&host, &q).len()
+        } else {
+            0
         };
-        match host.query_persisted(&q) {
-            Some((_entries, total)) => Ok(total as u64),
-            None => Ok(0),
-        }
-    } else {
-        // Fast path: return memory ring buffer count.
-        Ok(host.0.log.lock_ok().len() as u64)
+        return Ok((total + extra) as u64);
     }
+    let log = host.0.log.lock_ok();
+    Ok(log.iter().filter(|e| memory_matches(e, &q)).count() as u64)
+}
+
+/// 单条请求的完整请求/响应体(sidecar,最多 512KB)。
+#[tauri::command]
+pub fn gateway_log_detail(app: AppHandle, id: String) -> Result<serde_json::Value, String> {
+    let host = app.state::<GatewayHost>();
+    host.get_persisted(&id)
+        .and_then(|e| serde_json::to_value(e).ok())
+        .ok_or_else(|| "记录不存在".into())
+}
+
+fn non_empty_filter(value: Option<String>) -> Option<String> {
+    value.and_then(|s| if s.trim().is_empty() { None } else { Some(s) })
 }
 
 /// 跨会话调用统计(2026-09-12 需求):按模型分类 + 范围(today/day7/all)聚合
@@ -2110,6 +2327,7 @@ mod tests {
             temperature: None,
             system_prompt: String::new(),
             timeout_seconds: 0,
+            log_enabled: true,
             models,
         }
     }
@@ -2181,7 +2399,7 @@ mod tests {
         ];
         let cfg = crate::config::DesktopConfig {
             models,
-            gateway: GatewaySettings { enabled: true, port: 1000, groups: vec![g] },
+            gateway: GatewaySettings { enabled: true, port: 1000, groups: vec![g], vendor_presets: vec![] },
             ..Default::default()
         };
         let snap = build_snapshot(&cfg, &dir);
@@ -2202,7 +2420,7 @@ mod tests {
             models: serde_json::json!([
                 { "name": "会员", "provider": "anthropic", "base_url": "", "api_key": "", "model": "m-mc", "source": "monkeycode" }
             ]),
-            gateway: GatewaySettings { enabled: true, port: 1000, groups: vec![g2] },
+            gateway: GatewaySettings { enabled: true, port: 1000, groups: vec![g2], vendor_presets: vec![] },
             ..Default::default()
         };
         let snap2 = build_snapshot(&cfg2, &dir);
@@ -2261,5 +2479,94 @@ mod tests {
         assert!(snap.group_by_key("tgk-aaa").is_some());
         assert!(snap.group_by_key("tgk-bbb").is_none(), "停用组的 Key 不得鉴权");
         assert!(snap.group_by_key("tgk-ccc").is_none());
+    }
+
+    fn sample_persisted(id: &str, group_id: &str, group_name: &str, model: &str, ok: bool, ts_ms: u64) -> PersistedLogEntry {
+        PersistedLogEntry {
+            id: id.into(),
+            ts_ms,
+            group_id: group_id.into(),
+            group_name: group_name.into(),
+            stream: false,
+            ok,
+            status: Some(if ok { 200 } else { 502 }),
+            latency_ms: 10,
+            model: model.into(),
+            attempts: 1,
+            prompt_tokens: Some(1),
+            completion_tokens: Some(2),
+            error: None,
+            request_content: Some("hello user".into()),
+            response_content: Some("hi".into()),
+            pending: false,
+            raw_request: None,
+            raw_response: None,
+        }
+    }
+
+    #[test]
+    fn persisted_logs_query_without_filters_and_load_full_body() {
+        let dir = std::env::temp_dir().join(format!("mc-gw-log-{}-{}", std::process::id(), now_ms()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = GatewayLogPersistence::new(&dir);
+        p.append(
+            sample_persisted("100-1", "mg-free", "免费组", "m1", true, 100),
+            Some(r#"{"messages":[{"role":"user","content":"ping"}]}"#),
+            Some(r#"{"id":"x"}"#),
+        );
+        p.append(
+            sample_persisted("200-2", "mg-nebula", "星云", "m2", false, 200),
+            Some("req-b"),
+            Some("data: {\"delta\":1}\ndata: [DONE]"),
+        );
+        let (rows, total) = p.query(&LogQuery { limit: 50, ..Default::default() });
+        assert_eq!(total, 2, "无筛选也应读出磁盘记录");
+        assert_eq!(rows[0].group_name, "星云");
+        assert_eq!(rows[1].group_name, "免费组");
+
+        let (rows, total) = p.query(&LogQuery {
+            group_id: Some("mg-free".into()),
+            limit: 50,
+            ..Default::default()
+        });
+        assert_eq!(total, 1);
+        assert_eq!(rows[0].model, "m1");
+
+        let (rows, total) = p.query(&LogQuery {
+            search: Some("ping".into()),
+            limit: 50,
+            ..Default::default()
+        });
+        assert_eq!(total, 1);
+        assert_eq!(rows[0].group_name, "免费组");
+
+        let (rows, _) = p.query(&LogQuery {
+            search: Some("免费".into()),
+            limit: 50,
+            ..Default::default()
+        });
+        assert_eq!(rows[0].group_name, "免费组", "搜索应匹配组名");
+
+        let (rows, total) = p.query(&LogQuery {
+            ok: Some(false),
+            limit: 50,
+            ..Default::default()
+        });
+        assert_eq!(total, 1);
+        assert_eq!(rows[0].group_name, "星云");
+
+        let detail = p.get("100-1").expect("详情应按 id 命中");
+        assert!(detail.raw_request.unwrap().contains("ping"));
+
+        let big = "x".repeat(20_000);
+        p.append(
+            sample_persisted("300-3", "mg-big", "大包", "m3", true, 300),
+            Some(&format!(r#"{{"k":"{big}"}}"#)),
+            None,
+        );
+        let detail = p.get("300-3").unwrap();
+        assert!(detail.raw_request.unwrap().contains(&big), "sidecar 应保留完整 body");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

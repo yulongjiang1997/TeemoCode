@@ -4,6 +4,7 @@ import {
   gatewayDeleteGroup,
   gatewayEndpoint,
   gatewayLog,
+  gatewayLogDetail,
   gatewayRegenKey,
   gatewaySaveGroup,
   gatewayStatus,
@@ -58,7 +59,12 @@ describe("gateway 契约:命令与参数", () => {
     expect(calls[0]?.cmd).toBe("gateway_status");
     await gatewayLog({ limit: 20 });
     expect(calls[1]?.cmd).toBe("gateway_log");
-    expect(calls[1]?.args).toEqual({ limit: 20, group_id: null, model: null, ok: null, search: null, offset: null });
+    expect(calls[1]?.args).toEqual({ limit: 20, groupId: null, model: null, ok: null, search: null, offset: null });
+    await gatewayLog({ limit: 50, group_id: "mg-1", ok: false, search: "ping" });
+    expect(calls[2]?.args).toEqual({ limit: 50, groupId: "mg-1", model: null, ok: false, search: "ping", offset: null });
+    await gatewayLogDetail("100-1");
+    expect(calls[3]?.cmd).toBe("gateway_log_detail");
+    expect(calls[3]?.args).toEqual({ id: "100-1" });
   });
 
   it("save/update/delete/regen/test 的参数形状", async () => {
@@ -76,7 +82,7 @@ describe("gateway 契约:命令与参数", () => {
     expect(calls[3]?.args).toEqual({ id: "mg-1" });
     const result = await gatewayTestGroup("mg-1");
     expect(result.ok).toBe(true);
-    expect(calls[4]?.args).toEqual({ id: "mg-1" });
+    expect(calls[4]?.args).toEqual({ id: "mg-1", timeoutMs: null });
   });
 
   it("gatewayEndpoint 拼接 /v1", () => {

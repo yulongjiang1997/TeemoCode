@@ -15,8 +15,8 @@
 // 不应答会让每次请求白等 1 秒超时窗口。头与体必须经**同一个** BufReader
 // 读——换回裸 conn 读体时,BufReader 的预读缓冲会把体前段吃掉。
 
-use std::io::{BufRead as _, Read as _, Write as _};
-use std::net::{TcpListener, TcpStream};
+use std::io::{BufRead as _, Read, Write as _};
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -69,6 +69,10 @@ pub fn start(host: GatewayHost, port: u16) -> Result<ServerHandle, String> {
         while !stop.load(Ordering::SeqCst) {
             match listener.accept() {
                 Ok((mut conn, _)) => {
+                    // Windows 会把非阻塞 listen 的状态继承到 accept 出的套接字。
+                    // 不改回阻塞的话,引擎 1MB 对话体还没写完,read_exact 就会
+                    // WouldBlock → Abandoned → RST,表现成「标题成功、任务无响应」。
+                    let _ = conn.set_nonblocking(false);
                     if inflight.load(Ordering::SeqCst) >= MAX_INFLIGHT_CONNS {
                         let _ = write_json(
                             &mut conn,
@@ -176,8 +180,20 @@ fn read_request(conn: &mut TcpStream) -> Result<HttpReq, ReadError> {
     }
     // drop take 适配器(head 移动进 drop 就此结束),后续读体不再受限幅
     drop(head);
+    // 许多客户端在长请求体无法预先知道长度时会自动使用
+    // Transfer-Encoding: chunked。ohmyagent 的长上下文请求正是这种形态;
+    // 直接回 411 会让客户端还在发送 body 时看到连接被重置,表现成
+    // 「第一条请求成功,第二条请求永远不再继续」。这里在同一个
+    // BufReader 上解码分块体,否则头阶段的预读字节也会被丢掉。
+    if chunked && content_length.is_some() {
+        return Err(ReadError::Status(400, "请求同时包含 Content-Length 和 chunked 编码"));
+    }
+    if expect_continue && chunked {
+        let _ = conn.write_all(b"HTTP/1.1 100 Continue\r\n\r\n");
+    }
     if chunked {
-        return Err(ReadError::Status(411, "暂不支持 chunked 请求体"));
+        let body = read_chunked_body(&mut reader)?;
+        return Ok(HttpReq { method, path, bearer, body });
     }
     let len = match content_length {
         Some(len) if len <= MAX_BODY_BYTES => len,
@@ -189,8 +205,81 @@ fn read_request(conn: &mut TcpStream) -> Result<HttpReq, ReadError> {
     }
     let mut body = vec![0u8; len];
     // 体必须从**同一个** reader 读(头读多了会吃掉体的前段)
-    reader.read_exact(&mut body).map_err(|_| ReadError::Abandoned)?;
+    read_exact_all(&mut reader, &mut body)?;
     Ok(HttpReq { method, path, bearer, body })
+}
+
+fn read_exact_all(reader: &mut impl Read, buf: &mut [u8]) -> Result<(), ReadError> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let mut off = 0;
+    while off < buf.len() {
+        match reader.read(&mut buf[off..]) {
+            Ok(0) => return Err(ReadError::Abandoned),
+            Ok(n) => off += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(ReadError::Abandoned);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(_) => return Err(ReadError::Abandoned),
+        }
+    }
+    Ok(())
+}
+
+/// 解码 HTTP/1.1 chunked 请求体。每个 chunk 的尺寸行与 trailer 都设有
+/// 限长,累计 body 也受 MAX_BODY_BYTES 约束,避免把分块请求当成无限流读取。
+fn read_chunked_body(reader: &mut impl std::io::BufRead) -> Result<Vec<u8>, ReadError> {
+    fn next_line(reader: &mut impl std::io::BufRead) -> Result<String, ReadError> {
+        let mut line = String::new();
+        let n = reader.read_line(&mut line).map_err(|_| ReadError::Abandoned)?;
+        if n == 0 {
+            return Err(ReadError::Abandoned);
+        }
+        if n > MAX_HEADER_BYTES {
+            return Err(ReadError::Status(400, "分块请求体的尺寸行或尾部过长"));
+        }
+        Ok(line)
+    }
+
+    let mut body = Vec::new();
+    loop {
+        let line = next_line(reader)?;
+        let size_text = line
+            .trim_end_matches(&['\r', '\n'][..])
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim();
+        let size = u64::from_str_radix(size_text, 16)
+            .map_err(|_| ReadError::Status(400, "分块请求体的尺寸无效"))?;
+        if size == 0 {
+            // 最后一块后可以跟 trailer headers,直到空行结束。
+            for _ in 0..MAX_HEADERS {
+                if next_line(reader)?.trim().is_empty() {
+                    return Ok(body);
+                }
+            }
+            return Err(ReadError::Status(400, "分块请求体的尾部过多"));
+        }
+        let size = usize::try_from(size)
+            .ok()
+            .and_then(|n| body.len().checked_add(n).map(|end| (n, end)))
+            .filter(|(_, end)| *end <= MAX_BODY_BYTES)
+            .ok_or(ReadError::Status(413, "请求体过大"))?;
+        let start = body.len();
+        body.resize(size.1, 0);
+        reader
+            .read_exact(&mut body[start..size.1])
+            .map_err(|_| ReadError::Abandoned)?;
+        let mut crlf = [0u8; 2];
+        reader.read_exact(&mut crlf).map_err(|_| ReadError::Abandoned)?;
+        if crlf != *b"\r\n" {
+            return Err(ReadError::Status(400, "分块请求体缺少 CRLF"));
+        }
+    }
 }
 
 // ==================== 最小 HTTP 写 ====================
@@ -246,6 +335,8 @@ fn openai_error(message: &str, err_type: &str, code: &str) -> Value {
 // ==================== 请求分发 ====================
 
 fn handle_conn(conn: &mut TcpStream, host: &GatewayHost) {
+    let _ = conn.set_nonblocking(false);
+    let _ = conn.set_nodelay(true);
     let req = match read_request(conn) {
         Ok(req) => req,
         Err(ReadError::Status(status, msg)) => {
@@ -372,6 +463,7 @@ fn push_log(
     response_content: Option<String>,
 ) {
     host.push_log(LogEntry {
+        request_id: 0,
         ts_ms: super::now_ms(),
         group_id: group.group.id.clone(),
         group_name: group.group.name.clone(),
@@ -415,8 +507,16 @@ fn extract_response_content(body: &Value) -> String {
 
 /// 请求开始时推一条 pending 日志(2026-09-14):
 /// ok=false/pending=true/latency=0,前端展示"请求中"态。
-fn push_pending_log(host: &GatewayHost, group: &RuntimeGroup, stream: bool, request_content: Option<String>) {
+fn push_pending_log(host: &GatewayHost, group: &RuntimeGroup, stream: bool, request_content: Option<String>) -> u64 {
+    let request_id = host.next_log_seq();
+    let initial_model = group
+        .candidates
+        .iter()
+        .find(|c| c.unavailable.is_none())
+        .map(|c| if c.model.is_empty() { c.label.clone() } else { c.model.clone() })
+        .unwrap_or_default();
     host.push_log(LogEntry {
+        request_id,
         ts_ms: super::now_ms(),
         group_id: group.group.id.clone(),
         group_name: group.group.name.clone(),
@@ -424,7 +524,7 @@ fn push_pending_log(host: &GatewayHost, group: &RuntimeGroup, stream: bool, requ
         ok: false,
         status: None,
         latency_ms: 0,
-        model: String::new(),
+        model: initial_model,
         attempts: 0,
         prompt_tokens: None,
         completion_tokens: None,
@@ -433,6 +533,7 @@ fn push_pending_log(host: &GatewayHost, group: &RuntimeGroup, stream: bool, requ
         response_content: None,
         pending: true,
     });
+    request_id
 }
 
 // ==================== 非流式调度(服务与测试命令共用) ====================
@@ -459,7 +560,7 @@ pub(crate) async fn run_buffered(
 ) -> Result<BufferedOk, BufferedFail> {
     let started = std::time::Instant::now();
     // 立即写一条 pending 日志(2026-09-14):前端可实时看到"请求中"态。
-    push_pending_log(host, group, false, Some(extract_content(&incoming)));
+    let request_id = push_pending_log(host, group, false, Some(extract_content(&incoming)));
     let ctx = GroupCtx::of(&group.group);
     let timeout = group.group.effective_timeout();
     let mut attempts = unavailable_notes(group);
@@ -487,6 +588,7 @@ pub(crate) async fn run_buffered(
     let mut last_error: Option<UpstreamError> = None;
     let mut usage_out = Usage { prompt_tokens: Some(prompt_est), completion_tokens: None };
     for cand in &plan {
+        host.update_pending_model(request_id, &cand.model);
         match upstream::call_buffered(host.client(), cand, &incoming, &ctx, timeout).await {
             Ok(reply) => {
                 host.record_attempt(&group.group.id, &cand.id, true);
@@ -499,7 +601,7 @@ pub(crate) async fn run_buffered(
                 usage_out.merge(&reply.usage);
                 // 更新 pending 条目(而不是追加新条目),使前端"请求中"态翻为完成
                 // Use complete_and_persist to also write to JSONL with full bodies.
-                host.complete_and_persist(false, true, Some(200), started.elapsed().as_millis() as u64,
+                host.complete_and_persist(request_id, &group.group.id, &group.group.name, false, true, Some(200), started.elapsed().as_millis() as u64,
                     &reply.model, attempts.len() as u32, &usage_out, None,
                     Some(extract_content(&incoming)), Some(extract_response_content(&reply.body)),
                     Some(incoming.to_string()), Some(reply.body.to_string()));
@@ -527,7 +629,7 @@ pub(crate) async fn run_buffered(
     let model = attempts.last().map(|a| a.model.clone()).unwrap_or_default();
     // 更新 pending 条目(而不是追加新条目)
     // Use complete_and_persist to also write to JSONL (no response body on failure).
-    host.complete_and_persist(false, false, Some(status), started.elapsed().as_millis() as u64,
+    host.complete_and_persist(request_id, &group.group.id, &group.group.name, false, false, Some(status), started.elapsed().as_millis() as u64,
         &model, attempts_n, &usage_out, Some(summary.clone()),
         Some(extract_content(&incoming)), None,
         Some(incoming.to_string()), None);
@@ -564,6 +666,8 @@ struct StreamOutcome {
     attempts: usize,
     usage: Usage,
     error: Option<String>,
+    response_content: String,
+    raw_response: String,
 }
 
 fn handle_streaming(
@@ -574,7 +678,7 @@ fn handle_streaming(
     started: std::time::Instant,
 ) {
     // 立即写一条 pending 日志(2026-09-14)。
-    push_pending_log(host, group, true, Some(extract_content(&incoming)));
+    let request_id = push_pending_log(host, group, true, Some(extract_content(&incoming)));
     let ctx = GroupCtx::of(&group.group);
     let timeout = group.group.effective_timeout();
     let mut attempts = unavailable_notes(group);
@@ -602,12 +706,17 @@ fn handle_streaming(
         };
         let mut last_error: Option<UpstreamError> = None;
         for cand in &plan {
+            host.update_pending_model(
+                request_id,
+                if cand.model.is_empty() { &cand.label } else { &cand.model },
+            );
             match upstream::open_stream(host.client(), cand, &incoming, &ctx, timeout).await {
                 Ok((reply, model)) => {
+                    let display_model = if model.is_empty() { cand.label.clone() } else { model.clone() };
                     host.record_attempt(&group.group.id, &cand.id, true);
                     attempts.push(AttemptNote {
                         label: cand.label.clone(),
-                        model: model.clone(),
+                        model: if model.is_empty() { cand.label.clone() } else { model.clone() },
                         ok: true,
                         message: String::new(),
                     });
@@ -616,7 +725,7 @@ fn handle_streaming(
                         conn,
                         &[
                             ("X-Gateway-Group", group.group.name.clone()),
-                            ("X-Gateway-Model", model.clone()),
+                            ("X-Gateway-Model", display_model.clone()),
                         ],
                     );
                     let mut write_conn = match conn.try_clone() {
@@ -625,20 +734,27 @@ fn handle_streaming(
                             return StreamOutcome {
                                 ok: false,
                                 status: Some(200),
-                                model,
+                                model: display_model.clone(),
                                 attempts: attempts.len(),
                                 usage: Usage { prompt_tokens: Some(prompt_est), completion_tokens: None },
                                 error: Some(format!("客户端连接不可写: {e}")),
+                                response_content: String::new(),
+                                raw_response: String::new(),
                             };
                         }
                     };
-                    let write = move |bytes: &[u8]| -> std::io::Result<()> { write_conn.write_all(bytes) };
-                    let relay = upstream::relay_stream(reply, model.clone(), write, timeout.max(Duration::from_secs(60))).await;
+                    let write = move |bytes: &[u8]| -> std::io::Result<()> {
+                        write_conn.write_all(bytes)?;
+                        write_conn.flush()
+                    };
+                    let relay = upstream::relay_stream(reply, display_model.clone(), write, timeout.max(Duration::from_secs(60))).await;
                     return match relay {
                         Ok(summary) => StreamOutcome {
                             ok: summary.error.is_none(),
                             status: Some(200),
-                            model,
+                            model: summary.response_model.clone().unwrap_or_else(|| {
+                                display_model.clone()
+                            }),
                             attempts: attempts.len(),
                             usage: Usage {
                                 prompt_tokens: Some(prompt_est),
@@ -648,14 +764,18 @@ fn handle_streaming(
                                     .or_else(|| Some(upstream::estimate_tokens(summary.completion_chars))),
                             },
                             error: summary.error,
+                            response_content: summary.response_content,
+                            raw_response: summary.raw_response,
                         },
                         Err(e) => StreamOutcome {
                             ok: false,
                             status: Some(200),
-                            model,
+                            model: display_model,
                             attempts: attempts.len(),
                             usage: Usage { prompt_tokens: Some(prompt_est), completion_tokens: None },
                             error: Some(e),
+                            response_content: String::new(),
+                            raw_response: String::new(),
                         },
                     };
                 }
@@ -686,13 +806,22 @@ fn handle_streaming(
             attempts: attempts.len(),
             usage: Usage { prompt_tokens: Some(prompt_est), completion_tokens: None },
             error: Some(summary),
+            response_content: String::new(),
+            raw_response: String::new(),
         }
     });
+    // 流式响应以 Connection: close 定界。引擎在 complete_and_persist
+    // 落盘之前就必须看到 EOF，否则会一直等下一个 delta。
+    let _ = conn.flush();
+    let _ = conn.shutdown(Shutdown::Write);
     // 更新 pending 条目(而不是追加新条目),与 run_buffered 同款
     // Use complete_and_persist to also write to JSONL. For streaming, the
-    // response body is relayed byte-by-byte and not captured here, so
-    // raw_response is None (only response_content truncated text is available).
+    // Store the captured stream content in the same detail fields as buffered
+    // requests so streamed work is inspectable too.
     host.complete_and_persist(
+        request_id,
+        &group.group.id,
+        &group.group.name,
         true,
         outcome.ok,
         outcome.status,
@@ -702,9 +831,9 @@ fn handle_streaming(
         &outcome.usage,
         outcome.error.clone(),
         Some(extract_content(&incoming)),
-        None,
+        (!outcome.response_content.is_empty()).then_some(outcome.response_content),
         Some(incoming.to_string()),
-        None,
+        (!outcome.raw_response.is_empty()).then_some(outcome.raw_response),
     );
 }
 
@@ -831,6 +960,7 @@ Connection: close
             temperature: None,
             system_prompt: String::new(),
             timeout_seconds: 10,
+            log_enabled: true,
             models,
         }
     }
@@ -839,7 +969,7 @@ Connection: close
     fn make_host(group: ModelGroup) -> (GatewayHost, RuntimeGroup) {
         let host = GatewayHost::new();
         let cfg = DesktopConfig {
-            gateway: crate::gateway::GatewaySettings { enabled: true, port: 0, groups: vec![group] },
+            gateway: crate::gateway::GatewaySettings { enabled: true, port: 0, groups: vec![group], vendor_presets: vec![] },
             models: serde_json::json!([]),
             ..Default::default()
         };
@@ -1001,6 +1131,52 @@ Connection: close
         assert_eq!(status, 200, "大 body 请求必须完整读取并转发(不再 14ms 重置)");
         assert!(String::from_utf8_lossy(&body).contains("hello"));
 
+        // 长上下文客户端可能使用 Transfer-Encoding: chunked;网关必须
+        // 解码后继续走正常鉴权与转发,不能在客户端发送 body 时重置连接。
+        let chunked_body = incoming_body(false).to_string().into_bytes();
+        let mut chunked_conn = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let chunked_head = "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\n\
+Authorization: Bearer tgk-e2e\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+        chunked_conn.write_all(chunked_head.as_bytes()).unwrap();
+        chunked_conn
+            .write_all(format!("{:X}\r\n", chunked_body.len()).as_bytes())
+            .unwrap();
+        chunked_conn.write_all(&chunked_body).unwrap();
+        chunked_conn.write_all(b"\r\n0\r\n\r\n").unwrap();
+        let mut chunked_resp = Vec::new();
+        chunked_conn.set_read_timeout(Some(Duration::from_secs(15))).unwrap();
+        let _ = chunked_conn.read_to_end(&mut chunked_resp);
+        let chunked_text = String::from_utf8_lossy(&chunked_resp);
+        assert!(chunked_text.starts_with("HTTP/1.1 200 OK"), "chunked body 应正常转发: {chunked_text}");
+        assert!(chunked_text.contains("hello"));
+
+        // 引擎真实对话约 1MB,且 Go 会先发 Expect: 100-continue 再慢慢写 body。
+        // 头到齐、体尚未到达时绝不能 Abandoned/RST。
+        let mut slow_json = incoming_body(false);
+        slow_json["messages"][0]["content"] = Value::String("x".repeat(256 * 1024));
+        let slow_body = slow_json.to_string().into_bytes();
+        let mut slow = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let slow_head = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\n\
+Authorization: Bearer tgk-e2e\r\nContent-Length: {}\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n",
+            slow_body.len()
+        );
+        slow.write_all(slow_head.as_bytes()).unwrap();
+        slow.set_read_timeout(Some(Duration::from_secs(15))).unwrap();
+        std::thread::sleep(Duration::from_millis(80));
+        for chunk in slow_body.chunks(8 * 1024) {
+            slow.write_all(chunk).unwrap();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let mut slow_resp = Vec::new();
+        let _ = slow.read_to_end(&mut slow_resp);
+        let slow_text = String::from_utf8_lossy(&slow_resp);
+        assert!(
+            slow_text.contains("HTTP/1.1 200 OK"),
+            "分片大 body 应转发成功,不能 RST: {slow_text}"
+        );
+        assert!(slow_text.contains("hello"));
+
         // 流式对话:SSE chunk 词汇 + [DONE]
         let (status, _, body) = call(
             "POST",
@@ -1055,6 +1231,54 @@ Connection: close
         assert!(text.starts_with("HTTP/1.1 200 OK"), "切换后应成功: {}", text.lines().next().unwrap_or(""));
         assert!(text.contains("text/event-stream"));
         assert!(text.contains("chat.completion.chunk"));
+        assert!(text.contains("[DONE]"));
+        handle.stop();
+    }
+
+    /// 自定义上游常忽略 stream=true，直接回一条带 tool_calls 的
+    /// chat.completion。必须改写成 chunk，否则引擎空等增量、工作区无输出。
+    #[test]
+    fn streaming_json_tool_completion_is_rewritten_as_chunks() {
+        let good = spawn_upstream(Arc::new(|_, _| {
+            let body = json!({
+                "id": "cmpl-1",
+                "object": "chat.completion",
+                "model": "up-model",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": null,
+                        "tool_calls": [{
+                            "id": "call-1",
+                            "type": "function",
+                            "function": { "name": "read_file", "arguments": "{\"path\":\"a.txt\"}" }
+                        }]
+                    },
+                    "finish_reason": "stop"
+                }]
+            });
+            (200, "application/json".into(), body.to_string().into_bytes())
+        }));
+        let (host, _rt) = make_host(group_with("mg-json", "json组", vec![custom(&good, "up-model", 1)]));
+        let handle = start(host.clone(), 0).unwrap();
+        let mut conn = std::net::TcpStream::connect(("127.0.0.1", handle.port)).unwrap();
+        let body = incoming_body(true).to_string().into_bytes();
+        let req = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer tgk-e2e\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        conn.write_all(req.as_bytes()).unwrap();
+        conn.write_all(&body).unwrap();
+        let mut resp = Vec::new();
+        conn.set_read_timeout(Some(Duration::from_secs(15))).unwrap();
+        let _ = conn.read_to_end(&mut resp);
+        let text = String::from_utf8_lossy(&resp);
+        assert!(text.contains("text/event-stream"), "{text}");
+        assert!(text.contains("chat.completion.chunk"), "应改写成 chunk: {text}");
+        assert!(text.contains("\"tool_calls\""), "必须带上工具调用: {text}");
+        assert!(text.contains("call-1"));
+        assert!(text.contains("\"finish_reason\":\"tool_calls\"") || text.contains("\"finish_reason\": \"tool_calls\""), "{text}");
         assert!(text.contains("[DONE]"));
         handle.stop();
     }

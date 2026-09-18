@@ -1938,6 +1938,7 @@ fn main() {
             gateway::gateway_ensure_running,
             gateway::gateway_log,
             gateway::gateway_log_count,
+            gateway::gateway_log_detail,
             gateway::gateway_log_stats,
             gateway::gateway_save_group,
             gateway::gateway_delete_group,

@@ -71,6 +71,8 @@ export interface GatewayStatus {
 }
 
 export interface GatewayLogEntry {
+  /** `{ts_ms}-{seq}`; 点详情用。pending 条目没有。 */
+  id?: string;
   ts_ms: number;
   group_id: string;
   group_name: string;
@@ -83,14 +85,12 @@ export interface GatewayLogEntry {
   prompt_tokens: number | null;
   completion_tokens: number | null;
   error: string | null;
-  /** Request/response content (truncated: 500 chars in memory, 2000 in persisted). */
   request_content: string | null;
   response_content: string | null;
-  /** Whether request is still in progress. */
   pending: boolean;
-  /** Full request body (up to 10KB). Only present in persisted (filtered) entries. */
+  /** 完整请求体。列表接口不带,gateway_log_detail 才有。 */
   raw_request?: string | null;
-  /** Full response body (up to 10KB). Only present in persisted (filtered) entries. */
+  /** 完整响应体。列表接口不带,gateway_log_detail 才有。 */
   raw_response?: string | null;
 }
 
@@ -167,7 +167,7 @@ export async function gatewayLog(
   if (!inDesktopShell()) return [];
   return invoke<GatewayLogEntry[]>("gateway_log", {
     limit: filter?.limit ?? null,
-    group_id: filter?.group_id ?? null,
+    groupId: filter?.group_id ?? null,
     model: filter?.model ?? null,
     ok: filter?.ok ?? null,
     search: filter?.search ?? null,
@@ -181,11 +181,17 @@ export async function gatewayLogCount(
 ): Promise<number> {
   if (!inDesktopShell()) return 0;
   return invoke<number>("gateway_log_count", {
-    group_id: filter?.group_id ?? null,
+    groupId: filter?.group_id ?? null,
     model: filter?.model ?? null,
     ok: filter?.ok ?? null,
     search: filter?.search ?? null,
   });
+}
+
+/** 单条请求的完整请求/响应体。 */
+export async function gatewayLogDetail(id: string): Promise<GatewayLogEntry | null> {
+  if (!inDesktopShell()) return null;
+  return invoke<GatewayLogEntry>("gateway_log_detail", { id });
 }
 
 /** 跨会话调用统计(2026-09-12):按模型 + 范围聚合 tokens/调用/总时长 + 全量热力图。

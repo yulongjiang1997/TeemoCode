@@ -14,6 +14,7 @@ import {
   gatewayEndpoint,
   gatewayLog,
   gatewayLogCount,
+  gatewayLogDetail,
   gatewayProbeGroup,
   gatewayRegenKey,
   gatewayResetModelHealth,
@@ -76,20 +77,39 @@ function emptyModel(): GroupModel {
   };
 }
 
-/** 毫秒时间戳 → HH:mm:ss(日志表用,不引 dayjs 的重格式化)。 */
-function hhmmss(tsMs: number): string {
+/** 毫秒时间戳 → YYYY-MM-DD HH:mm:ss。 */
+function formatLogTime(tsMs: number): string {
   const d = new Date(tsMs);
+  if (Number.isNaN(d.getTime())) return "—";
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-/** Pretty-print a JSON string; return original text if parse fails. */
-function prettyJson(text: string): string {
+function prettyJsonValue(text: string): string | null {
   try {
     return JSON.stringify(JSON.parse(text), null, 2);
   } catch {
-    return text;
+    return null;
   }
+}
+
+/** JSON 或 SSE(`data: {...}`) 格式化;截断/非 JSON 原文展示。 */
+function formatLogBody(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return text;
+  const looksSse = /^data:/m.test(trimmed) || trimmed.includes("\ndata:");
+  if (looksSse) {
+    return trimmed.split("\n").map((line) => {
+      const s = line.replace(/\r$/, "");
+      if (!s.startsWith("data:")) return s;
+      const payload = s.slice(5).trim();
+      if (!payload || payload === "[DONE]") return s;
+      const pretty = prettyJsonValue(payload);
+      if (!pretty) return s;
+      return `data: ${pretty.replace(/\n/g, "\n      ")}`;
+    }).join("\n");
+  }
+  return prettyJsonValue(trimmed) ?? text;
 }
 
 export function GatewaySection() {
@@ -119,18 +139,16 @@ export function GatewaySection() {
   const [fetched, setFetched] = useState<Record<number, { ids: string[]; error?: string }>>({});
   const [fetching, setFetching] = useState<Set<number>>(new Set());
   const [log, setLog] = useState<GatewayLogEntry[]>([]);
-  /** Log filter state. When any filter is active, queries go to disk. */
   const [logFilter, setLogFilter] = useState<{
     group_id: string;
     model: string;
     ok: "" | "true" | "false";
     search: string;
   }>({ group_id: "", model: "", ok: "", search: "" });
-  /** Total count for pagination (only relevant when filters are active). */
+  const [debouncedModel, setDebouncedModel] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [logTotal, setLogTotal] = useState(0);
-  /** Current page (0-indexed) for paginated disk queries. */
   const [logPage, setLogPage] = useState(0);
-  /** Selected log entry for detail modal. */
   const [logDetail, setLogDetail] = useState<GatewayLogEntry | null>(null);
   // 端口草稿:与保存值不同时出现「应用」按钮
   const [portDraft, setPortDraft] = useState<string | null>(null);
@@ -138,22 +156,25 @@ export function GatewaySection() {
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  /** Whether any filter is active (triggers disk-based query path). */
-  const logFilterActive = !!logFilter.group_id || !!logFilter.model || !!logFilter.search || logFilter.ok !== "";
+  const logFilterActive = !!logFilter.group_id || !!debouncedModel || !!debouncedSearch || logFilter.ok !== "";
   const LOG_PAGE_SIZE = 50;
 
-  /** Build GatewayLogFilter from current filter state. */
-  const buildLogFilter = useCallback((): GatewayLogFilter => {
-    if (!logFilterActive) return { limit: 50 };
-    return {
-      group_id: logFilter.group_id || null,
-      model: logFilter.model || null,
-      ok: logFilter.ok === "" ? null : logFilter.ok === "true",
-      search: logFilter.search || null,
-      limit: LOG_PAGE_SIZE,
-      offset: logPage * LOG_PAGE_SIZE,
-    };
-  }, [logFilter, logFilterActive, logPage]);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedModel(logFilter.model.trim());
+      setDebouncedSearch(logFilter.search.trim());
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [logFilter.model, logFilter.search]);
+
+  const buildLogFilter = useCallback((): GatewayLogFilter => ({
+    group_id: logFilter.group_id || null,
+    model: debouncedModel || null,
+    ok: logFilter.ok === "" ? null : logFilter.ok === "true",
+    search: debouncedSearch || null,
+    limit: LOG_PAGE_SIZE,
+    offset: logPage * LOG_PAGE_SIZE,
+  }), [logFilter.group_id, logFilter.ok, debouncedModel, debouncedSearch, logPage]);
 
   const refresh = useCallback(() => {
     gatewayStatus()
@@ -166,23 +187,32 @@ export function GatewaySection() {
     gatewayLog(filter)
       .then(setLog)
       .catch(() => {});
-    if (logFilterActive) {
-      gatewayLogCount({
-        group_id: logFilter.group_id || null,
-        model: logFilter.model || null,
-        ok: logFilter.ok === "" ? null : logFilter.ok === "true",
-        search: logFilter.search || null,
-      })
-        .then(setLogTotal)
-        .catch(() => {});
-    }
-  }, [buildLogFilter, logFilterActive, logFilter]);
+    gatewayLogCount({
+      group_id: filter.group_id,
+      model: filter.model,
+      ok: filter.ok,
+      search: filter.search,
+    })
+      .then(setLogTotal)
+      .catch(() => {});
+  }, [buildLogFilter]);
   useEffect(refresh, [refresh]);
 
-  // Reset to page 0 when filters change (avoid out-of-range offset).
+  const openLogDetail = useCallback(async (e: GatewayLogEntry) => {
+    if (e.pending) return;
+    setLogDetail(e);
+    if (!e.id) return;
+    try {
+      const full = await gatewayLogDetail(e.id);
+      if (full) setLogDetail(full);
+    } catch {
+      // 列表摘要仍可看
+    }
+  }, []);
+
   useEffect(() => {
     setLogPage(0);
-  }, [logFilter]);
+  }, [logFilter.group_id, logFilter.ok, debouncedModel, debouncedSearch]);
 
   // 模型库清单(引用条目的下拉来源;浏览器模式为空)
   useEffect(() => {
@@ -1065,23 +1095,25 @@ export function GatewaySection() {
                 <th>{t("settings.gateway.log.latency")}</th>
                 <th>{t("settings.gateway.log.attempts")}</th>
                 <th>{t("settings.gateway.log.tokens")}</th>
-                <th>{t("settings.gateway.log.requestContent")}</th>
-                <th>{t("settings.gateway.log.responseContent")}</th>
+                <th>{t("settings.gateway.log.detail.button")}</th>
               </tr>
             </thead>
             <tbody>
-              {(!logFilterActive ? [...log].reverse() : log).map((e, i) => (
+              {log.map((e, i) => (
                 <tr
-                  key={`${e.ts_ms}-${i}`}
+                  key={e.id ?? `${e.ts_ms}-${i}`}
                   title={e.error ?? undefined}
                   className={`cursor-pointer hover:bg-base-200 ${e.pending ? "animate-pulse" : ""}`}
-                  onClick={() => !e.pending && setLogDetail(e)}
+                  onClick={() => { void openLogDetail(e); }}
                 >
-                  <td className="font-mono text-2xs">{hhmmss(e.ts_ms)}</td>
+                  <td className="whitespace-nowrap font-mono text-2xs">{formatLogTime(e.ts_ms)}</td>
                   <td className="max-w-32 truncate font-mono text-2xs">{e.group_name}</td>
                   <td className="max-w-40 truncate font-mono text-2xs">
                     {e.pending ? (
-                      <span className="loading loading-spinner loading-xs" aria-hidden />
+                      <span className="inline-flex items-center gap-1">
+                        <span className="loading loading-spinner loading-xs" aria-hidden />
+                        <span className="truncate">{e.model || t("settings.gateway.log.pending")}</span>
+                      </span>
                     ) : (
                       <>
                         {e.model} {e.stream && <span className="badge badge-ghost badge-xs">{t("settings.gateway.log.streamBadge")}</span>}
@@ -1104,11 +1136,18 @@ export function GatewaySection() {
                   <td className="font-mono text-2xs">
                     {e.pending ? "—" : `${e.prompt_tokens ?? "—"}/${e.completion_tokens ?? "—"}`}
                   </td>
-                  <td className="max-w-48 truncate text-2xs text-base-content/50" title={e.request_content ?? undefined}>
-                    {e.request_content ?? ""}
-                  </td>
-                  <td className="max-w-48 truncate text-2xs text-base-content/50" title={e.response_content ?? undefined}>
-                    {e.response_content ?? ""}
+                  <td>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      disabled={e.pending}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void openLogDetail(e);
+                      }}
+                    >
+                      {t("settings.gateway.log.detail.button")}
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -1117,8 +1156,7 @@ export function GatewaySection() {
         </div>
       )}
 
-      {/* Pagination controls (only when filters are active and reading from disk) */}
-      {logFilterActive && logTotal > LOG_PAGE_SIZE && (
+      {logTotal > LOG_PAGE_SIZE && (
         <div className="mt-1 flex items-center gap-2 px-1 text-2xs">
           <button
             type="button"
@@ -1150,16 +1188,16 @@ export function GatewaySection() {
       {logDetail && (
         <div className="modal modal-open" onClick={() => setLogDetail(null)}>
           <div
-            className="modal-box modal-bottom sm:modal-middle max-w-2xl"
+            className="modal-box modal-bottom sm:modal-middle max-w-4xl"
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="text-sm font-bold">{t("settings.gateway.log.detail.title")}</h3>
-            <div className="py-2 space-y-3 max-h-[70vh] overflow-y-auto">
+            <div className="py-2 space-y-3 max-h-[80vh] overflow-y-auto">
               {/* Basic info */}
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div>
                   <span className="text-base-content/50">{t("settings.gateway.log.time")}:</span>{" "}
-                  <span className="font-mono">{hhmmss(logDetail.ts_ms)}</span>
+                  <span className="font-mono">{formatLogTime(logDetail.ts_ms)}</span>
                 </div>
                 <div>
                   <span className="text-base-content/50">{t("settings.gateway.log.group")}:</span>{" "}
@@ -1212,7 +1250,14 @@ export function GatewaySection() {
                   </pre>
                 </div>
               )}
-              {/* Raw request (full body) */}
+              {logDetail.request_content && !logDetail.raw_request && (
+                <div className="text-xs">
+                  <div className="font-bold">{t("settings.gateway.log.detail.request")}</div>
+                  <pre className="mt-1 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded bg-base-200 p-2 font-mono text-2xs">
+                    {logDetail.request_content}
+                  </pre>
+                </div>
+              )}
               {logDetail.raw_request ? (
                 <div className="text-xs">
                   <div className="flex items-center gap-2">
@@ -1225,22 +1270,17 @@ export function GatewaySection() {
                     >
                       <IconCopy size={12} stroke={1.75} aria-hidden />
                     </button>
+                    {logDetail.raw_request.includes("…(truncated") && (
+                      <span className="text-2xs text-warning">{t("settings.gateway.log.detail.truncated")}</span>
+                    )}
                   </div>
-                  <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-base-200 p-2 font-mono text-2xs">
-                    {prettyJson(logDetail.raw_request)}
+                  <pre className="mt-1 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded bg-base-200 p-2 font-mono text-2xs">
+                    {formatLogBody(logDetail.raw_request)}
                   </pre>
                 </div>
-              ) : logDetail.request_content ? (
-                <div className="text-xs">
-                  <div className="font-bold">{t("settings.gateway.log.detail.request")}</div>
-                  <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-base-200 p-2 font-mono text-2xs">
-                    {logDetail.request_content}
-                  </pre>
-                </div>
-              ) : (
+              ) : !logDetail.request_content ? (
                 <div className="text-xs text-base-content/40">{t("settings.gateway.log.detail.noBody")}</div>
-              )}
-              {/* Raw response (full body) */}
+              ) : null}
               {logDetail.raw_response ? (
                 <div className="text-xs">
                   <div className="flex items-center gap-2">
@@ -1253,15 +1293,18 @@ export function GatewaySection() {
                     >
                       <IconCopy size={12} stroke={1.75} aria-hidden />
                     </button>
+                    {logDetail.raw_response.includes("…(truncated") && (
+                      <span className="text-2xs text-warning">{t("settings.gateway.log.detail.truncated")}</span>
+                    )}
                   </div>
-                  <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-base-200 p-2 font-mono text-2xs">
-                    {prettyJson(logDetail.raw_response)}
+                  <pre className="mt-1 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded bg-base-200 p-2 font-mono text-2xs">
+                    {formatLogBody(logDetail.raw_response)}
                   </pre>
                 </div>
               ) : logDetail.response_content ? (
                 <div className="text-xs">
                   <div className="font-bold">{t("settings.gateway.log.detail.response")}</div>
-                  <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-base-200 p-2 font-mono text-2xs">
+                  <pre className="mt-1 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded bg-base-200 p-2 font-mono text-2xs">
                     {logDetail.response_content}
                   </pre>
                 </div>
