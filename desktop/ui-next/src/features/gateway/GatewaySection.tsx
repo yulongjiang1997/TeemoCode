@@ -145,6 +145,8 @@ export function GatewaySection() {
     ok: "" | "true" | "false";
     search: string;
   }>({ group_id: "", model: "", ok: "", search: "" });
+  // 探测记录开关(2026-09-17):默认隐藏 fastest 探测/手动测试日志
+  const [showProbes, setShowProbes] = useState(false);
   const [debouncedModel, setDebouncedModel] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [logTotal, setLogTotal] = useState(0);
@@ -174,7 +176,8 @@ export function GatewaySection() {
     search: debouncedSearch || null,
     limit: LOG_PAGE_SIZE,
     offset: logPage * LOG_PAGE_SIZE,
-  }), [logFilter.group_id, logFilter.ok, debouncedModel, debouncedSearch, logPage]);
+    include_probes: showProbes,
+  }), [logFilter.group_id, logFilter.ok, debouncedModel, debouncedSearch, logPage, showProbes]);
 
   const refresh = useCallback(() => {
     gatewayStatus()
@@ -192,6 +195,7 @@ export function GatewaySection() {
       model: filter.model,
       ok: filter.ok,
       search: filter.search,
+      include_probes: showProbes,
     })
       .then(setLogTotal)
       .catch(() => {});
@@ -1079,6 +1083,16 @@ export function GatewaySection() {
             {t("settings.gateway.log.filter.clear")}
           </button>
         )}
+        {/* 显示探测记录开关(2026-09-17):默认隐藏 fastest 探测/手动测试日志 */}
+        <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-2xs" title={t("settings.gateway.log.showProbesTip")}>
+          <input
+            type="checkbox"
+            className="checkbox checkbox-xs"
+            checked={showProbes}
+            onChange={(e) => setShowProbes(e.target.checked)}
+          />
+          {t("settings.gateway.log.showProbes")}
+        </label>
       </div>
 
       {log.length === 0 ? (

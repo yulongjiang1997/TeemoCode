@@ -179,7 +179,7 @@ pub fn create(
     y: i32,
     width: i32,
     height: i32,
-    scale: f64,
+    _scale: f64,
     custom_sprite: Option<Vec<u8>>,
 ) -> Result<(), String> {
     register_window_class()?;

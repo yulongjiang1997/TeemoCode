@@ -348,6 +348,7 @@ fn list_distros_from_registry() -> Result<Vec<String>, String> {
     Ok(names)
 }
 
+#[allow(dead_code)]
 fn parse_distro_list(out: &str) -> Vec<String> {
     out.lines()
         .map(str::trim)

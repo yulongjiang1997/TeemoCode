@@ -30,7 +30,20 @@ const MAX_HEADER_BYTES: usize = 32 * 1024;
 const MAX_HEADERS: usize = 100;
 /// 请求体上限:长上下文对话按 ~8 token/KB 估算,32MB 远超任何真实场景。
 const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
-const MAX_INFLIGHT_CONNS: usize = 32;
+/// 在途连接上限。每个连接占一个 OS 线程,而慢模型(免费组实测
+/// 120-311 秒)会长时间占用——上限过低会让后续请求直接 503。
+/// 128 足够覆盖单机多会话并发,又不至于耗尽情量。
+const MAX_INFLIGHT_CONNS: usize = 128;
+
+/// 在途连接计数守卫:Drop 时递减,保证 handle_conn panic 也不会泄漏计数
+/// (泄漏 32 次后网关会永久返回 503「在途连接达上限」)。
+struct InflightGuard(Arc<AtomicUsize>);
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 // ==================== 服务生命周期 ====================
 
@@ -84,10 +97,11 @@ pub fn start(host: GatewayHost, port: u16) -> Result<ServerHandle, String> {
                     }
                     inflight.fetch_add(1, Ordering::SeqCst);
                     let host = host.clone();
-                    let gauge = inflight.clone();
+                    // guard 随线程结束(含 panic 展开)自动递减
+                    let guard = InflightGuard(inflight.clone());
                     std::thread::spawn(move || {
+                        let _guard = guard;
                         handle_conn(&mut conn, &host);
-                        gauge.fetch_sub(1, Ordering::SeqCst);
                     });
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -448,40 +462,6 @@ fn summarize_attempts(attempts: &[AttemptNote]) -> String {
     format!("共尝试 {} 个模型: {}", attempts.len(), parts.join("; "))
 }
 
-fn push_log(
-    host: &GatewayHost,
-    group: &RuntimeGroup,
-    stream: bool,
-    started: std::time::Instant,
-    ok: bool,
-    status: Option<u16>,
-    model: String,
-    attempts: u32,
-    usage: &Usage,
-    error: Option<String>,
-    request_content: Option<String>,
-    response_content: Option<String>,
-) {
-    host.push_log(LogEntry {
-        request_id: 0,
-        ts_ms: super::now_ms(),
-        group_id: group.group.id.clone(),
-        group_name: group.group.name.clone(),
-        stream,
-        ok,
-        status,
-        latency_ms: started.elapsed().as_millis() as u64,
-        model,
-        attempts,
-        prompt_tokens: usage.prompt_tokens,
-        completion_tokens: usage.completion_tokens,
-        error: error.map(|e| e.chars().take(200).collect::<String>()),
-        request_content: request_content.map(|s| s.chars().take(500).collect()),
-        response_content: response_content.map(|s| s.chars().take(500).collect()),
-        pending: false,
-    });
-}
-
 /// 从 incoming 请求体提取用户最后一条消息内容(截断 500 字符)。
 fn extract_content(incoming: &Value) -> String {
     incoming
@@ -532,6 +512,7 @@ fn push_pending_log(host: &GatewayHost, group: &RuntimeGroup, stream: bool, requ
         request_content: request_content.map(|s| s.chars().take(500).collect()),
         response_content: None,
         pending: true,
+        probe: false,
     });
     request_id
 }

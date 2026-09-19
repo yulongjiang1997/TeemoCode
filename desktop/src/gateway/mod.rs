@@ -22,6 +22,7 @@ pub mod upstream;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use serde::{Deserialize, Serialize};
@@ -464,6 +465,10 @@ pub struct LogEntry {
     /// 请求是否仍在进行中(2026-09-14):true = 请求已发出但未收到响应。
     /// 前端展示"请求中"态;完成后翻为 false。
     pub pending: bool,
+    /// fastest 模式的后台探测请求(2026-09-17):前端默认过滤掉,避免
+    /// 每 30 秒一条 ping 记录淹没真实请求。真实请求恒为 false。
+    #[serde(default)]
+    pub probe: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize)]
@@ -633,16 +638,16 @@ impl GatewayLogStore {
     pub fn query(&self, range: GatewayRangeKind) -> GatewayLogStats {
         let days = self.days.lock_ok();
         let today = crate::stats::today_str();
-        let mut lo = String::new();
-        match range {
-            GatewayRangeKind::Today => lo = today.clone(),
+        let lo = match range {
+            GatewayRangeKind::Today => today.clone(),
             GatewayRangeKind::Day7 => {
                 let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
                 let d = now.date().checked_sub(time::Duration::days(6)).unwrap_or(now.date());
-                lo = format!("{:04}-{:02}-{:02}", d.year(), d.month() as u8, d.day());
+                format!("{:04}-{:02}-{:02}", d.year(), d.month() as u8, d.day())
             }
-            GatewayRangeKind::All => lo = String::new(),
-        }
+            // 全量:空串小于任何日期串,比较时恒为 in_range
+            GatewayRangeKind::All => String::new(),
+        };
         let mut totals = (0u64, 0u64, 0u64, 0u64, 0u64); // input, output, calls, ok, fail
         let mut by_model: HashMap<String, GatewayModelStats> = HashMap::new();
         let mut heat = BTreeMap::new(); // date -> (tokens, calls)
@@ -770,6 +775,9 @@ pub struct PersistedLogEntry {
     /// Persisted entries are always complete; retained for a uniform UI shape.
     #[serde(default)]
     pub pending: bool,
+    /// fastest 探测 / 手动测试请求标记(前端可过滤)。真实请求恒为 false。
+    #[serde(default)]
+    pub probe: bool,
     // --- extra fields only in persisted entries ---
     /// Full request body (truncated to 10KB). Only in JSONL, not in memory.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -800,6 +808,9 @@ pub struct LogQuery {
     /// Pagination offset.
     #[serde(default)]
     pub offset: usize,
+    /// 是否包含探测/手动测试日志(默认 false:真实请求优先,探测不淹没列表)。
+    #[serde(default)]
+    pub include_probes: bool,
 }
 
 fn default_log_limit() -> usize {
@@ -811,6 +822,9 @@ pub struct GatewayLogPersistence {
     path: PathBuf,
     bodies_dir: PathBuf,
     io: StdMutex<()>,
+    /// 已写入的行数(内存计数,避免每次 append 都全量读文件判断轮转)。
+    /// 初始值在 new() 时从磁盘数一次;append 成功 +1,轮转后重置为保留数。
+    line_count: AtomicUsize,
 }
 
 impl GatewayLogPersistence {
@@ -818,7 +832,11 @@ impl GatewayLogPersistence {
         let path = config_dir.join("gateway-requests.jsonl");
         let bodies_dir = config_dir.join("gateway-request-bodies");
         let _ = std::fs::create_dir_all(&bodies_dir);
-        Self { path, bodies_dir, io: StdMutex::new(()) }
+        // 启动时数一次现有行数——之后靠内存计数,不再读文件
+        let initial = std::fs::read_to_string(&path)
+            .map(|s| s.lines().filter(|l| !l.is_empty()).count())
+            .unwrap_or(0);
+        Self { path, bodies_dir, io: StdMutex::new(()), line_count: AtomicUsize::new(initial) }
     }
 
     fn body_path(&self, id: &str) -> Option<PathBuf> {
@@ -878,9 +896,15 @@ impl GatewayLogPersistence {
         if append_result.is_err() {
             return;
         }
-        self.rotate_if_needed_locked();
+        // 内存计数:只有真的超过上限才读文件做轮转(每次读几十 MB 代价太高)
+        let n = self.line_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        if n > PERSISTED_LOG_CAP {
+            self.rotate_if_needed_locked();
+        }
     }
 
+    /// 轮转到 PERSISTED_LOG_CAP 条:读全文件、删最旧的行与对应 body sidecar、
+    /// 重写文件。仅在内存计数确认超限时调用,不是每次 append 都跑。
     fn rotate_if_needed_locked(&self) {
         let content = match std::fs::read_to_string(&self.path) {
             Ok(s) => s,
@@ -888,6 +912,8 @@ impl GatewayLogPersistence {
         };
         let lines: Vec<&str> = content.lines().filter(|l| !l.is_empty()).collect();
         if lines.len() <= PERSISTED_LOG_CAP {
+            // 计数与实际不符(外部改动?),以实际为准修正计数
+            self.line_count.store(lines.len(), std::sync::atomic::Ordering::SeqCst);
             return;
         }
         let drop_n = lines.len() - PERSISTED_LOG_CAP;
@@ -901,6 +927,7 @@ impl GatewayLogPersistence {
         let keep = &lines[drop_n..];
         let rewritten = keep.join("\n") + "\n";
         let _ = crate::config::atomic_write_private(&self.path, rewritten.as_bytes());
+        self.line_count.store(keep.len(), std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Query persisted entries with filters. Returns (matching entries, total
@@ -965,6 +992,9 @@ impl GatewayLogPersistence {
 
     /// Check if an entry matches the query filters.
     fn matches(entry: &PersistedLogEntry, q: &LogQuery) -> bool {
+        if !q.include_probes && entry.probe {
+            return false;
+        }
         if let Some(ref gid) = q.group_id {
             if entry.group_id != *gid {
                 return false;
@@ -1030,6 +1060,7 @@ fn to_persisted(
             .as_ref()
             .map(|s| s.chars().take(PERSISTED_CONTENT_CAP).collect()),
         pending: false,
+        probe: entry.probe,
         raw_request: raw_request.map(|s| truncate_bytes(s, RAW_SNIPPET_CAP)),
         raw_response: raw_response.map(|s| truncate_bytes(s, RAW_SNIPPET_CAP)),
     }
@@ -1226,72 +1257,8 @@ impl GatewayHost {
         *s
     }
 
-    /// 请求收到响应后更新 pending 日志条目(2026-09-14)。
-    /// 按 seq 在环形缓冲中找到对应条目,原地更新状态/延迟/内容。
-    /// 找不到(已被挤出 LOG_CAP)则静默跳过——pending 只活几秒,极少被挤。
-    pub(crate) fn update_log(&self, seq: u64, ok: bool, status: Option<u16>, latency_ms: u64,
-        model: &str, attempts: u32, prompt_tokens: Option<i64>, completion_tokens: Option<i64>,
-        error: Option<String>, request_content: Option<String>, response_content: Option<String>,
-    ) {
-        let mut log = self.0.log.lock_ok();
-        // 从后往前找(pending 是最近推入的,逆序扫最快)
-        for entry in log.iter_mut().rev() {
-            if entry.pending {
-                entry.ok = ok;
-                entry.status = status;
-                entry.latency_ms = latency_ms;
-                if !model.is_empty() { entry.model = model.to_string(); }
-                entry.attempts = attempts;
-                entry.prompt_tokens = prompt_tokens;
-                entry.completion_tokens = completion_tokens;
-                entry.error = error;
-                entry.request_content = request_content;
-                entry.response_content = response_content;
-                entry.pending = false;
-                break;
-            }
-        }
-    }
-
-    /// 内部版:直接接收 Usage 结构(server.rs 调用路径)。
-    /// 找最后一个 pending=true 的条目原地更新。找不到则静默跳过。
-    pub(crate) fn update_log_inner(
-        &self,
-        stream: bool,
-        ok: bool,
-        status: Option<u16>,
-        latency_ms: u64,
-        model: &str,
-        attempts: u32,
-        usage: &upstream::Usage,
-        error: Option<String>,
-        request_content: Option<String>,
-        response_content: Option<String>,
-    ) {
-        let mut log = self.0.log.lock_ok();
-        for entry in log.iter_mut().rev() {
-            if entry.pending {
-                entry.stream = stream;
-                entry.ok = ok;
-                entry.status = status;
-                entry.latency_ms = latency_ms;
-                if !model.is_empty() { entry.model = model.to_string(); }
-                entry.attempts = attempts;
-                entry.prompt_tokens = usage.prompt_tokens;
-                entry.completion_tokens = usage.completion_tokens;
-                entry.error = error;
-                entry.request_content = request_content;
-                entry.response_content = response_content;
-                entry.pending = false;
-                break;
-            }
-        }
-    }
-
-    /// Like update_log_inner but also persists the completed entry to JSONL + sidecar.
-    /// Called from server.rs when a real gateway request completes.
-    /// For probe requests (which don't have full bodies), use update_log_inner
-    /// or update_pending_for_model instead — probes are not persisted.
+    /// 请求完成:原地更新 pending 日志条目 + 持久化到 JSONL/sidecar。
+    /// server.rs 的真实请求走这里;探测走 update_pending_for_model(不持久化)。
     pub(crate) fn complete_and_persist(
         &self,
         request_id: u64,
@@ -1353,6 +1320,7 @@ impl GatewayHost {
             request_content: request_content.as_ref().map(|s| s.chars().take(PERSISTED_CONTENT_CAP).collect()),
             response_content: response_content.as_ref().map(|s| s.chars().take(PERSISTED_CONTENT_CAP).collect()),
             pending: false,
+            probe: false,
             raw_request: raw_request.as_deref().map(|s| truncate_bytes(s, RAW_SNIPPET_CAP)),
             raw_response: raw_response.as_deref().map(|s| truncate_bytes(s, RAW_SNIPPET_CAP)),
         });
@@ -1377,6 +1345,7 @@ impl GatewayHost {
                 request_content: None,
                 response_content: None,
                 pending: false,
+                probe: false,
             });
         }
         let mut counters = self.0.counters.lock_ok();
@@ -1397,11 +1366,6 @@ impl GatewayHost {
 
     pub(crate) fn get_persisted(&self, id: &str) -> Option<PersistedLogEntry> {
         self.0.log_persistence.as_ref().and_then(|p| p.get(id))
-    }
-
-    /// Check whether log persistence is available (config dir initialized).
-    pub(crate) fn has_persistence(&self) -> bool {
-        self.0.log_persistence.is_some()
     }
 
     /// 按 model 字段精确匹配 pending 条目(2026-09-14:并行探测时
@@ -1572,8 +1536,6 @@ pub fn reload(app: &AppHandle) {
 const PROBE_INTERVAL_NORMAL_SECS: u64 = 30;
 /// 异常模型探测间隔(秒)——给故障模型更多恢复时间。
 const PROBE_INTERVAL_DEGRADED_SECS: u64 = 120;
-/// 连续失败多少次后永久弃用(不再自动探测)。
-use sched::ABANDON_THRESHOLD;
 
 /// fastest 模式后台探测线程(2026-09-14):遍历所有 strategy=fastest 的组,
 /// 对每个候选**并行**发 call_buffered 真实请求,记录延迟 + 写日志。
@@ -1648,6 +1610,7 @@ fn spawn_latency_probe(host: GatewayHost, snapshot: &RuntimeSnapshot) {
                                 completion_tokens: None, error: None,
                                 request_content: Some("[fastest 探测]".to_string()),
                                 response_content: None, pending: true,
+                                probe: true,
                             });
                         }
                         let result = tokio::time::timeout(timeout, {
@@ -1704,69 +1667,6 @@ fn spawn_latency_probe(host: GatewayHost, snapshot: &RuntimeSnapshot) {
     });
 }
 
-/// 对单个候选发一次最小 ping,返回延迟(毫秒)。失败返 u64::MAX。
-fn probe_one(client: &reqwest::Client, cand: &ResolvedCandidate) -> u64 {
-    let body = serde_json::json!({
-        "model": cand.model,
-        "messages": [{ "role": "user", "content": "hi" }],
-        "max_tokens": 1,
-    });
-    let started = std::time::Instant::now();
-    let result = tauri::async_runtime::block_on(async {
-        client
-            .post(format!("{}/v1/chat/completions", cand.base_url.trim_end_matches('/')))
-            .bearer_auth(&cand.api_key)
-            .json(&body)
-            .timeout(std::time::Duration::from_secs(15))
-            .send()
-            .await
-    });
-    match result {
-        Ok(resp) => {
-            if resp.status().is_success() {
-                started.elapsed().as_millis() as u64
-            } else {
-                u64::MAX
-            }
-        }
-        Err(_) => u64::MAX,
-    }
-}
-
-/// async 版 ping 探测(供 gateway_probe_group 并行调用)。
-/// 用 tokio::time::timeout 包裹整个请求(send + 读 body),确保超时精确生效——
-/// reqwest 的 .timeout() 只管 connect+send,不含读 body;且 Client 构建时的
-/// 全局 timeout 可能覆盖单请求值。tokio::time::timeout 是硬超时,到点即返回 Err。
-async fn probe_one_async(client: &reqwest::Client, cand: &ResolvedCandidate, timeout_ms: u64) -> (String, u64) {
-    let body = serde_json::json!({
-        "model": cand.model,
-        "messages": [{ "role": "user", "content": "hi" }],
-        "max_tokens": 1,
-    });
-    let started = std::time::Instant::now();
-    let timeout = std::time::Duration::from_millis(timeout_ms.max(500));
-    let result = tokio::time::timeout(timeout, async {
-        client
-            .post(format!("{}/v1/chat/completions", cand.base_url.trim_end_matches('/')))
-            .bearer_auth(&cand.api_key)
-            .json(&body)
-            .send()
-            .await
-    })
-    .await;
-    let latency = match result {
-        // tokio::time::timeout 超时 → Elapsed error → u64::MAX
-        Err(_) => u64::MAX,
-        // 请求成功发出,但 HTTP 返回了错误 → u64::MAX
-        Ok(Err(_)) => u64::MAX,
-        // 请求成功且 HTTP 200 → 记录延迟
-        Ok(Ok(resp)) if resp.status().is_success() => started.elapsed().as_millis() as u64,
-        // HTTP 非 200 → u64::MAX
-        Ok(Ok(_)) => u64::MAX,
-    };
-    (cand.id.clone(), latency)
-}
-
 /// 逐模型探测延迟(2026-09-13):对组内每个候选**并行**发一次真实请求,
 /// 用 call_buffered(正确的 URL/协议/header),手动写日志。
 /// 每个模型用 tokio::time::timeout 硬超时,超时标记为 null(异常 ✕)。
@@ -1819,6 +1719,7 @@ pub async fn gateway_probe_group(app: AppHandle, id: String, timeout_ms: Option<
                 request_content: Some("hi".to_string()),
                 response_content: None,
                 pending: true,
+                probe: true,
             });
             }
             // 用 tokio::time::timeout 硬超时包裹 call_buffered
@@ -1958,10 +1859,14 @@ fn log_query(
         search: non_empty_filter(search),
         limit: limit.map(|n| n as usize).unwrap_or(50),
         offset: offset.map(|n| n as usize).unwrap_or(0),
+        include_probes: false,
     }
 }
 
 fn memory_matches(entry: &LogEntry, q: &LogQuery) -> bool {
+    if !q.include_probes && entry.probe {
+        return false;
+    }
     if let Some(ref gid) = q.group_id {
         if entry.group_id != *gid {
             return false;
@@ -2022,9 +1927,11 @@ pub fn gateway_log(
     ok: Option<bool>,
     search: Option<String>,
     offset: Option<u32>,
+    include_probes: Option<bool>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let host = app.state::<GatewayHost>();
-    let q = log_query(group_id, model, ok, search, limit, offset);
+    let mut q = log_query(group_id, model, ok, search, limit, offset);
+    q.include_probes = include_probes.unwrap_or(false);
     if let Some((entries, _)) = host.query_persisted(&q) {
         let mut out: Vec<serde_json::Value> = entries
             .into_iter()
@@ -2055,9 +1962,11 @@ pub fn gateway_log_count(
     model: Option<String>,
     ok: Option<bool>,
     search: Option<String>,
+    include_probes: Option<bool>,
 ) -> Result<u64, String> {
     let host = app.state::<GatewayHost>();
-    let q = log_query(group_id, model, ok, search, Some(0), Some(0));
+    let mut q = log_query(group_id, model, ok, search, Some(0), Some(0));
+    q.include_probes = include_probes.unwrap_or(false);
     if let Some((_, total)) = host.query_persisted(&q) {
         let extra = if q.ok.is_none() {
             pending_log_values(&host, &q).len()
@@ -2499,6 +2408,7 @@ mod tests {
             request_content: Some("hello user".into()),
             response_content: Some("hi".into()),
             pending: false,
+            probe: false,
             raw_request: None,
             raw_response: None,
         }
@@ -2567,6 +2477,62 @@ mod tests {
         );
         let detail = p.get("300-3").unwrap();
         assert!(detail.raw_request.unwrap().contains(&big), "sidecar 应保留完整 body");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn persisted_logs_rotation_trims_oldest_and_clears_sidecars() {
+        let dir = std::env::temp_dir().join(format!("mc-gw-rot-{}-{}", std::process::id(), now_ms()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = GatewayLogPersistence::new(&dir);
+        // 写入 PERSISTED_LOG_CAP + 5 条,轮转后应只剩最后 CAP 条
+        for i in 0..(PERSISTED_LOG_CAP + 5) {
+            let mut e = sample_persisted(&format!("{i}-x"), "mg", "g", "m", true, i as u64);
+            e.request_content = Some(format!("req-{i}"));
+            p.append(e, Some(&format!("req-{i}")), None);
+        }
+        let content = std::fs::read_to_string(p.path.clone()).unwrap();
+        let lines: Vec<&str> = content.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(lines.len(), PERSISTED_LOG_CAP, "轮转后应恰为 CAP 条");
+        // 最旧的 5 条被删:第一条应是 id "5-x"(前 5 条 0..5 被裁)
+        let first: PersistedLogEntry = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(first.id, "5-x", "最旧的条目应被裁掉");
+        // 被裁条目的 body sidecar 也应被清理
+        assert!(p.body_path("0-x").map(|p| !p.exists()).unwrap_or(true), "被裁条目的 sidecar 应删除");
+        assert!(p.body_path(&format!("{}-x", PERSISTED_LOG_CAP + 4)).map(|p| p.exists()).unwrap_or(false), "保留条目的 sidecar 应在");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn persisted_logs_probe_filter_and_count_semantics() {
+        let dir = std::env::temp_dir().join(format!("mc-gw-probe-{}-{}", std::process::id(), now_ms()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = GatewayLogPersistence::new(&dir);
+        // 2 条真实 + 2 条探测
+        p.append(sample_persisted("1-r", "mg", "g", "m", true, 1), None, None);
+        let mut probe = sample_persisted("2-p", "mg", "g", "m", false, 2);
+        probe.probe = true;
+        p.append(probe, None, None);
+        p.append(sample_persisted("3-r", "mg", "g", "m", true, 3), None, None);
+        let mut probe2 = sample_persisted("4-p", "mg", "g", "m", true, 4);
+        probe2.probe = true;
+        p.append(probe2, None, None);
+
+        // 默认:探测被过滤,只剩 2 条真实
+        let (rows, total) = p.query(&LogQuery { limit: 50, ..Default::default() });
+        assert_eq!(total, 2, "默认应过滤探测记录");
+        assert!(rows.iter().all(|e| !e.probe));
+
+        // include_probes=true:4 条全出
+        let (_, total) = p.query(&LogQuery { limit: 50, include_probes: true, ..Default::default() });
+        assert_eq!(total, 4);
+
+        // ok 筛选与探测过滤叠加:ok=true 且默认 → 2 条真实(1-r, 3-r)
+        let (rows, total) = p.query(&LogQuery { ok: Some(true), limit: 50, ..Default::default() });
+        assert_eq!(total, 2);
+        assert!(rows.iter().all(|e| e.id != "4-p"), "探测条目应被过滤");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -820,10 +820,6 @@ pub(crate) fn parse_buffered_response(
     }
 }
 
-pub(crate) fn to_openai_completion(id: &str, parsed: &(String, String, &'static str, Usage)) -> Value {
-    completion_body(id, &parsed.0, parsed.1.clone(), parsed.2, &parsed.3, &[])
-}
-
 fn to_openai_completion_with_tools(
     id: &str,
     protocol: Protocol,

@@ -29,7 +29,7 @@ pub struct ModelDevEntry {
 
 /// 磁盘缓存格式。
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
-struct CacheFile {
+pub(crate) struct CacheFile {
     /// Unix 时间戳(秒)。
     fetched_at: u64,
     /// provider key → { model_id → ModelDevEntry }
@@ -115,7 +115,7 @@ fn parse_registry(data: &serde_json::Value) -> CacheFile {
 }
 
 /// 异步加载缓存(三级:内存 → 磁盘 → 网络)。
-pub async fn load_cache(config_dir: &PathBuf) -> Result<CacheFile, String> {
+pub(crate) async fn load_cache(config_dir: &PathBuf) -> Result<CacheFile, String> {
     // 1. 内存缓存(未过期)
     {
         let guard = CACHE.lock().map_err(|e| format!("锁失败: {e}"))?;
@@ -232,7 +232,7 @@ fn extract_host(url: &str) -> Option<&str> {
 }
 
 /// 查找单个模型在 models.dev 中的参数。
-pub fn lookup_model(cache: &CacheFile, base_url: &str, model_id: &str) -> Option<ModelDevEntry> {
+pub(crate) fn lookup_model(cache: &CacheFile, base_url: &str, model_id: &str) -> Option<ModelDevEntry> {
     // Phase 1: 按 base_url 匹配 provider
     if let Some(prov_key) = match_provider_key(cache, base_url) {
         if let Some(prov_models) = cache.providers.get(&prov_key) {

@@ -874,6 +874,7 @@ fn parse_env_output(buf: &[u8]) -> HashMap<String, String> {
 
 /// 引擎子进程的补齐项(在继承壳环境的基础上叠加)。纯函数,current 由
 /// 调用方传入以便测试。会话性噪音键(PWD/SHLVL 等)不搬。
+#[allow(dead_code)]
 fn merge_login_env(
     login: &HashMap<String, String>,
     current: &HashMap<String, String>,

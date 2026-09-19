@@ -411,6 +411,8 @@ pub async fn usagestats(app: AppHandle) -> Result<Value, String> {
 /// 而非 `frames:{sid}` 事件——返回值天生有序,不必依赖"监听先于命令"。
 /// windowTurns:回放窗口轮数(UI 传用户设置,缺省壳兜底 20)。
 #[tauri::command]
+// windowTurns 是 IPC 参数名,必须与前端 JSON 字段一致,不能改为 snake_case
+#[allow(non_snake_case)]
 pub async fn session_open(
     host: State<'_, DriverHost>,
     id: String,

@@ -20,6 +20,8 @@ impl NotificationState {
 }
 
 /// 显示系统通知(后台静默;权限未授予时不报错)。
+/// 预留:后台任务完成时弹窗联动,当前主通知路径在 main.rs update_notice。
+#[allow(dead_code)]
 pub fn show(app: &AppHandle, title: &str, body: &str) {
     let _ = app
         .notification()

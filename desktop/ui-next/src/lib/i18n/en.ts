@@ -536,6 +536,8 @@ export const en: Record<MessageKey, string> = {
   "settings.gateway.log.filter.search": "Search",
   "settings.gateway.log.filter.searchPlaceholder": "Search group / model / content",
   "settings.gateway.log.filter.clear": "Clear filters",
+  "settings.gateway.log.showProbes": "Show probe logs",
+  "settings.gateway.log.showProbesTip": "Fastest probe and manual test logs are hidden by default",
   "settings.gateway.log.filter.active": "Filtered",
   "settings.gateway.log.page.prev": "Prev",
   "settings.gateway.log.page.next": "Next",

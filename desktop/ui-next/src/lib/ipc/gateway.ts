@@ -159,6 +159,8 @@ export interface GatewayLogFilter {
   search?: string | null;
   limit?: number | null;
   offset?: number | null;
+  /** 是否包含探测/手动测试日志(默认 false) */
+  include_probes?: boolean;
 }
 
 export async function gatewayLog(
@@ -172,6 +174,7 @@ export async function gatewayLog(
     ok: filter?.ok ?? null,
     search: filter?.search ?? null,
     offset: filter?.offset ?? null,
+    includeProbes: filter?.include_probes ?? false,
   });
 }
 
@@ -185,6 +188,7 @@ export async function gatewayLogCount(
     model: filter?.model ?? null,
     ok: filter?.ok ?? null,
     search: filter?.search ?? null,
+    includeProbes: filter?.include_probes ?? false,
   });
 }
 

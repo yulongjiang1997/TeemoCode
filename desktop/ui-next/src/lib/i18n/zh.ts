@@ -549,6 +549,8 @@ export const zh = {
   "settings.gateway.log.filter.search": "搜索",
   "settings.gateway.log.filter.searchPlaceholder": "搜索组名 / 模型 / 内容",
   "settings.gateway.log.filter.clear": "清除筛选",
+  "settings.gateway.log.showProbes": "显示探测记录",
+  "settings.gateway.log.showProbesTip": "fastest 后台探测与手动测试的日志默认隐藏,勾选后显示",
   "settings.gateway.log.filter.active": "已筛选",
   "settings.gateway.log.page.prev": "上一页",
   "settings.gateway.log.page.next": "下一页",

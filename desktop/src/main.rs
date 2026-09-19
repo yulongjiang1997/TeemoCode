@@ -39,7 +39,6 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use base64::Engine as _;
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -559,7 +558,7 @@ async fn models_fetch(provider: String, base_url: String, api_key: String) -> Re
     let seg = base.rsplit('/').next().unwrap_or("");
     let versioned = seg.len() >= 2 && seg.starts_with('v') && seg[1..].bytes().all(|c| c.is_ascii_digit());
     let models_url = if versioned { format!("{base}/models") } else { format!("{base}/v1/models") };
-    let (url, req) = match provider.as_str() {
+    let (_url, req) = match provider.as_str() {
         "anthropic" => (
             models_url.clone(),
             client
@@ -629,7 +628,7 @@ async fn model_test(provider: String, base_url: String, api_key: String, model: 
     let seg = base.rsplit('/').next().unwrap_or("");
     let versioned = seg.len() >= 2 && seg.starts_with('v') && seg[1..].bytes().all(|c| c.is_ascii_digit());
     let vpath = |p: &str| if versioned { format!("{base}/{p}") } else { format!("{base}/v1/{p}") };
-    let (url, req) = match provider.as_str() {
+    let (_url, req) = match provider.as_str() {
         "anthropic" => (
             vpath("messages"),
             client
@@ -1803,10 +1802,10 @@ fn main() {
     // 桌宠 NSPanel 转换(ensure_pet_window)依赖此插件注册的面板管理状态
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
+    // 系统通知开关状态(从 config 读取初始值,后续由 IPC 命令更新)
     #[cfg(target_os = "windows")]
     let builder = builder.manage(native_pet::NativePetHost::new());
-    // 系统通知开关状态(从 config 读取初始值,后续由 IPC 命令更新)
-    let builder = builder
+    builder
         .manage(config::ConfigStore::new())
         .manage(std::sync::Arc::new(ExternalAgentHost::new()))
             .manage(DriverHost::new())

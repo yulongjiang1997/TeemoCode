@@ -33,6 +33,8 @@ pub(crate) struct ExtRun {
     pub(crate) run_id: String,
     pub(crate) child_sid: String,
     pub(crate) parent_sid: String,
+    /// 引擎侧 tool_call id(取消回执用,字段已写入;当前读取路径未走)
+    #[allow(dead_code)]
     pub(crate) tc_id: String,
     /// 取消标志:cancel 命令置位,worker 线程轮询检测
     pub(crate) cancel: Arc<AtomicBool>,
