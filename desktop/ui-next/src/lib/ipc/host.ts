@@ -95,6 +95,11 @@ export function revealPath(path: string): Promise<string> {
   return invoke<string>("reveal_path", { path });
 }
 
+/** 用系统默认程序打开文件或目录(消息路径右键「打开文件」)。不存在则报错。 */
+export function openPath(path: string): Promise<string> {
+  return invoke<string>("open_path", { path });
+}
+
 const quiet = (p: Promise<unknown>): void => {
   void p.catch(() => {});
 };

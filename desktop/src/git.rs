@@ -1,9 +1,31 @@
 use serde_json::json;
 use std::path::Path;
 use std::process::Command;
-use tauri::Manager;
+use tauri::AppHandle;
 
-use crate::config::config_dir;
+use crate::config::{config_dir, load_config};
+
+/// 与 export/import_mc 一致的三处任务数据相对路径。
+const TASK_DATA_RELS: [&str; 3] = ["ohmy-sessions", "ohmyagent/sessions", "ohmyagent/tasks"];
+
+/// 首次 `git init` 且目录还没有 .gitignore 时写入,避免把密钥和构建产物推进远程。
+/// 已有 .gitignore 绝不覆盖。
+const DEFAULT_GITIGNORE: &str = "\
+.env\n\
+.env.*\n\
+!.env.example\n\
+!.env.sample\n\
+node_modules/\n\
+target/\n\
+dist/\n\
+build/\n\
+__pycache__/\n\
+*.pem\n\
+*.key\n\
+*.p12\n\
+.DS_Store\n\
+Thumbs.db\n\
+";
 
 /// Git 上传/导入(本地任务工作目录 ↔ 远程仓库)。
 /// 依赖系统 git 命令;身份统一用 TeemoCode 本地配置(不改用户全局 git 配置)。
@@ -29,7 +51,118 @@ fn git(dir: &str, args: &[&str]) -> Result<String, String> {
 }
 
 fn has_git(dir: &str) -> bool {
-    std::path::Path::new(dir).join(".git").exists()
+    Path::new(dir).join(".git").exists()
+}
+
+/// 把会话 sidecar 里的 guest 路径翻成宿主 git 能 `current_dir` 的路径。
+/// 已经是存在的 Windows/UNC 路径则原样返回(新建任务目录选择器走这条)。
+fn git_host_dir(app: &AppHandle, workdir: &str) -> Result<String, String> {
+    let raw = workdir.trim();
+    if raw.is_empty() {
+        return Err("工作目录为空".into());
+    }
+    if Path::new(raw).exists() {
+        return Ok(raw.to_string());
+    }
+    // 只有 guest 绝对路径才翻 \\wsl$ ;盘符路径不存在就是不存在,
+    // 不能拿 "D:\proj" 去拼 \\wsl$\Ubuntu\D:\proj。
+    if raw.starts_with('/') {
+        if let Some(distro) = load_config(app)
+            .ok()
+            .and_then(|c| crate::wsl::distro_of(&c.kernel_env).map(str::to_string))
+        {
+            let host = crate::wsl::host_fs_view(&distro, raw);
+            if host.exists() {
+                return Ok(host.to_string_lossy().into_owned());
+            }
+            return Err(format!("工作目录不存在: {raw} (WSL {distro})"));
+        }
+    }
+    Err(format!("工作目录不存在: {raw}"))
+}
+
+fn normalize_workdir(s: &str) -> String {
+    let s = s.trim().replace('\\', "/");
+    let s = s.trim_end_matches('/');
+    #[cfg(windows)]
+    {
+        s.to_ascii_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        s.to_string()
+    }
+}
+
+fn workdir_eq(a: &str, b: &str) -> bool {
+    !a.is_empty() && !b.is_empty() && normalize_workdir(a) == normalize_workdir(b)
+}
+
+fn workdir_matches(meta_wd: &str, raw: &str, host: &str, distro: Option<&str>) -> bool {
+    if workdir_eq(meta_wd, raw) || workdir_eq(meta_wd, host) {
+        return true;
+    }
+    if let Some(d) = distro {
+        let meta_host = crate::wsl::host_fs_view(d, meta_wd);
+        if workdir_eq(&meta_host.to_string_lossy(), host) {
+            return true;
+        }
+    }
+    false
+}
+
+fn copy_tree(src: &Path, dst: &Path) -> Result<u64, String> {
+    if !src.exists() {
+        return Ok(0);
+    }
+    if src.is_file() {
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("创建目录 {} 失败: {e}", parent.display()))?;
+        }
+        std::fs::copy(src, dst).map_err(|e| format!("复制 {} 失败: {e}", src.display()))?;
+        return Ok(1);
+    }
+    std::fs::create_dir_all(dst).map_err(|e| format!("创建目录 {} 失败: {e}", dst.display()))?;
+    let mut n = 0u64;
+    let entries = std::fs::read_dir(src).map_err(|e| format!("读取 {} 失败: {e}", src.display()))?;
+    for entry in entries.flatten() {
+        n += copy_tree(&entry.path(), &dst.join(entry.file_name()))?;
+    }
+    Ok(n)
+}
+
+fn ensure_default_gitignore(dir: &str) -> Result<(), String> {
+    let p = Path::new(dir).join(".gitignore");
+    if p.exists() {
+        return Ok(());
+    }
+    std::fs::write(&p, DEFAULT_GITIGNORE).map_err(|e| format!("写入 .gitignore 失败: {e}"))
+}
+
+fn stage_for_push(dir: &str, new_repo: bool) -> Result<(), String> {
+    if new_repo {
+        ensure_default_gitignore(dir)?;
+        git(dir, &["add", "-A"]).map_err(|e| format!("git add 失败: {e}"))?;
+    } else {
+        // 已有仓库:只提交已跟踪变更 + 任务数据,不把未跟踪的 .env / 构建产物顺手推进远程。
+        git(dir, &["add", "-u"]).map_err(|e| format!("git add 失败: {e}"))?;
+        if Path::new(dir).join(".teemocode").is_dir() {
+            git(dir, &["add", "--", ".teemocode"]).map_err(|e| format!("git add .teemocode 失败: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
+fn ensure_origin(dir: &str, url: &str) -> Result<(), String> {
+    match git(dir, &["remote", "get-url", "origin"]) {
+        Ok(existing) if existing.trim() == url => Ok(()),
+        Ok(_) => git(dir, &["remote", "set-url", "origin", url])
+            .map(|_| ())
+            .map_err(|e| format!("更新远程失败: {e}")),
+        Err(_) => git(dir, &["remote", "add", "origin", url])
+            .map(|_| ())
+            .map_err(|e| format!("添加远程失败: {e}")),
+    }
 }
 
 /// 当前仓库的远程地址(第一个);无则 None。
@@ -41,43 +174,42 @@ fn commit_identity(dir: &str) -> Result<(), String> {
     git(dir, &["-c", "user.name=TeemoCode", "-c", "user.email=teemocode@local", "commit", "-m", "TeemoCode: 本地任务更新"]).map(|_| ())
 }
 
-/// 上传:工作目录有 .git → 直接提交推送;没有 → init + 提交 + (给远程地址则)推送。
-/// remote_url 可选:目录已有 origin 就用它,否则用传入地址;都没有则只提交不推送。
+/// 上传:工作目录有 .git → 提交推送;没有 → init + 提交 + (给远程地址则)推送。
+/// remote_url 可选:留空则用已有 origin;填写则把 origin 设成该地址再推。
+/// 都没有则只提交不推送。
 #[tauri::command]
-pub async fn git_push(app: tauri::AppHandle, workdir: String, remote_url: Option<String>) -> Result<serde_json::Value, String> {
-    let dir = workdir.trim();
-    if dir.is_empty() {
-        return Err("工作目录为空".into());
+pub async fn git_push(app: AppHandle, workdir: String, remote_url: Option<String>) -> Result<serde_json::Value, String> {
+    let raw = workdir.trim().to_string();
+    let dir = git_host_dir(&app, &raw)?;
+    // 任务数据必须进仓库;失败就停,避免用户以为会话已随代码推走。
+    export_task_data(&app, &raw, &dir)?;
+    let new_repo = !has_git(&dir);
+    if new_repo {
+        git(&dir, &["init"]).map_err(|e| format!("git init 失败: {e}"))?;
     }
-    if !std::path::Path::new(dir).exists() {
-        return Err(format!("工作目录不存在: {dir}"));
+    stage_for_push(&dir, new_repo)?;
+    let status = git(&dir, &["status", "--porcelain"]).map_err(|e| format!("git status 失败: {e}"))?;
+    if !status.is_empty() {
+        commit_identity(&dir).map_err(|e| format!("git commit 失败: {e}"))?;
     }
-    // 把绑定当前工作目录的任务会话数据导出到项目 .teemocode/,随代码一起提交推送
-    let _ = export_task_data(&app, dir);
-    if !has_git(dir) {
-        git(dir, &["init"]).map_err(|e| format!("git init 失败: {e}"))?;
+    let provided = remote_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .map(str::to_string);
+    if let Some(url) = provided.as_deref() {
+        ensure_origin(&dir, url)?;
     }
-    git(dir, &["add", "-A"]).map_err(|e| format!("git add 失败: {e}"))?;
-    // 有改动才提交(避免"nothing to commit"报错)
-    let changed = git(dir, &["status", "--porcelain"])
-        .map(|s| !s.is_empty())
-        .unwrap_or(true);
-    if changed {
-        commit_identity(dir).map_err(|e| format!("git commit 失败: {e}"))?;
-    }
-    // 远程:已有 origin 优先;否则用传入地址
-    let remote = current_remote(dir).or(remote_url.filter(|r| !r.trim().is_empty()));
+    let remote = current_remote(&dir).or(provided);
     let mut pushed = false;
-    let branch = git(dir, &["branch", "--show-current"]).unwrap_or_default();
+    let branch = git(&dir, &["branch", "--show-current"]).unwrap_or_default();
     if let Some(url) = remote.as_deref() {
-        if git(dir, &["remote", "get-url", "origin"]).is_err() {
-            git(dir, &["remote", "add", "origin", url]).map_err(|e| format!("添加远程失败: {e}"))?;
-        }
+        ensure_origin(&dir, url)?;
         let push_branch = if branch.is_empty() { "master" } else { &branch };
-        git(dir, &["push", "-u", "origin", push_branch]).map_err(|e| format!("git push 失败: {e}"))?;
+        git(&dir, &["push", "-u", "origin", push_branch]).map_err(|e| format!("git push 失败: {e}"))?;
         pushed = true;
     }
-    let hash = git(dir, &["rev-parse", "--short", "HEAD"]).ok();
+    let hash = git(&dir, &["rev-parse", "--short", "HEAD"]).ok();
     Ok(json!({
         "ok": true,
         "pushed": pushed,
@@ -92,47 +224,58 @@ pub async fn git_push(app: tauri::AppHandle, workdir: String, remote_url: Option
 ///   ohmy-sessions/<sid>/       壳侧会话(meta.json + events.jsonl)
 ///   ohmyagent/sessions/<sid>/  引擎对话(messages.jsonl)
 ///   ohmyagent/tasks/<sid>/     任务状态(tasks.json + notifications.json)
-fn export_task_data(app: &tauri::AppHandle, workdir: &str) -> Result<usize, String> {
+fn export_task_data(app: &AppHandle, raw: &str, host: &str) -> Result<usize, String> {
     let root = config_dir(app)?;
-    let sid_list = bound_sids(app, workdir);
+    let distro = load_config(app)
+        .ok()
+        .and_then(|c| crate::wsl::distro_of(&c.kernel_env).map(str::to_string));
+    let sid_list = bound_sids(&root, raw, host, distro.as_deref());
+    export_task_data_from(&root, host, &sid_list)
+}
+
+fn export_task_data_from(root: &Path, host: &str, sid_list: &[String]) -> Result<usize, String> {
     let mut exported = 0usize;
-    for sid in &sid_list {
-        for rel in ["ohmy-sessions", "ohmyagent/sessions", "ohmyagent/tasks"] {
+    for sid in sid_list {
+        if !crate::driver::valid_session_id(sid) {
+            continue;
+        }
+        let mut any = false;
+        for rel in TASK_DATA_RELS {
             let src = root.join(rel).join(sid);
             if !src.is_dir() {
                 continue;
             }
-            let dest = Path::new(workdir).join(".teemocode").join(rel).join(sid);
-            if !dest.is_dir() {
-                std::fs::create_dir_all(&dest).map_err(|e| format!("创建导出目录失败: {e}"))?;
-            }
-            if let Ok(files) = std::fs::read_dir(&src) {
-                for f in files.flatten() {
-                    let name = f.file_name().to_string_lossy().to_string();
-                    let _ = std::fs::copy(f.path(), dest.join(&name));
-                }
-            }
+            let dest = Path::new(host).join(".teemocode").join(rel).join(sid);
+            copy_tree(&src, &dest)?;
+            any = true;
         }
-        exported += 1;
+        if any {
+            exported += 1;
+        }
     }
     Ok(exported)
 }
 
 /// 绑定某工作目录的会话 sid 集合(壳侧 ohmy-sessions 的 meta.workdir 匹配)。
-fn bound_sids(app: &tauri::AppHandle, workdir: &str) -> Vec<String> {
-    let Ok(root) = config_dir(app) else { return vec![] };
+/// raw = 会话逻辑路径(WSL 下常为 guest),host = 宿主 git 工作目录。
+fn bound_sids(root: &Path, raw: &str, host: &str, distro: Option<&str>) -> Vec<String> {
     let shell = root.join("ohmy-sessions");
     let mut out = vec![];
-    let Ok(entries) = std::fs::read_dir(&shell) else { return out };
+    let Ok(entries) = std::fs::read_dir(&shell) else {
+        return out;
+    };
     for e in entries.flatten() {
         let sid = e.file_name().to_string_lossy().to_string();
+        if !crate::driver::valid_session_id(&sid) {
+            continue;
+        }
         let meta_p = e.path().join("meta.json");
         if !meta_p.is_file() {
             continue;
         }
         if let Ok(meta) = read_json(&meta_p) {
             let wd = meta.get("workdir").and_then(|v| v.as_str()).unwrap_or("");
-            if wd == workdir {
+            if workdir_matches(wd, raw, host, distro) {
                 out.push(sid);
             }
         }
@@ -140,38 +283,56 @@ fn bound_sids(app: &tauri::AppHandle, workdir: &str) -> Vec<String> {
     out
 }
 
-/// 导入项目后检测任务数据:项目内 `.teemocode/` 三目录视为导出的本地任务
-/// 会话数据,迁移到配置目录(本地任务工作区)并把 workdir 改成当前目录。
 /// 导入:按 git 地址加载到工作目录并拉取代码。
+/// 目录已是 git 仓库时,把 origin 设成传入地址再 pull(不再忽略 URL)。
 #[tauri::command]
-pub async fn git_import(workdir: String, url: String) -> Result<serde_json::Value, String> {
-    let dir = workdir.trim();
+pub async fn git_import(app: AppHandle, workdir: String, url: String) -> Result<serde_json::Value, String> {
     let url = url.trim();
-    if dir.is_empty() {
-        return Err("工作目录为空".into());
-    }
     if url.is_empty() {
         return Err("git 地址为空".into());
     }
-    if !std::path::Path::new(dir).exists() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("创建工作目录失败: {e}"))?;
+    let raw = workdir.trim();
+    if raw.is_empty() {
+        return Err("工作目录为空".into());
     }
-    let empty = std::fs::read_dir(dir).map(|mut it| it.next().is_none()).unwrap_or(true);
-    if has_git(dir) {
-        git(dir, &["pull"]).map_err(|e| format!("git pull 失败: {e}"))?;
+    let dir = match git_host_dir(&app, raw) {
+        Ok(d) => d,
+        Err(e) => {
+            // 宿主路径还不存在时创建(新建任务选了空目录);guest 路径(/mnt/...)
+            // 在 Windows 上 create_dir_all 会在盘符根下造出错误目录,直接失败。
+            if raw.starts_with('/') || raw.starts_with('\\') {
+                return Err(e);
+            }
+            std::fs::create_dir_all(raw).map_err(|err| format!("创建工作目录失败: {err}"))?;
+            raw.to_string()
+        }
+    };
+    if !Path::new(&dir).exists() {
+        std::fs::create_dir_all(&dir).map_err(|e| format!("创建工作目录失败: {e}"))?;
+    }
+    let empty = match std::fs::read_dir(&dir) {
+        Ok(mut it) => it.next().is_none(),
+        Err(e) => return Err(format!("读取工作目录失败: {e}")),
+    };
+    if has_git(&dir) {
+        ensure_origin(&dir, url)?;
+        if git(&dir, &["pull"]).is_err() {
+            git(&dir, &["pull", "origin", "main"])
+                .or_else(|_| git(&dir, &["pull", "origin", "master"]))
+                .map_err(|e| format!("git pull 失败: {e}"))?;
+        }
     } else if empty {
-        git(dir, &["clone", url, "."]).map_err(|e| format!("git clone 失败: {e}"))?;
+        git(&dir, &["clone", url, "."]).map_err(|e| format!("git clone 失败: {e}"))?;
     } else {
-        git(dir, &["init"]).map_err(|e| format!("git init 失败: {e}"))?;
-        git(dir, &["remote", "add", "origin", url]).map_err(|e| format!("添加远程失败: {e}"))?;
-        // 先试默认分支拉取
-        let pulled = git(dir, &["pull", "origin", "main"])
-            .or_else(|_| git(dir, &["pull", "origin", "master"]));
+        git(&dir, &["init"]).map_err(|e| format!("git init 失败: {e}"))?;
+        git(&dir, &["remote", "add", "origin", url]).map_err(|e| format!("添加远程失败: {e}"))?;
+        let pulled = git(&dir, &["pull", "origin", "main"])
+            .or_else(|_| git(&dir, &["pull", "origin", "master"]));
         if let Err(e) = pulled {
             return Err(format!("git pull 失败: {e}"));
         }
     }
-    let branch = git(dir, &["branch", "--show-current"]).unwrap_or_default();
+    let branch = git(&dir, &["branch", "--show-current"]).unwrap_or_default();
     Ok(json!({
         "ok": true,
         "branch": if branch.is_empty() { "main".to_string() } else { branch },
@@ -179,49 +340,101 @@ pub async fn git_import(workdir: String, url: String) -> Result<serde_json::Valu
     }))
 }
 
-/// 导入项目后检测任务数据:项目内 `.teemocode/<sid>/meta.json` 视为导出的
-/// 本地任务会话数据,迁移到应用数据目录(本地任务工作区)并把 workdir 改成
-/// 当前选择的目录。返回迁移数量,前端提示重启重新加载任务数据。
+/// 导入项目后检测 `.teemocode/` 任务数据,按导出的三目录迁到配置目录
+/// (`ohmy-sessions` / `ohmyagent/sessions` / `ohmyagent/tasks`),并把 sidecar
+/// workdir 改成当前目录。兼容旧扁平 `.teemocode/<sid>/meta.json`。
 #[tauri::command]
-pub async fn import_task_data(app: tauri::AppHandle, workdir: String) -> Result<serde_json::Value, String> {
-    let src = Path::new(&workdir).join(".teemocode");
+pub async fn import_task_data(app: AppHandle, workdir: String) -> Result<serde_json::Value, String> {
+    let raw = workdir.trim();
+    if raw.is_empty() {
+        return Err("工作目录为空".into());
+    }
+    let host = git_host_dir(&app, raw).unwrap_or_else(|_| raw.to_string());
+    let src = Path::new(&host).join(".teemocode");
     if !src.is_dir() {
         return Ok(json!({ "migrated": 0, "sessions": [] }));
     }
-    let data = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("取应用数据目录失败: {e}"))?;
-    let mut migrated = 0usize;
-    let mut sessions: Vec<String> = vec![];
-    let entries = std::fs::read_dir(&src).map_err(|e| format!("读取 .teemocode 失败: {e}"))?;
-    for entry in entries.flatten() {
-        let sid = entry.file_name().to_string_lossy().to_string();
-        let meta_src = entry.path().join("meta.json");
-        if !meta_src.is_file() {
-            continue;
-        }
-        let dest = data.join(&sid);
-        if !dest.is_dir() {
-            std::fs::create_dir_all(&dest).map_err(|e| format!("创建会话目录失败: {e}"))?;
-        }
-        if let Ok(mut meta) = read_json(&meta_src) {
-            meta["workdir"] = json!(workdir);
-            write_json(&dest.join("meta.json"), &meta)?;
-            if let Ok(files) = std::fs::read_dir(entry.path()) {
-                for f in files.flatten() {
-                    let name = f.file_name().to_string_lossy().to_string();
-                    if name == "meta.json" {
-                        continue;
-                    }
-                    let _ = std::fs::copy(f.path(), dest.join(&name));
-                }
+    let cfg = config_dir(&app)?;
+    let (migrated, sessions) = import_task_data_into(&cfg, raw, &src)?;
+    Ok(json!({ "migrated": migrated, "sessions": sessions }))
+}
+
+fn collect_import_sids(src: &Path) -> Vec<String> {
+    use std::collections::BTreeSet;
+    let mut sids = BTreeSet::new();
+    let take_dir = |dir: &Path, require_meta: bool, out: &mut BTreeSet<String>| {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            if !e.path().is_dir() {
+                continue;
             }
-            migrated += 1;
-            sessions.push(sid);
+            let sid = e.file_name().to_string_lossy().to_string();
+            if !crate::driver::valid_session_id(&sid) {
+                continue;
+            }
+            if require_meta && !e.path().join("meta.json").is_file() {
+                continue;
+            }
+            out.insert(sid);
+        }
+    };
+    take_dir(&src.join("ohmy-sessions"), true, &mut sids);
+    take_dir(&src.join("ohmyagent").join("sessions"), false, &mut sids);
+    take_dir(&src.join("ohmyagent").join("tasks"), false, &mut sids);
+    // 旧扁平: .teemocode/<sid>/meta.json(不要把 ohmy-sessions / ohmyagent 当 sid)
+    if let Ok(entries) = std::fs::read_dir(src) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name == "ohmy-sessions" || name == "ohmyagent" {
+                continue;
+            }
+            if !crate::driver::valid_session_id(&name) {
+                continue;
+            }
+            if e.path().join("meta.json").is_file() {
+                sids.insert(name);
+            }
         }
     }
-    Ok(json!({ "migrated": migrated, "sessions": sessions }))
+    sids.into_iter().collect()
+}
+
+fn import_task_data_into(cfg_root: &Path, session_workdir: &str, src: &Path) -> Result<(usize, Vec<String>), String> {
+    if !src.is_dir() {
+        return Ok((0, vec![]));
+    }
+    let sids = collect_import_sids(src);
+    let mut migrated = 0usize;
+    let mut sessions = Vec::new();
+    for sid in sids {
+        let nested = src.join("ohmy-sessions").join(&sid);
+        let flat = src.join(&sid);
+        let shell_src = if nested.join("meta.json").is_file() {
+            nested
+        } else {
+            flat
+        };
+        if shell_src.join("meta.json").is_file() {
+            let dest = cfg_root.join("ohmy-sessions").join(&sid);
+            copy_tree(&shell_src, &dest)?;
+            let meta_p = dest.join("meta.json");
+            if let Ok(mut meta) = read_json(&meta_p) {
+                meta["workdir"] = json!(session_workdir);
+                write_json(&meta_p, &meta)?;
+            }
+        }
+        for rel in ["ohmyagent/sessions", "ohmyagent/tasks"] {
+            let from = src.join(rel).join(&sid);
+            if from.is_dir() {
+                copy_tree(&from, &cfg_root.join(rel).join(&sid))?;
+            }
+        }
+        migrated += 1;
+        sessions.push(sid);
+    }
+    Ok((migrated, sessions))
 }
 
 fn read_json(p: &Path) -> Result<serde_json::Value, String> {
@@ -238,14 +451,12 @@ fn write_json(p: &Path, v: &serde_json::Value) -> Result<(), String> {
 /// ⚠ async + spawn_blocking:git 子进程是阻塞重活,同步命令会在主线程
 /// 执行并冻结 WebView(切任务时此命令必触发,大仓库/杀慢时数秒卡死)。
 #[tauri::command]
-pub async fn git_branch(workdir: String) -> String {
+pub async fn git_branch(app: AppHandle, workdir: String) -> String {
     tauri::async_runtime::spawn_blocking(move || {
-        let dir = workdir.trim();
-        if dir.is_empty() {
+        let Ok(dir) = git_host_dir(&app, &workdir) else {
             return String::new();
-        }
-        let out = git(dir, &["rev-parse", "--abbrev-ref", "HEAD"]);
-        match out {
+        };
+        match git(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]) {
             Ok(s) => s.trim().to_string(),
             Err(_) => String::new(),
         }
@@ -256,16 +467,15 @@ pub async fn git_branch(workdir: String) -> String {
 
 /// 列出所有本地分支名。返回 Vec<String>。
 #[tauri::command]
-pub async fn git_branch_list(workdir: String) -> Vec<String> {
+pub async fn git_branch_list(app: AppHandle, workdir: String) -> Vec<String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let dir = workdir.trim();
-        if dir.is_empty() {
+        let Ok(dir) = git_host_dir(&app, &workdir) else {
             return Vec::new();
-        }
+        };
         // --format 在部分 Windows git 上不稳定;用 --list + 逐行 trim 最稳妥
-        let out = git(dir, &["branch", "--list"]);
-        match out {
-            Ok(s) => s.lines()
+        match git(&dir, &["branch", "--list"]) {
+            Ok(s) => s
+                .lines()
                 .map(|l| l.trim_start_matches("* ").trim().trim_start_matches(' '))
                 .filter(|l| !l.is_empty())
                 .map(String::from)
@@ -279,37 +489,33 @@ pub async fn git_branch_list(workdir: String) -> Vec<String> {
 
 /// 检查工作区是否干净(无未提交更改)。
 #[tauri::command]
-pub async fn git_is_clean(workdir: String) -> bool {
+pub async fn git_is_clean(app: AppHandle, workdir: String) -> bool {
     tauri::async_runtime::spawn_blocking(move || {
-        let dir = workdir.trim();
-        if dir.is_empty() {
+        if workdir.trim().is_empty() {
             return true;
         }
-        // git status --porcelain:无输出=干净
-        git(dir, &["status", "--porcelain"])
+        let Ok(dir) = git_host_dir(&app, &workdir) else {
+            return false;
+        };
+        // 查不出来就当不干净,挡住切分支(旧实现失败当干净,可能带着未提交改动切走)
+        git(&dir, &["status", "--porcelain"])
             .map(|s| s.trim().is_empty())
-            .unwrap_or(true)
+            .unwrap_or(false)
     })
     .await
-    .unwrap_or(true)
+    .unwrap_or(false)
 }
 
 /// 切换分支。失败返回错误信息。
 #[tauri::command]
-pub async fn git_checkout(workdir: String, branch: String) -> Result<(), String> {
+pub async fn git_checkout(app: AppHandle, workdir: String, branch: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let dir = workdir.trim();
-        if dir.is_empty() {
-            return Err("工作目录为空".into());
-        }
-        // 先检查是否干净(内联跑 porcelain,不再调用同步版 git_is_clean)
-        let clean = git(dir, &["status", "--porcelain"])
-            .map(|s| s.trim().is_empty())
-            .unwrap_or(true);
-        if !clean {
+        let dir = git_host_dir(&app, &workdir)?;
+        let status = git(&dir, &["status", "--porcelain"]).map_err(|e| format!("无法检查工作区: {e}"))?;
+        if !status.trim().is_empty() {
             return Err("工作区有未提交的更改,请先提交或丢弃后再切换分支".into());
         }
-        git(dir, &["checkout", &branch]).map(|_| ()).map_err(|e| format!("切换失败: {e}"))
+        git(&dir, &["checkout", &branch]).map(|_| ()).map_err(|e| format!("切换失败: {e}"))
     })
     .await
     .map_err(|e| format!("切换任务失败: {e}"))?
@@ -352,12 +558,14 @@ pub async fn skills_import_git(url: String) -> Result<serde_json::Value, String>
 
     // 扫描仓库根 mcp.json(引擎同构形态 {"mcpServers":{...}}),若存在
     // 一并返回,供技能市场的 MCP 一键装功能消费。
-    let mcp_value = std::fs::read_to_string(Path::new(&tmp).join("mcp.json"))
+    let mcp_value = std::fs::read_to_string(tmp.join("mcp.json"))
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
         .and_then(|v| v.get("mcpServers").cloned())
         .filter(|v| v.is_object());
-    Ok(json!({ "tmp_dir": tmp_s, "skills": skills, "mcp": mcp_value }))
+    // 技能正文已读进内存,临时克隆不再需要;成功路径也必须清掉。
+    let _ = std::fs::remove_dir_all(&tmp);
+    Ok(json!({ "skills": skills, "mcp": mcp_value }))
 }
 
 /// 递归扫描目录下所有 SKILL.md(最多 5 层深),读取 name/description/content。
@@ -537,4 +745,107 @@ let versioned = seg.len() >= 2 && seg.starts_with('v') && seg[1..].bytes().all(|
         return Err("模型返回为空".into());
     }
     Ok(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn tmp(label: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!(
+            "mc-git-{}-{}-{}",
+            label,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    fn write(p: &Path, s: &str) {
+        if let Some(dir) = p.parent() {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        std::fs::write(p, s).unwrap();
+    }
+
+    #[test]
+    fn workdir_matches_slash_and_guest_host() {
+        assert!(workdir_eq(r"D:\proj", "D:/proj"));
+        assert!(workdir_matches("/mnt/c/proj", "/mnt/c/proj", r"\\wsl$\U\mnt\c\proj", None));
+        assert!(!workdir_matches("/mnt/c/other", "/mnt/c/proj", r"D:\proj", None));
+    }
+
+    #[test]
+    fn import_roundtrip_three_dir_layout() {
+        let root = tmp("round");
+        let cfg = root.join("cfg");
+        let work = root.join("work");
+        let sid = "abcd1234";
+        write(&cfg.join("ohmy-sessions").join(sid).join("meta.json"), r#"{"workdir":"/mnt/c/old","title":"t"}"#);
+        write(&cfg.join("ohmy-sessions").join(sid).join("events.jsonl"), "e\n");
+        write(&cfg.join("ohmyagent").join("sessions").join(sid).join("messages.jsonl"), "{}\n");
+        write(&cfg.join("ohmyagent").join("sessions").join(sid).join("nested").join("x.txt"), "x");
+        write(&cfg.join("ohmyagent").join("tasks").join(sid).join("tasks.json"), "[]");
+
+        export_task_data_from(&cfg, work.to_str().unwrap(), &[sid.to_string()]).unwrap();
+        let packed = work.join(".teemocode");
+        assert!(packed.join("ohmy-sessions").join(sid).join("meta.json").is_file());
+        assert!(packed.join("ohmyagent").join("sessions").join(sid).join("nested").join("x.txt").is_file());
+
+        let dest = root.join("dest");
+        let (n, sessions) = import_task_data_into(&dest, r"D:\now", &packed).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(sessions, vec![sid.to_string()]);
+        let meta: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dest.join("ohmy-sessions").join(sid).join("meta.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(meta["workdir"], json!(r"D:\now"));
+        assert!(dest.join("ohmyagent").join("sessions").join(sid).join("nested").join("x.txt").is_file());
+        assert!(dest.join("ohmyagent").join("tasks").join(sid).join("tasks.json").is_file());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn import_flat_legacy_layout() {
+        let root = tmp("flat");
+        let src = root.join(".teemocode");
+        let sid = "deadbeef";
+        write(&src.join(sid).join("meta.json"), r#"{"title":"old"}"#);
+        write(&src.join(sid).join("events.jsonl"), "e\n");
+        let dest = root.join("cfg");
+        let (n, _) = import_task_data_into(&dest, "/tmp/w", &src).unwrap();
+        assert_eq!(n, 1);
+        assert!(dest.join("ohmy-sessions").join(sid).join("events.jsonl").is_file());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn import_ignores_top_level_files() {
+        let root = tmp("file");
+        let src = root.join(".teemocode");
+        write(&src.join("meta.json"), "{}");
+        write(&src.join("ohmy-sessions").join("readme.txt"), "no");
+        let dest = root.join("cfg");
+        let (n, sessions) = import_task_data_into(&dest, "/w", &src).unwrap();
+        assert_eq!(n, 0);
+        assert!(sessions.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn collect_sids_skips_layout_dir_names() {
+        let root = tmp("layout");
+        let src = root.join(".teemocode");
+        std::fs::create_dir_all(src.join("ohmy-sessions")).unwrap();
+        std::fs::create_dir_all(src.join("ohmyagent")).unwrap();
+        assert!(collect_import_sids(&src).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

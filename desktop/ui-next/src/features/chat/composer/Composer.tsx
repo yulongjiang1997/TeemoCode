@@ -33,7 +33,7 @@ import { useI18n } from "@/lib/i18n";
 import { useEscLayer } from "@/lib/util/escLayer";
 import { sessionSetMode, sessionSetModel, sessionSetSkills, sessionSetThink } from "@/lib/ipc/controls";
 import { afterEngineReady } from "@/lib/ipc/engine";
-import { gitImport, gitPush } from "@/lib/ipc/git";
+import { gitImport, gitPush, importTaskData } from "@/lib/ipc/git";
 import { modelMenuList, resolveModelName } from "@/lib/models/modelMenu";
 import { gatewayEnsureRunning } from "@/lib/ipc/gateway";
 import { modelsList, type ModelInfo, type SessionMeta } from "@/lib/ipc/sessions";
@@ -513,7 +513,12 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
     if (!url) return;
     try {
       const r = await gitImport(dir, url);
-      ctl.notifyError(t("chat.git.importOk", { remote: r.remote ?? "", branch: r.branch ?? "" }));
+      const m = await importTaskData(dir);
+      ctl.notifyError(
+        m.migrated > 0
+          ? t("chat.git.importMigrated", { remote: r.remote ?? "", branch: r.branch ?? "", n: m.migrated })
+          : t("chat.git.importOk", { remote: r.remote ?? "", branch: r.branch ?? "" }),
+      );
     } catch (e) {
       ctl.notifyError(t("chat.git.importFailed", { reason: errText(e) }));
     }

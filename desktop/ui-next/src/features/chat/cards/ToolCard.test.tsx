@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -7,6 +7,8 @@ import { ToolCard } from "./ToolCard";
 
 afterEach(() => {
   delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
+  document.querySelector("ul.menu")?.remove();
+  document.querySelector(".fixed.inset-0")?.remove();
 });
 
 /** 最小壳桩:engine_caps 全开、session_send 应答成功(乐观态成立)。 */
@@ -44,6 +46,26 @@ describe("工具卡", () => {
     expect(screen.getByText("src/")).toBeTruthy(); // 目录段(已剥 /w/ 前缀)
     expect(screen.getByText("main.rs")).toBeTruthy(); // 文件名独立节点,始终可见
     expect(screen.getByTitle("/w/src/main.rs")).toBeTruthy(); // 悬停仍露完整路径
+  });
+
+  it("path 目标可点打开,右键出复制/打开文件夹/打开文件", () => {
+    const invoke = vi.fn(() => Promise.resolve("ok"));
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = { core: { invoke } };
+    render(
+      <ToolCard
+        item={{ kind: "tool", tcId: "t2", title: "Read /w/src/main.rs", status: "ok", out: "", rawInput: { file_path: "/w/src/main.rs" } }}
+        sessionId="s1"
+        workdir="/w"
+      />,
+    );
+    const path = screen.getByTitle("/w/src/main.rs");
+    expect(path.getAttribute("data-md-path")).toBe("/w/src/main.rs");
+    fireEvent.click(path);
+    expect(invoke).toHaveBeenCalledWith("reveal_path", { path: "/w/src/main.rs" });
+    fireEvent.contextMenu(path, { clientX: 8, clientY: 8 });
+    expect(screen.getByRole("button", { name: "复制路径" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "打开文件夹" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "打开文件" })).toBeTruthy();
   });
 
   it("失败:外显 out 首行(role=alert)", () => {

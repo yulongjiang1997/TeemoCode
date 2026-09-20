@@ -12,26 +12,12 @@ import { t, useI18n } from "@/lib/i18n";
 import { openMenu } from "@/lib/contextMenu";
 import { openExternal, revealPath } from "@/lib/ipc/host";
 import { copyText } from "@/lib/util/clipboard";
+import { findPlainPaths, looksLikeFilePath } from "@/lib/util/filePaths";
 import { resolveMarkdownResource } from "@/lib/util/markdownPaths";
+import { openPathContextMenu, runPathAction } from "@/lib/util/pathActions";
 
 const escapeHtml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-
-/** 代码块文本是否"像文件系统路径"(值得给「打开文件夹」按钮):
- *  单行、含 / 或 \ 分隔、无空格或仅扩展名前一点空格、不像命令/句子。
- *  判定从宽——误判的代价只是多点一个打不开的按钮,壳侧会报错外显;
- *  漏判的代价是用户少一个入口。 */
-function looksLikeFilePath(text: string): boolean {
-  const s = text.trim();
-  if (!s || s.length > 260 || /[\n\r]/.test(s)) return false;
-  if (!/[\\/]/.test(s)) return false;
-  // 命令行特征:以常见 shell 提示符/动词开头的不当路径
-  if (/^(\$|>|npm |npx |node |git |cargo |python|pip |cd |ls |dir )/.test(s)) return false;
-  // 含空格的算式/代码片段不是路径(Windows 路径允许空格,但模型输出里
-  // 带空格的多半是代码;真要开带空格的目录还有复制兜底)
-  if (/\s/.test(s)) return false;
-  return true;
-}
 
 /** 超过这个体量的代码块不做语法高亮(hljs 是同步 CPU 活,兆级文本一块就是
  *  秒级主线程冻结;2026-08-10 切会话/跳转的卡顿分析里它是单点最大嫌疑)。
@@ -232,8 +218,13 @@ function copyMermaidPng(svg: SVGSVGElement): void {
   navigator.clipboard.write([item]).catch(() => {});
 }
 
-function onContainerContextMenu(e: MouseEvent<HTMLElement>) {
+function onContainerContextMenu(e: MouseEvent<HTMLElement>, onLocalLink?: (path: string) => void) {
   if (!(e.target instanceof Element)) return;
+  const pathEl = e.target.closest<HTMLElement>("[data-md-path]");
+  if (pathEl) {
+    openPathContextMenu(e, pathEl.getAttribute("data-md-path") ?? "", onLocalLink);
+    return;
+  }
   const svg = e.target.closest<SVGSVGElement>(".md-mermaid svg");
   if (!svg) return;
   e.preventDefault();
@@ -347,12 +338,65 @@ function normalizeResourceUrls(root: ParentNode) {
   }
 }
 
-export function renderMarkdown(source: string): string {
+/** 正文/行内 `code` 里的路径打成 data-md-path;先剥模型注入的同名属性。 */
+function markPathNodes(root: ParentNode) {
+  for (const el of root.querySelectorAll("[data-md-path]")) el.removeAttribute("data-md-path");
+  for (const code of root.querySelectorAll("code")) {
+    if (code.closest("[data-md-mermaid]")) continue;
+    const text = (code.textContent ?? "").trim();
+    if (!looksLikeFilePath(text)) continue;
+    code.classList.add("md-path");
+    code.dataset.mdPath = text;
+  }
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement;
+      if (!parent) return NodeFilter.FILTER_REJECT;
+      if (parent.closest("a, pre, code, script, style, textarea, [data-md-path], [data-md-mermaid]")) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      if (!/[\\/]/.test(node.textContent ?? "")) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  const nodes: Text[] = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n as Text);
+  for (const node of nodes) {
+    const text = node.textContent ?? "";
+    const hits = findPlainPaths(text);
+    if (!hits.length) continue;
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    for (const hit of hits) {
+      if (hit.start > last) frag.appendChild(document.createTextNode(text.slice(last, hit.start)));
+      const el = document.createElement("span");
+      el.className = "md-path";
+      el.dataset.mdPath = hit.path;
+      el.textContent = hit.path;
+      el.title = hit.path;
+      frag.appendChild(el);
+      last = hit.end;
+    }
+    if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+    node.parentNode?.replaceChild(frag, node);
+  }
+}
+
+function finishMarkdownHtml(html: string): string {
   const template = document.createElement("template");
-  template.innerHTML = parser.parse(source) as string;
+  template.innerHTML = html;
   normalizeResourceUrls(template.content);
+  markPathNodes(template.content);
   // target/rel 交给点击代理,净化时保守放行 data-*(复制按钮原文载荷与本地标记)
   return DOMPurify.sanitize(template.innerHTML, { USE_PROFILES: { html: true } });
+}
+
+export function renderMarkdown(source: string): string {
+  return finishMarkdownHtml(parser.parse(source) as string);
+}
+
+function renderMarkdownInline(source: string): string {
+  return finishMarkdownHtml(parser.parseInline(source) as string);
 }
 
 function onContainerClick(e: MouseEvent<HTMLElement>, onLocalLink?: (path: string) => void) {
@@ -398,6 +442,12 @@ function onContainerClick(e: MouseEvent<HTMLElement>, onLocalLink?: (path: strin
     window.setTimeout(() => {
       copyBtn.textContent = original;
     }, 1500);
+    return;
+  }
+  const pathEl = target.closest<HTMLElement>("[data-md-path]");
+  if (pathEl) {
+    e.preventDefault();
+    runPathAction(pathEl.getAttribute("data-md-path") ?? "", "reveal", onLocalLink);
     return;
   }
   const link = target.closest("a");
@@ -595,7 +645,7 @@ function StaticMarkdown({
       ref={root}
       className={`md select-text ${className ?? ""}`}
       onClick={(e) => onContainerClick(e, onLocalLink)}
-      onContextMenu={onContainerContextMenu}
+      onContextMenu={(e) => onContainerContextMenu(e, onLocalLink)}
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );
@@ -699,7 +749,7 @@ function StreamingMarkdown({
       data-md-stream=""
       className={`md select-text ${className ?? ""}`}
       onClick={(event) => onContainerClick(event, onLocalLink)}
-      onContextMenu={onContainerContextMenu}
+      onContextMenu={(event) => onContainerContextMenu(event, onLocalLink)}
     >
       {segments.stable.map((chunk, index) => (
         <MarkdownChunk key={index} source={chunk} locale={locale} />
@@ -727,7 +777,22 @@ export function Markdown(props: {
 }
 
 /** 行内 markdown(摘要行/子代理 feed):只解析行内语法,保持单行布局。 */
-export function MarkdownInline({ source, className }: { source: string; className?: string }) {
-  const html = useMemo(() => DOMPurify.sanitize(parser.parseInline(source) as string, { USE_PROFILES: { html: true } }), [source]);
-  return <span className={`mdi ${className ?? ""}`} onClick={onContainerClick} dangerouslySetInnerHTML={{ __html: html }} />;
+export function MarkdownInline({
+  source,
+  className,
+  onLocalLink,
+}: {
+  source: string;
+  className?: string;
+  onLocalLink?: (path: string) => void;
+}) {
+  const html = useMemo(() => renderMarkdownInline(source), [source]);
+  return (
+    <span
+      className={`mdi ${className ?? ""}`}
+      onClick={(e) => onContainerClick(e, onLocalLink)}
+      onContextMenu={(e) => onContainerContextMenu(e, onLocalLink)}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
 }

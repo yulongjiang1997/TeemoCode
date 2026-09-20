@@ -156,6 +156,12 @@ fn parse_field(field: &str, min: u32, max: u32) -> Result<Vec<u32>, String> {
     Ok(out)
 }
 
+/// 星期域:0 与 7 都是周日。生产时钟是 0-6,表达式里的 7 必须在这里归一,
+/// 否则 `0 12 * * 7` 永远不会命中。
+fn cron_weekday(v: u32) -> u32 {
+    if v == 7 { 0 } else { v }
+}
+
 /// 解析并校验 5 字段 cron 表达式;返回各域的允许值集合。
 pub fn parse_cron(expr: &str) -> Result<[Vec<u32>; 5], String> {
     let fields: Vec<&str> = expr.split_whitespace().collect();
@@ -179,9 +185,9 @@ pub fn cron_matches(fields: &CronFields, expr: &str) -> Result<bool, String> {
 }
 
 pub fn cron_matches_parsed(fields: &CronFields, parsed: &[Vec<u32>; 5]) -> Result<bool, String> {
-    let dow = if fields.weekday == 7 { 0 } else { fields.weekday };
+    let dow = cron_weekday(fields.weekday);
     let day_hit = parsed[2].contains(&fields.day);
-    let dow_hit = parsed[4].contains(&dow);
+    let dow_hit = parsed[4].iter().any(|&v| cron_weekday(v) == dow);
     let day_star = parsed[2].len() == 31;
     let dow_star = parsed[4].len() == 8;
     let date_hit = if day_star && dow_star {
@@ -246,6 +252,9 @@ mod tests {
         // 7 是合法值(与 0 都表示周日),归一到 0 发生在 cron_matches 里
         let p2 = parse_cron("0 12 * * 7").unwrap();
         assert!(p2[4].contains(&7));
+        assert!(cron_matches(&fields(0, 12, 1, 1, 0), "0 12 * * 7").unwrap(), "周日应命中表达式 7");
+        assert!(cron_matches(&fields(0, 12, 1, 1, 0), "0 12 * * 0").unwrap(), "周日应命中表达式 0");
+        assert!(!cron_matches(&fields(0, 12, 1, 1, 1), "0 12 * * 7").unwrap(), "周一不应命中周日规则");
         assert!(parse_cron("0 12 * *").is_err(), "字段数不足");
         assert!(parse_cron("60 * * * *").is_err(), "分钟越界");
         assert!(parse_cron("*/0 * * * *").is_err(), "步长 0");

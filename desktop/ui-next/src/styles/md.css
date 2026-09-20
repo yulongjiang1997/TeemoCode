@@ -74,7 +74,18 @@
 /* 代码块容器:复制按钮悬停浮现(按钮本体是 daisyUI btn,注入时带类) */
 .md-code { position: relative; margin: 0.8em 0; }
 .md-code pre { margin: 0; }
-.md-code:hover [data-md-copy], .md-code [data-md-copy]:focus-visible { opacity: 1; }
+.md-code:hover [data-md-copy], .md-code [data-md-copy]:focus-visible,
+.md-code:hover [data-md-reveal], .md-code [data-md-reveal]:focus-visible { opacity: 1; }
+
+/* 模型输出里识别出的路径:看起来像链接,左键打开文件夹,右键复制/打开 */
+.md-path {
+  color: var(--color-primary);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+  text-decoration-color: color-mix(in oklab, var(--color-primary) 45%, transparent);
+}
+.md-path:hover { text-decoration-color: var(--color-primary); }
 
 .md-mermaid { max-width: 100%; margin: 0.8em 0; overflow-x: auto; color: var(--color-base-content); }
 .md-mermaid pre { margin: 0; }

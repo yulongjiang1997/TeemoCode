@@ -262,6 +262,21 @@ fn reveal_path(path: String) -> Result<String, String> {
     Ok(dir.to_string_lossy().into_owned())
 }
 
+/// 用系统默认程序打开文件或目录(消息路径右键「打开文件」)。
+/// 不存在则报错,不做祖先回退(那是 reveal_path 的语义)。
+#[tauri::command]
+fn open_path(path: String) -> Result<String, String> {
+    let p = std::path::PathBuf::from(path.trim());
+    if p.as_os_str().is_empty() {
+        return Err("路径为空".into());
+    }
+    if !p.exists() {
+        return Err(format!("路径不存在: {}", p.display()));
+    }
+    tauri_plugin_opener::open_path(&p, None::<&str>).map_err(|e| format!("打开失败: {e}"))?;
+    Ok(p.to_string_lossy().into_owned())
+}
+
 /// 导出引擎最新日志:保存对话框另存一份 ohmyagent.log(引擎 stderr 全量)。
 /// 横幅/侧栏卡里的 15 行 tail 不够排查时,用户从设置页一键拿到完整现场当
 /// 报障附件。async:blocking_save_file 不能占主线程。用户取消返回 None。
@@ -1829,6 +1844,7 @@ fn main() {
             models_dev_enrich,
             model_test,
             reveal_path,
+            open_path,
             take_ui_intent,
             host_info,
             show_main,

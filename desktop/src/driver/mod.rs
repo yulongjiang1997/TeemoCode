@@ -16,6 +16,7 @@ pub mod frame;
 mod normalize;
 pub mod ohmy;
 mod session;
+pub(crate) use session::valid_session_id;
 mod external;
 mod subagent;
 mod transport;

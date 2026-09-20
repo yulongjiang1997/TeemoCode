@@ -917,17 +917,25 @@ impl GatewayLogPersistence {
             return;
         }
         let drop_n = lines.len() - PERSISTED_LOG_CAP;
-        for line in &lines[..drop_n] {
-            if let Ok(entry) = serde_json::from_str::<PersistedLogEntry>(line) {
-                if let Some(path) = self.body_path(&entry.id) {
-                    let _ = std::fs::remove_file(path);
-                }
-            }
-        }
+        let dropped: Vec<std::path::PathBuf> = lines[..drop_n]
+            .iter()
+            .filter_map(|line| serde_json::from_str::<PersistedLogEntry>(line).ok())
+            .filter_map(|entry| {
+                let id = persisted_entry_key(&entry);
+                self.body_path(&id)
+            })
+            .collect();
         let keep = &lines[drop_n..];
         let rewritten = keep.join("\n") + "\n";
-        let _ = crate::config::atomic_write_private(&self.path, rewritten.as_bytes());
+        // 必须先写成功再删 sidecar / 改计数:写失败时文件仍是旧内容,
+        // 先删正文会让列表还能点开、详情已经空。
+        if crate::config::atomic_write_private(&self.path, rewritten.as_bytes()).is_err() {
+            return;
+        }
         self.line_count.store(keep.len(), std::sync::atomic::Ordering::SeqCst);
+        for path in dropped {
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     /// Query persisted entries with filters. Returns (matching entries, total

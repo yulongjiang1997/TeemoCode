@@ -92,8 +92,15 @@ function closeMenu() {
   cleanup?.();
 }
 
+const DEFAULT_MENU_CLASS =
+  "menu bg-base-100 rounded-box fixed z-50 w-36 flex-nowrap [&_li]:flex-nowrap shadow-sm";
+
 /** 在任意位置弹命令式菜单(行右键等场景与文本菜单共用同一套机制)。 */
-export function openMenu(pos: { x: number; y: number }, items: MenuItem[]): void {
+export function openMenu(
+  pos: { x: number; y: number },
+  items: MenuItem[],
+  opts?: { menuClass?: string },
+): void {
   closeMenu();
   if (!items.length) return;
 
@@ -102,7 +109,7 @@ export function openMenu(pos: { x: number; y: number }, items: MenuItem[]): void
   const menu = document.createElement("ul");
   // [&_li]:flex-nowrap:§6.2 截断铁律(.menu li 默认 column wrap,行宽跟
   // 内容走,truncate 不触发);字面量与 tsx 侧一致,Tailwind 扫源码可生成
-  menu.className = "menu bg-base-100 rounded-box fixed z-50 w-36 flex-nowrap [&_li]:flex-nowrap shadow-sm";
+  menu.className = opts?.menuClass ?? DEFAULT_MENU_CLASS;
   for (const it of items) {
     const li = document.createElement("li");
     const btn = document.createElement("button");

@@ -29,7 +29,7 @@ export interface ImportTaskDataResult {
   sessions: string[];
 }
 
-/** 导入项目后检测 `.teemocode/` 任务数据并迁移到应用数据目录(本地任务工作区)。 */
+/** 导入项目后检测 `.teemocode/` 三目录任务数据并迁移到配置目录(本地任务工作区)。 */
 export async function importTaskData(workdir: string): Promise<ImportTaskDataResult> {
   return invoke<ImportTaskDataResult>("import_task_data", { workdir });
 }

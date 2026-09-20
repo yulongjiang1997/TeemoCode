@@ -30,6 +30,7 @@ fn main() {
                 "models_dev_enrich",
                 "model_test",
                 "reveal_path",
+                "open_path",
                 "take_ui_intent",
                 "host_info",
                 "show_main",

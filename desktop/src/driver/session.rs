@@ -127,7 +127,7 @@ fn managed_chat_workdir(root: &Path, path: &str) -> Option<PathBuf> {
 /// (Windows 盘符与 NTFS 数据流),且归一化后仍是同一段普通名(挡掉 "." 与 "..")。
 /// 引擎发的是 `uuid.NewString()[:8]`(8 位十六进制),壳自建的 chat- 工作区
 /// 同理,正常路径一个都不会被挡。
-pub(super) fn valid_session_id(id: &str) -> bool {
+pub(crate) fn valid_session_id(id: &str) -> bool {
     if id.is_empty() || id.len() > 128 {
         return false;
     }

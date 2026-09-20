@@ -19,6 +19,7 @@ import type { AcpUpdate, Frame, PermItem, SubEntry, ToolItem } from "@/lib/proto
 import { stripWorkdir } from "@/lib/tools/stripWorkdir";
 import { toolDetailFor, type ToolDetail } from "@/lib/tools/toolDetails";
 import { presentToolCall, toolDisplayName, type ToolTargetKind } from "@/lib/tools/toolLabels";
+import { openPathContextMenu, runPathAction } from "@/lib/util/pathActions";
 import { FindingsCard, findingsReportFor } from "./FindingsCard";
 import { PermActions } from "./PermCard";
 import { statusDot } from "./statusDot";
@@ -49,10 +50,12 @@ function ToolTargetText({
   target,
   fullTarget,
   kind,
+  onLocalLink,
 }: {
   target: string;
   fullTarget?: string;
   kind: ToolTargetKind;
+  onLocalLink?: (path: string) => void;
 }) {
   if (kind !== "path") {
     return (
@@ -61,24 +64,49 @@ function ToolTargetText({
       </span>
     );
   }
+  const path = (fullTarget || target).trim();
   const split = Math.max(target.lastIndexOf("/"), target.lastIndexOf("\\"));
   const hasFilename = split >= 0 && split < target.length - 1;
   const directory = hasFilename ? target.slice(0, split + 1) : "";
   const filename = hasFilename ? target.slice(split + 1) : target;
   return (
-    <span title={fullTarget || target} className="flex min-w-0 flex-1 font-mono whitespace-nowrap">
-      {directory && <span className="min-w-3 truncate text-base-content/40">{directory}</span>}
-      <span className="max-w-[70%] shrink-0 truncate text-base-content/60">{filename}</span>
+    <span
+      title={path}
+      data-md-path={path}
+      className="md-path flex min-w-0 flex-1 font-mono whitespace-nowrap"
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        runPathAction(path, "reveal", onLocalLink);
+      }}
+      onContextMenu={(e) => openPathContextMenu(e, path, onLocalLink)}
+    >
+      {directory && <span className="min-w-3 truncate opacity-70">{directory}</span>}
+      <span className="max-w-[70%] shrink-0 truncate">{filename}</span>
     </span>
   );
 }
 
 /** 子代理进度行:工具步骤同样过 presentToolCall(动作 + 目标),文本行走
  * 行内 Markdown。 */
-function FeedRow({ entry, workdir }: { entry: SubEntry; workdir?: string }) {
+function FeedRow({
+  entry,
+  workdir,
+  onLocalLink,
+}: {
+  entry: SubEntry;
+  workdir?: string;
+  onLocalLink?: (path: string) => void;
+}) {
   const { locale } = useI18n();
   if (entry.kind === "text") {
-    return <MarkdownInline source={entry.text} className="block min-w-0 truncate text-base-content/50" />;
+    return (
+      <MarkdownInline
+        source={entry.text}
+        className="block min-w-0 truncate text-base-content/50"
+        onLocalLink={onLocalLink}
+      />
+    );
   }
   const sub = presentToolCall(entry.title, entry.rawInput, locale);
   const target = sub.targetKind === "path" ? stripWorkdir(sub.target, workdir) : sub.target;
@@ -88,7 +116,9 @@ function FeedRow({ entry, workdir }: { entry: SubEntry; workdir?: string }) {
       <span className="shrink-0 text-base-content/70" title={entry.title}>
         {sub.action}
       </span>
-      {target && <ToolTargetText target={target} fullTarget={sub.target} kind={sub.targetKind} />}
+      {target && (
+        <ToolTargetText target={target} fullTarget={sub.target} kind={sub.targetKind} onLocalLink={onLocalLink} />
+      )}
     </span>
   );
 }
@@ -234,7 +264,14 @@ export function ToolCard({
           <span className="shrink-0" title={item.title}>
             {presentation.action}
           </span>
-          {target && <ToolTargetText target={target} fullTarget={fullTarget} kind={presentation.targetKind} />}
+          {target && (
+            <ToolTargetText
+              target={target}
+              fullTarget={fullTarget}
+              kind={presentation.targetKind}
+              onLocalLink={onLocalLink}
+            />
+          )}
         </span>
         {/* 耗时悬停显影(group 在 LogList 的条目包裹层;消息时间在块上方,
             不进本行);⚠️ 不挂 focus-within——粘滞根因,见 MessageTime 头注 */}
@@ -299,7 +336,7 @@ export function ToolCard({
       {visibleFeed.length > 0 && (
         <div className="flex flex-col gap-1 px-3 pb-2 ps-6 text-xs">
           {visibleFeed.map((entry, i) => (
-            <FeedRow key={feedBase + i} entry={entry} workdir={workdir} />
+            <FeedRow key={feedBase + i} entry={entry} workdir={workdir} onLocalLink={onLocalLink} />
           ))}
         </div>
       )}

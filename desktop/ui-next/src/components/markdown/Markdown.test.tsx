@@ -321,3 +321,48 @@ describe("本地资源(工作区图片/文件链接)", () => {
     expect(container.querySelector("[data-md-stream-plain]")).toBeNull();
   });
 });
+
+describe("消息路径快捷打开", () => {
+  afterEach(() => {
+    document.querySelector("ul.menu")?.remove();
+    document.querySelector(".fixed.inset-0")?.remove();
+  });
+
+  it("行内代码与正文路径打成可点节点,URL 不误伤", () => {
+    const html = renderMarkdown(
+      "`desktop/src/git.rs` 见 https://example.com/foo/bar.ts 以及 D:\\\\works\\\\a.ts",
+    );
+    expect(html).toContain('data-md-path="desktop/src/git.rs"');
+    expect(html).toContain(String.raw`data-md-path="D:\works\a.ts"`);
+    expect(html).not.toMatch(/data-md-path="[^"]*example\.com/);
+  });
+
+  it("伪造的 data-md-path 被剥掉", () => {
+    const html = renderMarkdown('<span data-md-path="C:\\Windows\\notepad.exe">click</span>');
+    expect(html).not.toContain("data-md-path");
+  });
+
+  it("相对路径左键走 onLocalLink,右键出复制/打开文件夹/打开文件", async () => {
+    const onLocalLink = vi.fn();
+    const { container } = render(<Markdown source={"`src/main.rs`"} onLocalLink={onLocalLink} />);
+    const path = container.querySelector("[data-md-path]");
+    expect(path?.getAttribute("data-md-path")).toBe("src/main.rs");
+    fireEvent.click(path!);
+    expect(onLocalLink).toHaveBeenCalledWith("src/main.rs");
+
+    fireEvent.contextMenu(path!, { clientX: 12, clientY: 16 });
+    expect(screen.getByRole("button", { name: "复制路径" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "打开文件夹" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "打开文件" })).toBeTruthy();
+  });
+
+  it("绝对路径左键走 reveal_path", async () => {
+    const invoke = vi.fn(() => Promise.resolve("ok"));
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = { core: { invoke } };
+    const { container } = render(<Markdown source={String.raw`\`D:\works\a.ts\``} />);
+    const path = container.querySelector("[data-md-path]");
+    expect(path?.getAttribute("data-md-path")).toBe(String.raw`D:\works\a.ts`);
+    fireEvent.click(path!);
+    expect(invoke).toHaveBeenCalledWith("reveal_path", { path: String.raw`D:\works\a.ts` });
+  });
+});
