@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.49",
+    notes: "消息路径可点打开(左键文件夹/右键复制与默认程序);Git上传导入修复(WSL路径/默认gitignore/任务数据三目录往返);cron周日7命中;技能git导入清理临时目录;网关日志轮转先写后删",
+  },
+  {
     version: "0.1.48",
     notes: "网关请求日志持久化(JSONL存储+10000条上限);筛选栏(组/模型/状态/搜索);请求/响应详情弹窗(JSON美化+复制);plan()过滤unavailable候选;探测跳过熔断中模型",
   },
