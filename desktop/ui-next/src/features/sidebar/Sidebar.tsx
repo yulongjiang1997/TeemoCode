@@ -136,6 +136,7 @@ const SessionRow = memo(function SessionRow({ meta, p, level }: { meta: SessionM
     meta.title,
     meta.summary,
     isChat ? t("sidebar.row.chatDetail") : meta.workdir,
+    t("task.engine") + " " + t(meta.engine === "codex" ? "create.engine.codex" : "create.engine.ohmy"),
     rowStatusLabel(meta, t),
     attention ? t("status.attention") : "",
     turns,
@@ -160,6 +161,7 @@ const SessionRow = memo(function SessionRow({ meta, p, level }: { meta: SessionM
   return (
     <ListRow
       primary={primary}
+      tag={meta.engine === "codex" ? t("create.engine.codex") : undefined}
       trailing={trailing}
       usage={p.usage.get(meta.id) ?? null}
       tooltip={tooltip}

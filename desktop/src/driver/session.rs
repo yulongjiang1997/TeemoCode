@@ -384,6 +384,14 @@ pub(super) struct SessionState {
     pub(super) cancel_requested_turn: Option<u64>,
     /// 本进程内已 session/create(resume)过
     pub(super) created: bool,
+    /// 会话所属引擎("ohmy" / "codex")。
+    ///
+    /// 注意:这个字段是 2026-10-09 重建的。它连同 session_create_ex /
+    /// export_markdown 原本是工作区里未提交的改动,被一次 `git checkout HEAD --`
+    /// 误回退后无法从任何副本恢复,只能按调用方(external.rs / subagent.rs /
+    /// driver/mod.rs)的用法重新接上。sidecar 里原本写了什么键、Codex 引擎的
+    /// 建会话路径,都是按现有代码推断的,不是逐字还原。
+    pub(super) engine: String,
     /// 引擎侧会话 id(通常 == 壳 sid。恢复/重建一律按原 id resume
     /// (materialize_skills 确保 transcript),正常不再换绑;仅引擎回显
     /// 异常 id 的守卫路径会更新此别名——壳 sid/目录/UI 通道恒不变。
@@ -616,6 +624,52 @@ impl OhmyDriver {
         self.session_create_with_kind(workdir, model_name, create_dir, "local", "").await
     }
 
+    /// driver/mod.rs::session_create 的扩展入口:在 session_create_with_kind
+    /// 之上多接 engine / isolate / skills。
+    ///
+    /// 同 engine 字段:2026-10-09 按调用方签名重建,不是逐字还原。Codex 引擎的
+    /// 建会话在 driver/codex.rs,不经过这里,所以 engine != "ohmy" 直接拒绝而
+    /// 不是猜一条路径;skills 选择集原实现如何落盘已不可考,这里只对 ohmy 生效
+    /// 并写进 sidecar(resume 侧按同一键读回)。
+    pub async fn session_create_ex(
+        &self,
+        workdir: &str,
+        model_name: &str,
+        create_dir: bool,
+        kind: &str,
+        think: &str,
+        engine: &str,
+        isolate: bool,
+        skills: Option<Vec<String>>,
+    ) -> Result<Value, String> {
+        if !engine.eq_ignore_ascii_case("ohmy") {
+            return Err(format!("session_create_ex 暂只接 ohmy 引擎,收到: {engine}"));
+        }
+        let workdir = if isolate {
+            self.isolated_workdir(workdir)?
+        } else {
+            workdir.to_string()
+        };
+        let created = self
+            .session_create_with_kind(&workdir, model_name, create_dir, kind, think)
+            .await?;
+        if let (Some(skills), Some(id)) = (skills, created.get("id").and_then(|v| v.as_str())) {
+            self.write_sidecar(id, |m| {
+                m["skills"] = json!(skills);
+            });
+        }
+        Ok(created)
+    }
+
+    /// 隔离工作区:在主仓下建 `.ohmyagent/worktrees/<名>` 并返回它的路径,
+    /// 作为会话的 cwd。名字取时间戳,避免与已有 worktree 撞名。
+    fn isolated_workdir(&self, workdir: &str) -> Result<String, String> {
+        let resolved = self.0.resolve_workdir(workdir)?;
+        let ctx = crate::repo::RepoCtx { workdir: resolved, wsl_distro: self.0.wsl.as_ref().map(|w| w.distro.clone()) };
+        let name = format!("iso-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));
+        crate::checkpoint::add_worktree(&ctx, &name)
+    }
+
     pub async fn session_create_with_kind(
         &self,
         workdir: &str,
@@ -765,6 +819,7 @@ impl OhmyDriver {
                 cancel_requested_turn: None,
                 created: true,
                 engine_id: sid.clone(),
+                engine: "ohmy".into(),
                 opened: false,
                 open_tools: HashMap::new(),
                 model_text: String::new(),
@@ -849,6 +904,7 @@ impl OhmyDriver {
                     cancel_requested_turn: None,
                     created: is_child,
                     engine_id: engine_id.clone(),
+                    engine: meta.get("engine").and_then(|v| v.as_str()).unwrap_or("ohmy").to_string(),
                     opened: false,
                     open_tools: HashMap::new(),
                     model_text: String::new(),
@@ -2360,6 +2416,72 @@ impl OhmyDriver {
 
     fn write_sidecar(&self, id: &str, f: impl FnOnce(&mut Value)) {
         self.0.write_sidecar(id, f)
+    }
+
+    /// 导出会话为 Markdown。driver/mod.rs::session_call 的 "session_export"
+    /// 分支调用,前端只取返回值里的 markdown 字段。
+    ///
+    /// 同 engine 字段:2026-10-09 按调用方契约重建,不是逐字还原。原文的排版
+    /// 细节已不可考,这里按帧日志逐条渲染:用户输入、模型正文、思考、工具调用
+    /// 各成一段。payload.path 非空时同时落盘(父目录不存在会建出来)。
+    pub async fn export_markdown(&self, id: &str, payload: Value) -> Result<Value, String> {
+        check_session_id(id)?;
+        let dir = self.0.session_dir(id).ok_or_else(|| format!("会话不存在: {id}"))?;
+        let mut lines: Vec<String> = Vec::new();
+        let title = self.read_sidecar(id).get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if !title.is_empty() {
+            lines.push(format!("# {title}"));
+            lines.push(String::new());
+        }
+        for (_, raw) in fold::scan_lines(&dir.join("events.jsonl")) {
+            let Ok(frame) = serde_json::from_str::<Value>(&raw) else { continue };
+            let kind = frame.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            let data = frame.get("data");
+            match kind {
+                "user-input" => {
+                    let text = data.and_then(|d| d.get("content")).and_then(|v| v.as_str()).map(decode_b64).unwrap_or_default();
+                    if !text.is_empty() {
+                        lines.push("## 用户".into());
+                        lines.push(text);
+                        lines.push(String::new());
+                    }
+                }
+                "model-text" | "agent-text" => {
+                    let text = data.and_then(|d| d.get("text").or_else(|| d.get("delta"))).and_then(|v| v.as_str()).unwrap_or("");
+                    if !text.is_empty() {
+                        lines.push(text.to_string());
+                    }
+                }
+                "agent-thought" => {
+                    let text = data.and_then(|d| d.get("text").or_else(|| d.get("delta"))).and_then(|v| v.as_str()).unwrap_or("");
+                    if !text.is_empty() {
+                        lines.push(format!("> {text}"));
+                    }
+                }
+                "tool-call" => {
+                    let name = data.and_then(|d| d.get("tool").or_else(|| d.get("name"))).and_then(|v| v.as_str()).unwrap_or("tool");
+                    lines.push(format!("`{name}`"));
+                }
+                _ => {}
+            }
+        }
+        let markdown = lines.join("\n");
+        // base64 文本解码(user-input 帧的 content 是 base64,与 frame::b64_text 对偶)
+        fn decode_b64(s: &str) -> String {
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, s)
+                .ok()
+                .and_then(|b| String::from_utf8(b).ok())
+                .unwrap_or_default()
+        }
+        if let Some(path) = payload.get("path").and_then(|v| v.as_str()).filter(|p| !p.is_empty()) {
+            if let Some(parent) = std::path::Path::new(path).parent() {
+                if !parent.as_os_str().is_empty() {
+                    std::fs::create_dir_all(parent).map_err(|e| format!("创建导出目录失败: {e}"))?;
+                }
+            }
+            std::fs::write(path, &markdown).map_err(|e| format!("写导出文件失败: {e}"))?;
+        }
+        Ok(json!({ "markdown": markdown }))
     }
 
     /// 整读帧日志(测试断言用;线上回放走 replay_open,带 flush 屏障)。

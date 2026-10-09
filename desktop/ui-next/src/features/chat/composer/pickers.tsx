@@ -71,7 +71,7 @@ function Trigger({
       title={title}
       aria-label={ariaLabel}
       aria-expanded={open}
-      className={`btn btn-ghost btn-xs font-normal text-base-content/60 disabled:opacity-40 ${className ?? ""}`}
+      className={`btn btn-ghost btn-xs min-w-0 overflow-hidden font-normal text-base-content/60 disabled:opacity-40 ${className ?? ""}`}
       onClick={onToggle}
     >
       {children}
@@ -178,13 +178,13 @@ export function ModelMenu({
     // dropdown-content(它挂全局焦点态,与 useDismiss 抢关闭权;且
     // dropdown-top 的定位偏移会把菜单压到触发器上遮住输入行)。
     // 对齐新建任务页文件夹下拉:锚定按钮下方 4px、右对齐、主题底色。
-    <div ref={boxRef} className="relative min-w-0 shrink">
+    <div ref={boxRef} className="relative min-w-0 max-w-72 shrink">
       <Trigger
         open={open}
         disabled={disabled}
-        title={title}
+        title={modelDisplayByName(models, current).label || title}
         ariaLabel={ariaLabel}
-        className="max-w-52"
+        className="w-full"
         anchorRef={anchorRef}
         onToggle={() => (open ? setOpen(false) : openMenu())}
       >
@@ -193,7 +193,7 @@ export function ModelMenu({
       {open && (
         <div
           style={{ maxHeight: menuMax }}
-          className={`absolute end-0 bottom-full z-30 mb-1 flex w-64 flex-col overflow-hidden rounded-box border border-base-300 bg-base-100 p-1.5 shadow-lg ${align === "end" ? "" : "start-0 end-auto"}`}
+          className={`absolute end-0 bottom-full z-30 mb-1 flex w-80 max-w-[min(20rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-box border border-base-300 bg-base-100 p-1.5 shadow-lg ${align === "end" ? "" : "start-0 end-auto"}`}
         >
           {/* 不 autoFocus:打开菜单是「点选」意图,焦点跳进过滤框
               反而抢走键盘上下文(用户定案) */}

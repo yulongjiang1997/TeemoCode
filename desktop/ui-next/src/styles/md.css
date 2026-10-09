@@ -87,6 +87,9 @@
 }
 .md-path:hover { text-decoration-color: var(--color-primary); }
 
+.md-math { max-width: 100%; }
+.md-math-block { margin: 0.8em 0; overflow-x: auto; }
+.md-math-source { font-family: ui-monospace, monospace; white-space: pre-wrap; }
 .md-mermaid { max-width: 100%; margin: 0.8em 0; overflow-x: auto; color: var(--color-base-content); }
 .md-mermaid pre { margin: 0; }
 .md-mermaid svg { display: block; width: 100%; min-width: 24rem; height: auto; margin: 0 auto; }

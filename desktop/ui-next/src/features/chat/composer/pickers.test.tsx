@@ -38,3 +38,24 @@ describe("OptionMenu:空清单也要说话", () => {
     expect(screen.getByRole("list", { name: "切换模型" }).textContent).toContain("尚未配置模型");
   });
 });
+
+describe("ModelMenu:超长名称截断", () => {
+  it("触发器与条目用 truncate,不靠压缩字宽塞进工具条", async () => {
+    const name = "vendor/anthropic-claude-sonnet-4-5-20250929-thinking-preview";
+    render(
+      <ModelMenu
+        models={[{ name, default: true }]}
+        current={name}
+        onPick={vi.fn()}
+        ariaLabel="切换模型"
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "切换模型" });
+    expect(trigger.className).toMatch(/\boverflow-hidden\b/);
+    expect(trigger.querySelector(".truncate")).not.toBeNull();
+    expect(trigger.getAttribute("title")).toBe(name);
+    await userEvent.click(trigger);
+    const item = screen.getByRole("button", { name: new RegExp(name) });
+    expect(item.querySelector(".truncate")).not.toBeNull();
+  });
+});

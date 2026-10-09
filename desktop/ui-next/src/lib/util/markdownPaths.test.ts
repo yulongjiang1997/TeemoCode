@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveMarkdownResource, workspaceRelativePath } from "./markdownPaths";
+import { resolveMarkdownPath, resolveMarkdownResource, workspaceRelativePath } from "./markdownPaths";
 
 describe("resolveMarkdownResource", () => {
   it("解码 macOS/Unix 空格路径", () => {
@@ -37,5 +37,15 @@ describe("workspaceRelativePath", () => {
 
   it("Windows 盘符比较不区分大小写", () => {
     expect(workspaceRelativePath("c:\\Work\\Demo\\cat.jpg", "C:\\Work\\Demo")).toBe("cat.jpg");
+  });
+});
+
+describe("resolveMarkdownPath", () => {
+  it("相对当前 Markdown 文件解析,绝对路径和外链保持原样", () => {
+    expect(resolveMarkdownPath("docs/guide.md", "./images/cat.jpg")).toBe("docs/images/cat.jpg");
+    expect(resolveMarkdownPath("/docs/guide.md", "../cat.jpg")).toBe("/cat.jpg");
+    expect(resolveMarkdownPath("C:\\docs\\guide.md", "cat.jpg")).toBe("C:\\docs\\cat.jpg");
+    expect(resolveMarkdownPath("docs/guide.md", "https://example.com/a")).toBe("https://example.com/a");
+    expect(resolveMarkdownPath("docs/guide.md", "/abs/cat.jpg")).toBe("/abs/cat.jpg");
   });
 });

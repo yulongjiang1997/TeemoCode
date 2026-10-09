@@ -643,8 +643,11 @@ export function reduceFrame(s: ChatState, f: Frame): ChatState {
         items: [...expireOpenAsks(s.items), { kind: "sys", tag: "turn-end", text: "", key: "chat.sys.turnEnd" }],
       };
     case "task-error": {
-      const data = frameData<{ error?: string; terminal?: boolean }>(f);
+      const data = frameData<{ error?: string; terminal?: boolean; details?: string; message?: string }>(f);
       const terminal = data?.terminal !== false;
+      // 本地引擎帧是 {error}；云端 TaskStream 是 {details, message}。
+      // 只认 error 会把云端错误折成「未知错误」。优先级：details > message > error。
+      const reason = data?.details || data?.message || data?.error;
       return {
         ...s,
         // 本地引擎先发 error 事件、稍后才发权威 turn/stopped。terminal=false
@@ -655,8 +658,8 @@ export function reduceFrame(s: ChatState, f: Frame): ChatState {
         ...(terminal ? { plan: [] as typeof s.plan } : {}),
         items: [
           ...(terminal ? expireOpenAsks(s.items) : s.items),
-          data?.error
-            ? { kind: "sys" as const, tag: "error" as const, text: "", key: "chat.sys.error" as const, params: { reason: data.error }, error: true, seq: (f as { seq?: number }).seq ?? 0 }
+          reason
+            ? { kind: "sys" as const, tag: "error" as const, text: "", key: "chat.sys.error" as const, params: { reason }, error: true, seq: (f as { seq?: number }).seq ?? 0 }
             : { kind: "sys" as const, tag: "error" as const, text: "", key: "chat.sys.errorUnknown" as const, error: true, seq: (f as { seq?: number }).seq ?? 0 },
         ],
       };

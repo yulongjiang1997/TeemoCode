@@ -15,11 +15,13 @@
 mod automation;
 mod baizhi;
 mod browser;
+mod checkpoint;
 mod config;
 mod driver;
 mod gateway;
 mod git;
 mod memory;
+mod project_rules;
 mod models_dev;
 mod import_mc;
 #[cfg(target_os = "windows")]
@@ -1886,6 +1888,8 @@ fn main() {
             driver::external_agent_cancel,
             driver::external_agent_list,
             driver::external_agent_probe,
+            project_rules::project_rules_read,
+            project_rules::project_rules_write,
             skills::skills_list,
             skills::skills_save,
             skills::skills_delete,

@@ -6,11 +6,13 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ModelInfo, SessionMeta } from "@/lib/ipc/sessions";
+import { resetRelentlessForTests } from "@/lib/relentless";
 import { b64decode, b64encode } from "@/lib/protocol/codec";
 import { pushEscLayer } from "@/lib/util/escLayer";
 import { ChatView } from "../ChatView";
 
 afterEach(() => {
+  resetRelentlessForTests();
   delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
 });
 
@@ -695,6 +697,25 @@ describe("切会话焦点", () => {
 
 // 计划模式开关(对标 ZCode Plan Mode):点击高亮,发送注入 [mc-plan] 前缀,
 // 气泡渲染剥掉前缀只显原文(与团队前缀叠加时各自剥净)。
+describe("不死不休", () => {
+  it("在输入框下右侧菜单排,点一下高亮并记住这个工作区", async () => {
+    const user = userEvent.setup();
+    stubShell();
+    render(<ChatView meta={META} onPatched={() => {}} onDeleted={() => {}} />);
+    await ready();
+
+    const box = screen.getByRole("button", { name: "不死不休" });
+    const plan = screen.getByRole("button", { name: "计划" });
+    const composer = screen.getByRole("textbox", { name: "消息输入" });
+    expect(composer.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(box.compareDocumentPosition(plan) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(box.className).toContain("badge-outline");
+    await user.click(box);
+    expect(box.getAttribute("aria-pressed")).toBe("true");
+    expect(box.className).toContain("bg-warning");
+  });
+});
+
 describe("计划模式", () => {
   it("点击高亮开关;发送载荷带 [mc-plan] 前缀", async () => {
     const user = userEvent.setup();
@@ -781,5 +802,18 @@ describe("外部 CLI 子代理", () => {
     const claude = await screen.findByRole("button", { name: /Claude Code/ });
     expect((claude as HTMLButtonElement).disabled).toBe(true);
     expect(ops.some((o) => o.cmd === "external_agent_run")).toBe(false);
+  });
+});
+
+describe("Ctrl+Enter", () => {
+  it("在光标处换行且不发送", async () => {
+    const { ops } = stubShell();
+    render(<ChatView meta={META} />);
+    const box = await ready();
+    await userEvent.type(box, "ab");
+    (box as HTMLTextAreaElement).setSelectionRange(1, 1);
+    fireEvent.keyDown(box, { key: "Enter", ctrlKey: true });
+    expect((box as HTMLTextAreaElement).value).toBe("a\nb");
+    expect(sends(ops, "user-input")).toHaveLength(0);
   });
 });

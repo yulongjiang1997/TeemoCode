@@ -80,6 +80,8 @@
             "allow-list-wsl-distros",
             "allow-memory-read",
             "allow-memory-write",
+            "allow-project-rules-read",
+            "allow-project-rules-write",
             "allow-mc-checkin",
             "allow-mc-disconnect",
             "allow-mc-file-download",

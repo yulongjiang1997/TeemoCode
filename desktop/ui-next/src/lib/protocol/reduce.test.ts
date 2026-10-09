@@ -554,6 +554,13 @@ describe("轮次与系统帧", () => {
     expect(run([frame("task-error")]).items.at(-1)).toEqual({ kind: "sys", tag: "error", text: "", key: "chat.sys.errorUnknown", error: true, seq: 0 });
   });
 
+  it("云端 task-error 优先显示 details,不折成未知错误", () => {
+    const cloud = run([frame("task-error", { details: "[EXECUTION_FAILED] 模型不存在", message: "执行失败" })]);
+    expect(cloud.items.at(-1)).toMatchObject({ key: "chat.sys.error", params: { reason: "[EXECUTION_FAILED] 模型不存在" } });
+    const messageOnly = run([frame("task-error", { message: "执行失败" })]);
+    expect(messageOnly.items.at(-1)).toMatchObject({ params: { reason: "执行失败" } });
+  });
+
   it("terminal=false 的错误只展示,保持运行态直到 task-ended", () => {
     const pending = run([frame("task-started"), frame("task-error", { error: "落盘失败", terminal: false })]);
     expect(pending.running).toBe(true);

@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 
 import { Markdown, MarkdownInline } from "@/components/markdown/Markdown";
 import { Lightbox, UploadImg } from "@/components/media/UploadImg";
+import { ApplyPatchView } from "@/features/files/ApplyPatchView";
 import { DiffView } from "@/features/files/DiffView";
 import { useI18n } from "@/lib/i18n";
 import type { FrameSender } from "@/lib/ipc/approvals";
@@ -17,6 +18,7 @@ import { isImagePath } from "@/lib/ipc/uploads";
 import { frameData, toolResultText } from "@/lib/protocol/codec";
 import type { AcpUpdate, Frame, PermItem, SubEntry, ToolItem } from "@/lib/protocol/types";
 import { stripWorkdir } from "@/lib/tools/stripWorkdir";
+import { isApplyPatchText } from "@/lib/tools/applyPatch";
 import { toolDetailFor, type ToolDetail } from "@/lib/tools/toolDetails";
 import { presentToolCall, toolDisplayName, type ToolTargetKind } from "@/lib/tools/toolLabels";
 import { openPathContextMenu, runPathAction } from "@/lib/util/pathActions";
@@ -131,7 +133,7 @@ const PRE_CLASS = "m-0 p-2.5 font-mono text-xs leading-relaxed whitespace-pre-wr
 function DetailBody({ detail }: { detail: ToolDetail }) {
   const { t } = useI18n();
   if (detail.kind === "diff") {
-    return <DiffView text={detail.text} />;
+    return isApplyPatchText(detail.text) ? <ApplyPatchView text={detail.text} /> : <DiffView text={detail.text} />;
   }
   if (detail.kind === "command") {
     return (

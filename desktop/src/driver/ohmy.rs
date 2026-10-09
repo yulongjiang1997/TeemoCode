@@ -168,6 +168,8 @@ pub(super) struct Inner {
     /// 技能物化闸:同一会话的"重写目录 → session/create"必须成对,
     /// 避免并发切换互相覆盖。目录本身已按 engine session id 隔离。
     pub(super) skills_gate: tokio::sync::Mutex<()>,
+    /// Codex ACP 会话(与 ohmy 进程并列;默认引擎仍是 ohmy)。
+    pub(super) codex: super::codex::CodexRegistry,
 }
 
 #[derive(Clone)]

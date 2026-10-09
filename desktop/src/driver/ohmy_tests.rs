@@ -1117,6 +1117,7 @@ fn bare_inner_with_models(tag: &str, models: Vec<ManifestModel>) -> (Arc<Inner>,
         skills_user_dir: home.join("skills"),
         skills_defaults_path: home.join("skills-defaults.json"),
         skills_gate: tokio::sync::Mutex::new(()),
+        codex: super::super::codex::CodexRegistry::default(),
     });
     (inner, events)
 }
@@ -1132,6 +1133,7 @@ fn bare_session(sid: &str) -> SessionState {
         cancel_requested_turn: None,
         created: true,
         engine_id: sid.to_string(),
+        engine: "ohmy".into(),
         opened: false,
         open_tools: HashMap::new(),
         model_text: String::new(),

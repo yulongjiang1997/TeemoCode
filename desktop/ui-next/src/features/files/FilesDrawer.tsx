@@ -15,7 +15,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as R
 
 import { useI18n } from "@/lib/i18n";
 import { isMacShell } from "@/lib/ipc/host";
-import { repoChanges, repoFileDiff, repoListDir, repoReadFile, repoReveal, type RepoChange, type RepoEntry } from "@/lib/ipc/repo";
+import { repoChanges, repoCheckpointRestore, repoDiscardFile, repoFileDiff, repoListDir, repoReadFile, repoReveal, type RepoChange, type RepoEntry } from "@/lib/ipc/repo";
+import { uploadFileURL } from "@/lib/ipc/uploads";
 import { copyText } from "@/lib/util/clipboard";
 import { useEscLayer } from "@/lib/util/escLayer";
 import { Changes } from "./Changes";
@@ -132,6 +133,32 @@ export function FilesDrawer({
     };
   }, [sessionId, refreshToken]);
 
+  const reloadChanges = useCallback(() => {
+    setChangesErr("");
+    repoChanges(sessionId).then(
+      (r) => {
+        setChanges(r.changes);
+        setIsGitRepo(r.isGitRepo);
+      },
+      (e: unknown) => {
+        setChanges([]);
+        setChangesErr(errText(e));
+      },
+    );
+  }, [sessionId]);
+
+  const discardFile = (path: string) => {
+    void repoDiscardFile(sessionId, path)
+      .then(() => reloadChanges())
+      .catch((e: unknown) => setChangesErr(errText(e)));
+  };
+
+  const restoreAll = () => {
+    void repoCheckpointRestore(sessionId)
+      .then(() => reloadChanges())
+      .catch((e: unknown) => setChangesErr(errText(e)));
+  };
+
   // 非 git 工作区没有「改动」页;异步探测出 false 时从 changes 收敛回 files
   useEffect(() => {
     if (!isGitRepo && tab === "changes") {
@@ -178,18 +205,19 @@ export function FilesDrawer({
     setTab(next);
   };
 
-  const openFile = (entry: RepoEntry) => {
+  const openPreviewPath = useCallback((path: string) => {
     const req = ++reqRef.current;
-    setPreview({ path: entry.path, mode: "file", state: "loading", text: "" });
-    repoReadFile(sessionId, entry.path).then(
+    setPreview({ path, mode: "file", state: "loading", text: "" });
+    repoReadFile(sessionId, path).then(
       (content) => {
-        if (req === reqRef.current) setPreview({ path: entry.path, mode: "file", state: "ready", text: content });
+        if (req === reqRef.current) setPreview({ path, mode: "file", state: "ready", text: content });
       },
       (e: unknown) => {
-        if (req === reqRef.current) setPreview({ path: entry.path, mode: "file", state: "error", text: errText(e) });
+        if (req === reqRef.current) setPreview({ path, mode: "file", state: "error", text: errText(e) });
       },
     );
-  };
+  }, [sessionId]);
+  const openFile = (entry: RepoEntry) => openPreviewPath(entry.path);
 
   const openDiff = (path: string) => {
     const req = ++reqRef.current;
@@ -356,11 +384,21 @@ export function FilesDrawer({
           </div>
           {/* 工作区根定位:抽屉是「工作区资源管理器」,跳出去接着用系统
               文件管理器是它的份内出口(旧 UI 头部同款按钮) */}
+          {tab === "changes" && (changes?.length ?? 0) > 0 && (
+            <button
+              type="button"
+              title={t("files.changes.restoreAllTitle")}
+              onClick={restoreAll}
+              className="btn btn-ghost btn-xs ml-auto text-base-content/70"
+            >
+              {t("files.changes.restoreAll")}
+            </button>
+          )}
           <button
             type="button"
             title={workdir || t("files.revealRoot")}
             onClick={() => void reveal("")}
-            className="btn btn-ghost btn-xs ml-auto gap-1.5 text-base-content/70"
+            className={`btn btn-ghost btn-xs gap-1.5 text-base-content/70 ${tab === "changes" && (changes?.length ?? 0) > 0 ? "" : "ml-auto"}`}
           >
             <IconFolderOpen size={13} stroke={1.75} aria-hidden />
             {isMacShell() ? t("files.revealRootMac") : t("files.revealRoot")}
@@ -395,7 +433,7 @@ export function FilesDrawer({
               Tree.tsx:68 的注释「抽屉关闭整体卸载,重开自然是全新状态」在旧 UI
               的单组件结构里成立(tree/expanded 与 tab 同级),拆开后不成立了。
               Changes 是纯 props 投影、无内部状态,照旧条件渲染即可。 */}
-          {tab === "changes" && <Changes changes={changes} activePath={preview?.path ?? null} onOpen={openDiff} />}
+          {tab === "changes" && <Changes changes={changes} activePath={preview?.path ?? null} onOpen={openDiff} onDiscard={discardFile} />}
           {treeMounted && (
             <div className={tab === "changes" ? "hidden" : "contents"}>
               <Tree listDir={listDir} onOpenFile={openFile} activePath={preview?.path ?? null} changeStatus={changeStatus} />
@@ -416,6 +454,8 @@ export function FilesDrawer({
               status={changeStatus.get(preview.path)}
               onReveal={() => void reveal(preview.path)}
               onClose={closePreview}
+              localImageUrl={(path) => uploadFileURL(sessionId, path)}
+              onLocalLink={openPreviewPath}
             />
           </>
         )}

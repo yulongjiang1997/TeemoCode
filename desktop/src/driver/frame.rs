@@ -128,6 +128,10 @@ fn acp(update: Value, seq: u64) -> Value {
     build("task-running", Some("acp_event"), Some(json!({ "update": update })), seq)
 }
 
+pub fn session_update(update: Value, seq: u64) -> Value {
+    acp(update, seq)
+}
+
 // ==================== 顶层帧 ====================
 
 pub fn task_started(seq: u64) -> Value {

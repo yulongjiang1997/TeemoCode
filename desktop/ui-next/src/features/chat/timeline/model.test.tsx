@@ -49,4 +49,21 @@ describe("projectTimelineRows", () => {
     };
     expect(projectTimelineRows(prepended, opts)[1]!.key).toBe(before);
   });
+
+  it("完整助手轮次只在最后一段挂合并后的 Markdown", () => {
+    const done = stateOf([
+      { kind: "user", text: "问" },
+      { kind: "agent", text: "第一段" },
+      { kind: "tool", tcId: "t", title: "Bash", status: "ok", out: "" },
+      { kind: "agent", text: "第二段" },
+      { kind: "sys", tag: "turn-end", text: "" },
+    ]);
+    const rows = projectTimelineRows(done, opts);
+    const agents = rows.filter((row) => row.type === "item" && row.item.kind === "agent");
+    expect(agents[0]?.type === "item" ? agents[0].agentCopySource : undefined).toBeUndefined();
+    expect(agents[1]?.type === "item" ? agents[1].agentCopySource : undefined).toBe("第一段\n\n第二段");
+
+    const running = { ...stateOf([{ kind: "agent", text: "半截" }]), running: true };
+    expect(projectTimelineRows(running, opts)[0]?.type === "item" ? projectTimelineRows(running, opts)[0]?.agentCopySource : undefined).toBeUndefined();
+  });
 });

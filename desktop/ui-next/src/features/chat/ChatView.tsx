@@ -25,7 +25,8 @@ import { fmtCompact, showTokenPopover } from "@/features/sidebar/listKit";
 import { useI18n } from "@/lib/i18n";
 import { sessionOutline, sessionSetModel, type OutlineItem } from "@/lib/ipc/controls";
 import { getConfig } from "@/lib/ipc/config";
-import { repoChanges, repoReveal } from "@/lib/ipc/repo";
+import { pickSaveFile } from "@/lib/ipc/cloudtasks";
+import { repoChanges, repoReveal, sessionExportMarkdown } from "@/lib/ipc/repo";
 import { sessionFrame, sessionPatch, sessionSend, type SessionMeta } from "@/lib/ipc/sessions";
 import { b64encode } from "@/lib/protocol/codec";
 import { buildSessionUsageMap, usageStats, type TokenUsage } from "@/lib/ipc/usageStats";
@@ -43,6 +44,7 @@ import { useDismiss } from "@/lib/util/useDismiss";
 import { LocalComposerHost, type LocalComposerHandle } from "./composer/LocalComposerHost";
 import { GitBranchBadge } from "./GitBranchBadge";
 import { MemoryDialog } from "./MemoryDialog";
+import { RulesDialog } from "./RulesDialog";
 import { LogList, type LogListHandle } from "./LogList";
 import { OutlineNav, outlineEntriesOf } from "./OutlineNav";
 import { TaskPanel } from "./TaskPanel";
@@ -820,6 +822,7 @@ export function ChatView({
   const [confirmDelete, setConfirmDelete] = useState(false);
   // 工作区记忆面板(引擎 .monkeycode/MEMORY.md 的查看/编辑入口)
   const [memoryOpen, setMemoryOpen] = useState(false);
+  const [rulesOpen, setRulesOpen] = useState(false);
   const menuBoxRef = useRef<HTMLDivElement | null>(null);
   const closeMenu = () => {
     setMenuOpen(false);
@@ -1170,6 +1173,14 @@ export function ChatView({
             </h1>
           )}
         </div>
+        <span
+          data-tauri-drag-region=""
+          className="badge badge-ghost badge-sm shrink-0 text-base-content/60"
+          aria-label={t("task.engine")}
+          title={t("task.engine")}
+        >
+          {t(meta.engine === "codex" ? "create.engine.codex" : "create.engine.ohmy")}
+        </span>
         {/* Git 分支徽标(独立 memo 组件,避免分支状态变化触发 ChatView 整体重渲染) */}
         {meta.workdir && <GitBranchBadge workdir={meta.workdir} />}
         {/* 任务 token 用量:标题右侧,点击弹明细(输入/输出/调用 + 按模型) */}
@@ -1225,19 +1236,52 @@ export function ChatView({
           {menuOpen && (
             <ul role="menu" aria-label={t("chat.menu.label")} className="dropdown-content menu z-40 w-44 flex-nowrap [&_li]:flex-nowrap rounded-box bg-base-100 p-2 shadow-sm">
               {(meta.kind ?? "local") === "local" && (
-                <li role="none">
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      closeMenu();
-                      setMemoryOpen(true);
-                    }}
-                  >
-                    {t("chat.memory.menu")}
-                  </button>
-                </li>
+                <>
+                  <li role="none">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        closeMenu();
+                        setMemoryOpen(true);
+                      }}
+                    >
+                      {t("chat.memory.menu")}
+                    </button>
+                  </li>
+                  <li role="none">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        closeMenu();
+                        setRulesOpen(true);
+                      }}
+                    >
+                      {t("chat.rules.menu")}
+                    </button>
+                  </li>
+                </>
               )}
+              <li role="none">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu();
+                    void (async () => {
+                      try {
+                        const dest = await pickSaveFile(`${meta.id}.md`);
+                        await sessionExportMarkdown(meta.id, dest ?? "");
+                      } catch (e: unknown) {
+                        console.warn("导出会话失败:", e);
+                      }
+                    })();
+                  }}
+                >
+                  {t("chat.menu.export")}
+                </button>
+              </li>
               <li role="none">
                 <button
                   type="button"
@@ -1299,6 +1343,7 @@ export function ChatView({
         </div>
       </header>
       {memoryOpen && <MemoryDialog workdir={meta.workdir} onClose={() => setMemoryOpen(false)} />}
+      {rulesOpen && <RulesDialog workdir={meta.workdir} onClose={() => setRulesOpen(false)} />}
 
       {/* 布局规范:header 只放身份与动作;会话连接状态是内容级信息,
           以内嵌条挂在 header 之下,恢复即消。形态 = 「header 的延长线」:

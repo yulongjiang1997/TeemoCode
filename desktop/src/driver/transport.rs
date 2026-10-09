@@ -396,6 +396,7 @@ impl OhmyDriver {
             skills_user_dir: crate::skills::user_dir(&cfg_dir),
             skills_defaults_path: crate::skills::defaults_path(&cfg_dir),
             skills_gate: tokio::sync::Mutex::new(()),
+            codex: super::codex::CodexRegistry::default(),
         });
 
         // writer 线程:串行写 stdin;收到 None 哨兵或通道关闭即丢弃 stdin

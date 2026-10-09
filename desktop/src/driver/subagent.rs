@@ -134,6 +134,7 @@ impl Inner {
                 cancel_requested_turn: None,
                 created: true, // 壳侧会话,无引擎实体,open 不做 resume RPC
                 engine_id: child_sid.to_string(),
+                engine: "ohmy".into(),
                 opened: false,
                 open_tools: HashMap::new(),
                 model_text: String::new(),

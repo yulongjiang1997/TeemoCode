@@ -32,7 +32,7 @@ impl RepoCtx {
     }
 
     /// 解析相对路径并防目录穿越;返回本地 fs 视角的绝对路径。
-    fn resolve(&self, rel: &str) -> Result<PathBuf, String> {
+    pub(crate) fn resolve(&self, rel: &str) -> Result<PathBuf, String> {
         // 第一道:归一化组件级校验,拒绝绝对路径与任何 .. 成分。
         // 目标可能尚不存在(file_diff 要为已删除文件出 diff),所以这一道
         // 不能依赖 canonicalize。
@@ -91,8 +91,12 @@ impl RepoCtx {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
-    fn git(&self, args: &[&str]) -> Result<String, String> {
+    pub(crate) fn git(&self, args: &[&str]) -> Result<String, String> {
         self.run_git(args, false)
+    }
+
+    pub(crate) fn git_cmd(&self, args: &[&str]) -> Result<String, String> {
+        self.git(args)
     }
 
     fn git_allow_fail(&self, args: &[&str]) -> String {
@@ -104,6 +108,10 @@ impl RepoCtx {
         self.git(&["rev-parse", "--is-inside-work-tree"])
             .map(|s| s.trim() == "true")
             .unwrap_or(false)
+    }
+
+    pub(crate) fn is_git(&self) -> bool {
+        self.is_git_repo()
     }
 }
 
@@ -199,6 +207,16 @@ pub fn dispatch(ctx: &RepoCtx, kind: &str, payload: &Value) -> Value {
         "repo_read_file" => read_file(ctx, path),
         "repo_file_diff" => file_diff(ctx, path),
         "repo_reveal" => reveal(ctx, path),
+        "repo_checkpoint_save" => {
+            let msg = payload.get("message").and_then(|v| v.as_str()).unwrap_or("checkpoint");
+            crate::checkpoint::save(ctx, msg).map(|h| json!(h))
+        }
+        "repo_checkpoint_list" => crate::checkpoint::list(ctx),
+        "repo_checkpoint_restore" => {
+            let commit = payload.get("commit").and_then(|v| v.as_str()).unwrap_or("");
+            crate::checkpoint::restore(ctx, commit).map(|_| json!(true))
+        }
+        "repo_discard_file" => crate::checkpoint::restore_file(ctx, path).map(|_| json!(true)),
         _ => Err(format!("未知 call kind: {kind}")),
     };
     match r {

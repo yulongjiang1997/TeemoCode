@@ -158,6 +158,7 @@ export function levelPad(level = 0): string {
 /** 列表行(menu 的 li>a 载体)。 */
 export function ListRow({
   primary,
+  tag,
   trailing,
   usage,
   pinned,
@@ -170,6 +171,8 @@ export function ListRow({
   menuItems,
 }: {
   primary: string;
+  /** 行尾安静标签(如 Codex),不进主文案截断 */
+  tag?: string;
   /** 行尾状态点:仅要紧态给(tone = 纯 status-* 语义色);状态词不上行
    * (用户定案 2026-08-05「文字换状态图标」),进点的 title/aria-label。
    * pulse = 进行中的活态(运行中/等待确认),渲染成「实心点 + 扩散环」 */
@@ -211,6 +214,9 @@ export function ListRow({
           {pinned && <IconPin size={10} stroke={2} className="-mt-px me-0.5 inline text-warning" aria-hidden />}
           {primary}
         </span>
+        {tag && (
+          <span className="badge badge-ghost badge-xs shrink-0 text-base-content/45">{tag}</span>
+        )}
         {/* token 用量徽标:紧凑总数,点击弹明细(命令式弹窗,见 showTokenPopover) */}
         {usage && usage.input + usage.output > 0 && (
           <button

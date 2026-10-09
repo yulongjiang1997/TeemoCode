@@ -17,6 +17,8 @@ mod normalize;
 pub mod ohmy;
 mod session;
 pub(crate) use session::valid_session_id;
+mod acp;
+mod codex;
 mod external;
 mod subagent;
 mod transport;
@@ -27,7 +29,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ohmy::OhmyDriver;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State};
 
 use crate::config::DesktopConfig;
@@ -376,13 +378,32 @@ pub async fn session_create(
     create_dir: bool,
     kind: Option<String>,
     think: Option<String>,
+    engine: Option<String>,
+    isolate: Option<bool>,
+    // 缺省 = 壳按默认启用规则物化;空数组 = 显式停用全部。Codex 忽略此参数。
+    skills: Option<Vec<String>>,
 ) -> Result<Value, String> {
     let kind = kind.as_deref().unwrap_or("local");
     if !matches!(kind, "local" | "chat") {
         return Err(format!("不支持的会话类型: {kind}"));
     }
+    let engine_name = engine.as_deref().unwrap_or("ohmy");
+    let enabled_skills = if engine_name.eq_ignore_ascii_case("codex") {
+        None
+    } else {
+        skills
+    };
     host.get()?
-        .session_create_with_kind(&workdir, &model, create_dir, kind, think.as_deref().unwrap_or(""))
+        .session_create_ex(
+            &workdir,
+            &model,
+            create_dir,
+            kind,
+            think.as_deref().unwrap_or(""),
+            engine_name,
+            isolate.unwrap_or(false),
+            enabled_skills,
+        )
         .await
 }
 
@@ -483,14 +504,20 @@ pub async fn session_call(
     payload: Value,
 ) -> Result<Value, String> {
     let engine = host.get()?;
+    if kind == "session_export" {
+        return match engine.export_markdown(&id, payload).await {
+            Ok(v) => Ok(json!({ "result": v })),
+            Err(e) => Ok(json!({ "error": e })),
+        };
+    }
     if kind.starts_with("repo_") {
         let workdir = engine.session_workdir(&id).await?;
         let ctx = RepoCtx { workdir, wsl_distro: engine.wsl_distro() };
-        // git/fs 是阻塞操作,丢 blocking 池;15s 超时防文件面板永久转圈
+        let secs = if kind.contains("checkpoint") || kind == "repo_discard_file" { 60 } else { 15 };
         let task = tauri::async_runtime::spawn_blocking(move || crate::repo::dispatch(&ctx, &kind, &payload));
-        return match tokio::time::timeout(std::time::Duration::from_secs(15), task).await {
+        return match tokio::time::timeout(std::time::Duration::from_secs(secs), task).await {
             Ok(r) => r.map_err(|e| format!("repo 查询失败: {e}")),
-            Err(_) => Err("repo 查询超时(15s)".into()),
+            Err(_) => Err(format!("repo 查询超时({secs}s)")),
         };
     }
     engine.session_call(&id, &kind, payload).await

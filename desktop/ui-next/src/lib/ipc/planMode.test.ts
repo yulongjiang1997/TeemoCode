@@ -15,6 +15,7 @@ describe("buildPlanPreamble", () => {
     expect(p).toContain("不执行任何改动");
     expect(p).toContain("实施计划");
     expect(p).toContain("等我确认");
+    expect(p).toContain("PLAN.md");
   });
 });
 

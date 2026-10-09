@@ -97,11 +97,11 @@ describe("CloudFiles", () => {
     const { ctl, calls } = fakeControl();
     render(<CloudFiles taskId="t1" vmId="vm1" borrowControl={lend(ctl)} />);
     await userEvent.click(await screen.findByText("README.md"));
-    await screen.findByText("# 项目说明");
+    expect(await screen.findByRole("heading", { name: "项目说明" })).toBeTruthy();
     const read = calls.find((c) => c.kind === "repo_read_file");
     expect(read?.payload).toMatchObject({ path: "README.md", offset: 0, length: 1 << 20 });
     await userEvent.keyboard("{Escape}");
-    expect(screen.queryByText("# 项目说明")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "项目说明" })).toBeNull();
   });
 
   it("超限文件不发请求,给一句人话(整包要穿两层,大文件预览既慢又没用)", async () => {

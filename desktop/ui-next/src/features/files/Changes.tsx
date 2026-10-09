@@ -17,10 +17,12 @@ export function Changes({
   changes,
   activePath,
   onOpen,
+  onDiscard,
 }: {
   changes: ChangeItem[] | null;
   activePath: string | null;
   onOpen: (path: string) => void;
+  onDiscard?: (path: string) => void;
 }) {
   const { t } = useI18n();
   if (changes === null) {
@@ -74,6 +76,19 @@ export function Changes({
                 <span className={`badge badge-soft badge-xs shrink-0 ${meta.badgeClass}`}>{t(meta.labelKey)}</span>
               ) : (
                 <span className="badge badge-ghost badge-xs shrink-0">{c.status}</span>
+              )}
+              {onDiscard && (
+                <span
+                  role="button"
+                  className="btn btn-ghost btn-xs shrink-0"
+                  title={t("files.changes.discardTitle")}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDiscard(c.path);
+                  }}
+                >
+                  {t("files.changes.discard")}
+                </span>
               )}
             </button>
           </li>

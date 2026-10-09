@@ -103,10 +103,12 @@ impl AgentPreset {
 }
 
 /// 在候选目录里找可执行文件(Windows 带 .exe/.cmd/.bat 后缀)。
-fn find_in_dir(dir: &std::path::Path, bin: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn find_in_dir(dir: &std::path::Path, bin: &str) -> Option<std::path::PathBuf> {
     #[cfg(windows)]
     {
-        for ext in ["", ".exe", ".cmd", ".bat"] {
+        // 先 .exe/.cmd:npm 全局目录里同名无后缀文件是 bash shim,
+        // CreateProcess 不能跑,误捡会直接起失败。
+        for ext in [".exe", ".cmd", ".bat", ""] {
             let p = dir.join(format!("{bin}{ext}"));
             if p.is_file() {
                 return Some(p);
@@ -268,6 +270,7 @@ pub(crate) fn run_external_agent(
             cancel_requested_turn: None,
             created: true,
             engine_id: child_sid.clone(),
+            engine: "ohmy".into(),
             opened: false,
             open_tools: HashMap::new(),
             model_text: String::new(),

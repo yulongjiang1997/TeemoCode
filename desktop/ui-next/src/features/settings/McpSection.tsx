@@ -10,6 +10,12 @@ import { emptyMcp, type McpEntry, type SettingsDraft } from "./settingsForm";
 /** 停用态真值在 extra.disabled(表单外字段,随保存原样透传回 mcp_servers)。 */
 const isDisabled = (m: McpEntry): boolean => m.extra?.disabled === true;
 
+const MCP_CATALOG: Array<{ name: string; type: McpEntry["type"]; command: string; args: string; url: string }> = [
+  { name: "filesystem", type: "stdio", command: "npx", args: "-y @modelcontextprotocol/server-filesystem .", url: "" },
+  { name: "github", type: "stdio", command: "npx", args: "-y @modelcontextprotocol/server-github", url: "" },
+  { name: "memory", type: "stdio", command: "npx", args: "-y @modelcontextprotocol/server-memory", url: "" },
+];
+
 export function McpSection({
   draft,
   onDraft,
@@ -31,6 +37,15 @@ export function McpSection({
   const add = () => {
     setExpanded(draft.mcps.length);
     onDraft((d) => ({ ...d, mcps: [...d.mcps, emptyMcp()] }));
+  };
+
+  const addFromCatalog = (item: (typeof MCP_CATALOG)[number]) => {
+    if (draft.mcps.some((m) => m.name === item.name)) return;
+    setExpanded(draft.mcps.length);
+    onDraft((d) => ({
+      ...d,
+      mcps: [...d.mcps, { ...emptyMcp(), name: item.name, type: item.type, command: item.command, args: item.args, url: item.url }],
+    }));
   };
 
   /** 停用/启用:翻的是 extra.disabled(表单外字段,serversToMcps ⇄ mcpsToServers
@@ -56,6 +71,21 @@ export function McpSection({
           </button>
         </div>
       )}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-2xs text-base-content/50">{t("settings.mcp.catalog")}</span>
+        {MCP_CATALOG.map((item) => (
+          <button
+            key={item.name}
+            type="button"
+            className="btn btn-ghost btn-xs"
+            aria-label={`${t("settings.mcp.catalog")} ${item.name}`}
+            disabled={draft.mcps.some((m) => m.name === item.name)}
+            onClick={() => addFromCatalog(item)}
+          >
+            {t("settings.mcp.catalog.add", { name: item.name })}
+          </button>
+        ))}
+      </div>
       {/* 行形态与模型列表同款:一个 list 容器 + list-row(行级 hover,
           左段整体是展开钮,动作与旋转箭头靠右)。
           overflow-hidden 不可省:行是 rounded-none 的方角,daisyUI .list 自身

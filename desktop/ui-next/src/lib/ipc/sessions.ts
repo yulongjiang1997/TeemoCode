@@ -37,6 +37,8 @@ export interface SessionMeta {
   waiting_ask?: boolean;
   updated_at?: string;
   archived?: boolean;
+  /** 代理循环:缺省 ohmy;codex 走隔离 CODEX_HOME */
+  engine?: "ohmy" | "codex";
 }
 
 export interface ModelInfo {
@@ -98,6 +100,10 @@ export function sessionCreate(args: {
   createDir: boolean;
   kind?: SessionKind;
   think?: string;
+  engine?: "ohmy" | "codex";
+  isolate?: boolean;
+  /** Desktop 任务技能名;缺省 = 默认集,空数组 = 全部停用。Codex 不传。 */
+  skills?: string[];
 }): Promise<SessionMeta> {
   return invoke<SessionMeta>("session_create", args);
 }

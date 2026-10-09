@@ -15,6 +15,7 @@ import { copyText } from "@/lib/util/clipboard";
 import { findPlainPaths, looksLikeFilePath } from "@/lib/util/filePaths";
 import { resolveMarkdownResource } from "@/lib/util/markdownPaths";
 import { openPathContextMenu, runPathAction } from "@/lib/util/pathActions";
+import { mathExtension, paintMath, renderMathHtml, subscribeMathReady } from "./math";
 
 const escapeHtml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -245,6 +246,7 @@ function onContainerContextMenu(e: MouseEvent<HTMLElement>, onLocalLink?: (path:
 
 function makeMarked(): Marked {
   const m = new Marked({ gfm: true, breaks: true, async: false });
+  m.use(mathExtension());
   m.use({
     renderer: {
       code({ text, lang }) {
@@ -352,7 +354,7 @@ function markPathNodes(root: ParentNode) {
     acceptNode(node) {
       const parent = node.parentElement;
       if (!parent) return NodeFilter.FILTER_REJECT;
-      if (parent.closest("a, pre, code, script, style, textarea, [data-md-path], [data-md-mermaid]")) {
+      if (parent.closest("a, pre, code, script, style, textarea, [data-md-path], [data-md-mermaid], [data-md-math], .md-math")) {
         return NodeFilter.FILTER_REJECT;
       }
       if (!/[\\/]/.test(node.textContent ?? "")) return NodeFilter.FILTER_REJECT;
@@ -388,7 +390,8 @@ function finishMarkdownHtml(html: string): string {
   normalizeResourceUrls(template.content);
   markPathNodes(template.content);
   // target/rel 交给点击代理,净化时保守放行 data-*(复制按钮原文载荷与本地标记)
-  return DOMPurify.sanitize(template.innerHTML, { USE_PROFILES: { html: true } });
+  // KaTeX 节点在净化之后注入,否则公式 DOM 会被拆掉。
+  return renderMathHtml(DOMPurify.sanitize(template.innerHTML, { USE_PROFILES: { html: true } }));
 }
 
 export function renderMarkdown(source: string): string {
@@ -612,6 +615,14 @@ function StaticMarkdown({
   useEffect(() => {
     const container = root.current;
     if (!container) return;
+    paintMath(container);
+    return subscribeMathReady(() => {
+      if (root.current) paintMath(root.current);
+    });
+  }, [html]);
+  useEffect(() => {
+    const container = root.current;
+    if (!container) return;
     let cancelled = false;
     hydrateLocalImages(container, localImageUrlRef.current, () => cancelled, cache.current).catch(() => {});
     return () => {
@@ -696,7 +707,16 @@ const MarkdownChunk = memo(function MarkdownChunk({ source, locale }: { source: 
   // locale 参与 key 义:复制按钮文案烤进 HTML。
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const html = useMemo(() => renderMarkdown(source), [source, locale]);
-  return <div data-md-stable-chunk="" dangerouslySetInnerHTML={{ __html: html }} />;
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    paintMath(el);
+    return subscribeMathReady(() => {
+      if (ref.current) paintMath(ref.current);
+    });
+  }, [html]);
+  return <div ref={ref} data-md-stable-chunk="" dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
 function StreamingMarkdown({
@@ -726,6 +746,14 @@ function StreamingMarkdown({
   useEffect(() => {
     localImageUrlRef.current = localImageUrl;
   }, [localImageUrl]);
+  useEffect(() => {
+    const container = root.current;
+    if (!container || !near) return;
+    paintMath(container);
+    return subscribeMathReady(() => {
+      if (root.current) paintMath(root.current);
+    });
+  }, [segments, tailHtml, near]);
   useEffect(() => {
     const container = root.current;
     if (!container || !near) return;

@@ -12,8 +12,8 @@
 // O(n) 的投影(join/分组/锚定表)只允许出现在结构变化；token 流式快路复用
 // 布局骨架。逐条目的昂贵计算(presentToolCall、splitAttachments、markdown)
 // 一律待在行组件内，靠 memo 只在该行变化时才跑。
-import { IconArrowsMinimize, IconChevronRight, IconFile as FileIcon, IconSparkles } from "@tabler/icons-react";
-import { forwardRef, memo, useCallback, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { IconArrowsMinimize, IconCheck, IconChevronRight, IconCopy, IconFile as FileIcon, IconSparkles } from "@tabler/icons-react";
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 
 import { Markdown, MarkdownInline } from "@/components/markdown/Markdown";
 import { downloadUpload, Lightbox, UploadImg } from "@/components/media/UploadImg";
@@ -25,6 +25,7 @@ import { splitAttachments } from "@/lib/protocol/attLine";
 import { THINK_KEY } from "@/lib/protocol/reduce";
 import type { ChatItem, ChatState, Frame, PermItem } from "@/lib/protocol/types";
 import { presentToolCall } from "@/lib/tools/toolLabels";
+import { copyText } from "@/lib/util/clipboard";
 import { thoughtLiveSummary, thoughtMarkdown, thoughtSummary } from "@/lib/util/thoughtMarkdown";
 import { fmtCompact } from "@/features/sidebar/listKit";
 import { AskCard } from "./cards/AskCard";
@@ -205,37 +206,75 @@ interface RenderOpts extends RowShared {
   joinNext?: boolean;
   /** 当前仍在追加正文的行暂缓 Mermaid 渲染。 */
   streaming?: boolean;
+  /** 整轮助手回答的原始 Markdown；只挂在该轮最后一段。 */
+  agentCopySource?: string;
+}
+
+function AgentMessage({
+  item,
+  streaming,
+  copySource,
+  uploadUrl,
+  onLocalLink,
+}: {
+  item: Extract<ChatItem, { kind: "agent" }>;
+  streaming?: boolean;
+  copySource?: string;
+  uploadUrl?: (path: string) => Promise<string>;
+  onLocalLink?: (path: string) => void;
+}) {
+  const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(copiedTimer.current), []);
+  const u = item.usage;
+  const hasUsage = !!u && (u.input_tokens ?? 0) + (u.output_tokens ?? 0) > 0;
+  return (
+    <div className="group relative flex flex-col">
+      <MessageTime timestamp={item.timestamp} className="absolute -top-3.5 start-0" />
+      {copySource && (
+        <button
+          type="button"
+          className="btn btn-ghost btn-xs absolute -top-3.5 end-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+          aria-label={copied ? t("chat.agent.copied") : t("chat.agent.copyMarkdown")}
+          title={copied ? t("chat.agent.copied") : t("chat.agent.copyMarkdown")}
+          onClick={() => {
+            copyText(copySource);
+            setCopied(true);
+            window.clearTimeout(copiedTimer.current);
+            copiedTimer.current = window.setTimeout(() => setCopied(false), 1500);
+          }}
+        >
+          {copied ? <IconCheck size={13} stroke={1.75} aria-hidden /> : <IconCopy size={13} stroke={1.75} aria-hidden />}
+        </button>
+      )}
+      <Markdown source={item.text} localImageUrl={uploadUrl} onLocalLink={onLocalLink} deferMermaid={streaming} />
+      {hasUsage && (
+        <div
+          className="mt-1 self-start rounded bg-base-200/70 px-1.5 py-px font-mono text-[10px] leading-4 text-base-content/45"
+          title={`${t("stats.input")} ${(u!.input_tokens ?? 0).toLocaleString("en-US")} · ${t("stats.output")} ${(u!.output_tokens ?? 0).toLocaleString("en-US")}`}
+        >
+          ↑{fmtCompact(u!.input_tokens ?? 0)} ↓{fmtCompact(u!.output_tokens ?? 0)}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function renderItem(item: ChatItem, o: RenderOpts) {
   switch (item.kind) {
     case "user":
       return <UserBubble item={item} flash={o.flash} uploadUrl={o.uploadUrl} />;
-    case "agent": {
-      const u = item.usage;
-      const hasUsage = !!u && (u.input_tokens ?? 0) + (u.output_tokens ?? 0) > 0;
-      // 时间绝对定位在块顶空隙(悬停显影,不占流式高度)
+    case "agent":
       return (
-        <div className="group relative flex flex-col">
-          <MessageTime timestamp={item.timestamp} className="absolute -top-3.5 start-0" />
-          <Markdown
-            source={item.text}
-            localImageUrl={o.uploadUrl}
-            onLocalLink={o.onLocalLink}
-            deferMermaid={o.streaming}
-          />
-          {/* 本条消息的 token 用量(壳侧 usage 事件挂帧;回放/重启后可见) */}
-          {hasUsage && (
-            <div
-              className="mt-1 self-start rounded bg-base-200/70 px-1.5 py-px font-mono text-[10px] leading-4 text-base-content/45"
-              title={`${o.t("stats.input")} ${(u!.input_tokens ?? 0).toLocaleString("en-US")} · ${o.t("stats.output")} ${(u!.output_tokens ?? 0).toLocaleString("en-US")}`}
-            >
-              ↑{fmtCompact(u!.input_tokens ?? 0)} ↓{fmtCompact(u!.output_tokens ?? 0)}
-            </div>
-          )}
-        </div>
+        <AgentMessage
+          item={item}
+          streaming={o.streaming}
+          copySource={o.agentCopySource}
+          uploadUrl={o.uploadUrl}
+          onLocalLink={o.onLocalLink}
+        />
       );
-    }
     case "thought":
       // 与助手块同构:时间线在块顶空隙
       return (
@@ -321,6 +360,7 @@ const Row = memo(function Row({
   perm,
   flash,
   streaming,
+  agentCopySource,
   joinPrev,
   joinNext,
   gap,
@@ -330,6 +370,7 @@ const Row = memo(function Row({
   perm?: PermItem;
   flash?: boolean;
   streaming?: boolean;
+  agentCopySource?: string;
   joinPrev: boolean;
   joinNext: boolean;
   /** 消息块间距(组内工具卡零距共享外框);包裹层 margin,见 LogList 注释 */
@@ -345,7 +386,7 @@ const Row = memo(function Row({
     // 首行(gap=false 且非
     // join)给 pt-3.5 刚好容下时间行;join 行零距契约不变(不渲时间)。
     <div className={`flex flex-col ${gap ? "pt-4" : joinPrev ? "" : "pt-3.5"}`}>
-      {renderItem(item, { t, perm, flash, streaming, joinPrev, joinNext, ...shared })}
+      {renderItem(item, { t, perm, flash, streaming, agentCopySource, joinPrev, joinNext, ...shared })}
     </div>
   );
 });
@@ -541,6 +582,7 @@ const LogListSession = forwardRef<LogListHandle, LogListProps>(function LogListS
               perm={row.perm}
               flash={row.flash}
               streaming={row.streaming}
+              agentCopySource={row.type === "item" ? row.agentCopySource : undefined}
               joinPrev={row.joinPrev}
               joinNext={row.joinNext}
               gap={row.gap}

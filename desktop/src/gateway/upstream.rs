@@ -1212,6 +1212,521 @@ impl StreamSession {
     }
 }
 
+// ==================== 对外 Responses API(Codex → 内部 Chat) ====================
+//
+// Codex 0.155+ 只走 wire_api=responses,打 POST /v1/responses。网关内部调度
+// 仍是 Chat Completions 形态(再按候选协议译成 openai/anthropic/responses)。
+// 这里只做「Codex 入参 → Chat 入参」和「Chat 出参 → Responses SSE/JSON」。
+
+fn responses_content_to_openai(content: &Value) -> Value {
+    match content {
+        Value::String(s) => json!(s),
+        Value::Array(parts) => {
+            let mut out = Vec::new();
+            for p in parts {
+                match p.get("type").and_then(Value::as_str).unwrap_or("") {
+                    "input_text" | "output_text" | "text" => {
+                        if let Some(t) = p.get("text").and_then(Value::as_str) {
+                            out.push(json!({ "type": "text", "text": t }));
+                        }
+                    }
+                    "input_image" | "image_url" => {
+                        let url = p
+                            .get("image_url")
+                            .and_then(|u| u.as_str().map(str::to_string).or_else(|| {
+                                u.get("url").and_then(Value::as_str).map(str::to_string)
+                            }))
+                            .or_else(|| p.get("url").and_then(Value::as_str).map(str::to_string));
+                        if let Some(url) = url {
+                            out.push(json!({ "type": "image_url", "image_url": { "url": url } }));
+                        }
+                    }
+                    _ => {
+                        if let Some(t) = p.get("text").and_then(Value::as_str) {
+                            out.push(json!({ "type": "text", "text": t }));
+                        }
+                    }
+                }
+            }
+            if out.len() == 1 && out[0].get("type").and_then(Value::as_str) == Some("text") {
+                return out[0].get("text").cloned().unwrap_or(Value::Null);
+            }
+            if out.is_empty() {
+                Value::String(String::new())
+            } else {
+                Value::Array(out)
+            }
+        }
+        Value::Null => Value::Null,
+        other => json!(other.to_string()),
+    }
+}
+
+fn normalize_chat_tool(item: &Value) -> Option<Value> {
+    if item.get("function").is_some() {
+        return Some(item.clone());
+    }
+    let ty = item.get("type").and_then(Value::as_str).unwrap_or("function");
+    if ty != "function" {
+        return None;
+    }
+    let name = item.get("name")?;
+    let mut f = json!({ "name": name });
+    if let Some(d) = item.get("description") {
+        f["description"] = d.clone();
+    }
+    if let Some(p) = item.get("parameters") {
+        f["parameters"] = p.clone();
+    }
+    Some(json!({ "type": "function", "function": f }))
+}
+
+fn flush_tool_calls(messages: &mut Vec<Value>, pending: &mut Vec<Value>) {
+    if pending.is_empty() {
+        return;
+    }
+    messages.push(json!({
+        "role": "assistant",
+        "content": Value::Null,
+        "tool_calls": std::mem::take(pending),
+    }));
+}
+
+fn function_call_output_text(item: &Value) -> String {
+    match item.get("output") {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Object(o)) => o
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .filter_map(|p| p.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join(""),
+        Some(other) => other.to_string(),
+        None => String::new(),
+    }
+}
+
+/// Codex / OpenAI Responses 请求体 → 内部 Chat Completions 形态。
+pub(crate) fn responses_request_to_chat(incoming: &Value) -> Result<Value, String> {
+    let input = incoming
+        .get("input")
+        .ok_or_else(|| "请求缺少 input".to_string())?;
+    let mut messages: Vec<Value> = Vec::new();
+    if let Some(inst) = incoming
+        .get("instructions")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+    {
+        messages.push(json!({ "role": "system", "content": inst }));
+    }
+    match input {
+        Value::String(s) => {
+            messages.push(json!({ "role": "user", "content": s }));
+        }
+        Value::Array(items) => {
+            let mut pending_calls: Vec<Value> = Vec::new();
+            for item in items {
+                match item {
+                    Value::String(s) => {
+                        flush_tool_calls(&mut messages, &mut pending_calls);
+                        messages.push(json!({ "role": "user", "content": s }));
+                    }
+                    Value::Object(_) => {
+                        let ty = item.get("type").and_then(Value::as_str).unwrap_or("");
+                        match ty {
+                            "function_call" => {
+                                let args = match item.get("arguments") {
+                                    Some(Value::String(s)) => json!(s),
+                                    Some(other) => json!(other.to_string()),
+                                    None => json!("{}"),
+                                };
+                                pending_calls.push(json!({
+                                    "id": item.get("call_id").or_else(|| item.get("id")).cloned().unwrap_or_else(|| json!("tool-call")),
+                                    "type": "function",
+                                    "function": {
+                                        "name": item.get("name").cloned().unwrap_or_else(|| json!("")),
+                                        "arguments": args,
+                                    }
+                                }));
+                            }
+                            "function_call_output" | "function_call_result" => {
+                                flush_tool_calls(&mut messages, &mut pending_calls);
+                                messages.push(json!({
+                                    "role": "tool",
+                                    "tool_call_id": item.get("call_id").and_then(Value::as_str).unwrap_or("tool-call"),
+                                    "content": function_call_output_text(item),
+                                }));
+                            }
+                            "reasoning" | "web_search_call" | "file_search_call" | "custom_tool_call"
+                            | "custom_tool_call_output" | "local_shell_call" | "local_shell_call_output" => {}
+                            _ => {
+                                flush_tool_calls(&mut messages, &mut pending_calls);
+                                let role = item.get("role").and_then(Value::as_str).unwrap_or("user");
+                                let role = if matches!(role, "assistant" | "system") {
+                                    role
+                                } else {
+                                    "user"
+                                };
+                                let content = item
+                                    .get("content")
+                                    .map(responses_content_to_openai)
+                                    .unwrap_or(Value::Null);
+                                if content.is_null() {
+                                    continue;
+                                }
+                                messages.push(json!({ "role": role, "content": content }));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            flush_tool_calls(&mut messages, &mut pending_calls);
+        }
+        _ => return Err("input 必须是字符串或数组".into()),
+    }
+    if messages.is_empty() {
+        return Err("请求缺少 input 内容".into());
+    }
+    let mut out = json!({
+        "model": incoming.get("model").cloned().unwrap_or_else(|| json!("")),
+        "messages": messages,
+        "stream": incoming.get("stream").cloned().unwrap_or_else(|| json!(false)),
+    });
+    if let Some(max) = incoming
+        .get("max_output_tokens")
+        .or_else(|| incoming.get("max_tokens"))
+    {
+        out["max_tokens"] = max.clone();
+    }
+    if let Some(t) = incoming.get("temperature") {
+        out["temperature"] = t.clone();
+    }
+    if let Some(tools) = incoming.get("tools").and_then(Value::as_array) {
+        let mapped: Vec<Value> = tools.iter().filter_map(normalize_chat_tool).collect();
+        if !mapped.is_empty() {
+            out["tools"] = Value::Array(mapped);
+        }
+    }
+    if let Some(tc) = incoming.get("tool_choice") {
+        out["tool_choice"] = tc.clone();
+    }
+    Ok(out)
+}
+
+/// 内部 Chat Completions JSON → Responses JSON(非流式)。
+pub(crate) fn chat_completion_to_responses(chat: &Value) -> Value {
+    let id = chat
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("resp-gw");
+    let model = chat.get("model").cloned().unwrap_or_else(|| json!(""));
+    let msg = chat
+        .pointer("/choices/0/message")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let text = msg.get("content").and_then(Value::as_str).unwrap_or("");
+    let finish = chat
+        .pointer("/choices/0/finish_reason")
+        .and_then(Value::as_str)
+        .unwrap_or("stop");
+    let mut output = Vec::new();
+    if !text.is_empty() {
+        output.push(json!({
+            "type": "message",
+            "role": "assistant",
+            "content": [{ "type": "output_text", "text": text }]
+        }));
+    }
+    if let Some(calls) = msg.get("tool_calls").and_then(Value::as_array) {
+        for c in calls {
+            let f = c.get("function").unwrap_or(&Value::Null);
+            output.push(json!({
+                "type": "function_call",
+                "call_id": c.get("id").cloned().unwrap_or_else(|| json!("tool-call")),
+                "name": f.get("name").cloned().unwrap_or_else(|| json!("")),
+                "arguments": f.get("arguments").cloned().unwrap_or_else(|| json!("{}")),
+            }));
+        }
+    }
+    let pt = chat
+        .pointer("/usage/prompt_tokens")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let ct = chat
+        .pointer("/usage/completion_tokens")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    json!({
+        "id": id,
+        "object": "response",
+        "status": if finish == "length" { "incomplete" } else { "completed" },
+        "model": model,
+        "output": output,
+        "usage": {
+            "input_tokens": pt,
+            "output_tokens": ct,
+            "total_tokens": pt + ct,
+        }
+    })
+}
+
+fn responses_sse(kind: &str, extra: Value) -> String {
+    let mut obj = match extra {
+        Value::Object(m) => m,
+        _ => serde_json::Map::new(),
+    };
+    obj.insert("type".into(), json!(kind));
+    // Codex eventsource 认 `event:` 行;core 侧 OutputTextDelta 还必须先有
+    // output_item.added,否则 release 里只打日志、界面没有任何字。
+    format!("event: {kind}\ndata: {}\n\n", Value::Object(obj))
+}
+
+/// 把网关内部的 Chat Completions SSE 译成 Codex 要的 Responses SSE。
+pub(crate) struct ResponsesSseOut {
+    parser: OpenAiSseLines,
+    id: String,
+    msg_id: String,
+    created: bool,
+    completed: bool,
+    message_open: bool,
+    message_text: String,
+    tools: HashMap<usize, (String, String, String)>,
+    usage: Usage,
+}
+
+impl ResponsesSseOut {
+    pub fn new() -> Self {
+        Self {
+            parser: OpenAiSseLines::default(),
+            id: format!("resp-gw-{}", super::new_hex(6)),
+            msg_id: String::new(),
+            created: false,
+            completed: false,
+            message_open: false,
+            message_text: String::new(),
+            tools: HashMap::new(),
+            usage: Usage::default(),
+        }
+    }
+
+    pub fn translate(&mut self, bytes: &[u8]) -> Vec<u8> {
+        let mut out = String::new();
+        for payload in self.parser.feed(bytes) {
+            self.emit_payload(&payload, &mut out);
+        }
+        out.into_bytes()
+    }
+
+    pub fn finish(&mut self) -> Vec<u8> {
+        let mut out = String::new();
+        for payload in self.parser.finish() {
+            self.emit_payload(&payload, &mut out);
+        }
+        if !self.completed {
+            self.emit_completed(&mut out);
+        }
+        out.into_bytes()
+    }
+
+    fn ensure_created(&mut self, out: &mut String) {
+        if self.created {
+            return;
+        }
+        self.created = true;
+        out.push_str(&responses_sse(
+            "response.created",
+            json!({ "response": { "id": self.id, "object": "response", "status": "in_progress" } }),
+        ));
+    }
+
+    fn emit_completed(&mut self, out: &mut String) {
+        if self.completed {
+            return;
+        }
+        self.completed = true;
+        self.ensure_created(out);
+        self.flush_message_item(out);
+        self.flush_tools(out);
+        let pt = self.usage.prompt_tokens.unwrap_or(0);
+        let ct = self.usage.completion_tokens.unwrap_or(0);
+        out.push_str(&responses_sse(
+            "response.completed",
+            json!({
+                "response": {
+                    "id": self.id,
+                    "object": "response",
+                    "status": "completed",
+                    "usage": {
+                        "input_tokens": pt,
+                        "input_tokens_details": null,
+                        "output_tokens": ct,
+                        "output_tokens_details": null,
+                        "total_tokens": pt + ct,
+                    }
+                }
+            }),
+        ));
+    }
+
+    fn ensure_message_item(&mut self, out: &mut String) {
+        if self.message_open {
+            return;
+        }
+        self.message_open = true;
+        if self.msg_id.is_empty() {
+            self.msg_id = format!("{}-msg", self.id);
+        }
+        out.push_str(&responses_sse(
+            "response.output_item.added",
+            json!({
+                "item": {
+                    "type": "message",
+                    "role": "assistant",
+                    "id": self.msg_id,
+                    "content": [{ "type": "output_text", "text": "" }],
+                }
+            }),
+        ));
+    }
+
+    fn flush_message_item(&mut self, out: &mut String) {
+        if !self.message_open {
+            return;
+        }
+        self.message_open = false;
+        out.push_str(&responses_sse(
+            "response.output_item.done",
+            json!({
+                "item": {
+                    "type": "message",
+                    "role": "assistant",
+                    "id": self.msg_id,
+                    "content": [{ "type": "output_text", "text": self.message_text }],
+                }
+            }),
+        ));
+    }
+
+    fn flush_tools(&mut self, out: &mut String) {
+        if self.tools.is_empty() {
+            return;
+        }
+        let mut keys: Vec<usize> = self.tools.keys().copied().collect();
+        keys.sort_unstable();
+        for k in keys {
+            let Some((id, name, args)) = self.tools.remove(&k) else {
+                continue;
+            };
+            out.push_str(&responses_sse(
+                "response.output_item.done",
+                json!({
+                    "item": {
+                        "type": "function_call",
+                        "call_id": if id.is_empty() { format!("call-{k}") } else { id },
+                        "name": name,
+                        "arguments": args,
+                    }
+                }),
+            ));
+        }
+    }
+
+    fn emit_payload(&mut self, payload: &str, out: &mut String) {
+        if self.completed {
+            return;
+        }
+        if payload == "[DONE]" {
+            self.emit_completed(out);
+            return;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(payload) else {
+            return;
+        };
+        if let Some(id) = v.get("id").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+            if !self.created && self.id.starts_with("resp-gw-") {
+                self.id = id.to_string();
+            }
+        }
+        if let Some(msg) = v
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
+            self.ensure_created(out);
+            self.completed = true;
+            out.push_str(&responses_sse(
+                "response.failed",
+                json!({ "response": { "id": self.id, "error": { "message": msg } } }),
+            ));
+            return;
+        }
+        self.ensure_created(out);
+        if v.pointer("/usage/prompt_tokens").is_some() || v.pointer("/usage/completion_tokens").is_some() {
+            self.usage.merge(&Usage {
+                prompt_tokens: v.pointer("/usage/prompt_tokens").and_then(Value::as_i64),
+                completion_tokens: v.pointer("/usage/completion_tokens").and_then(Value::as_i64),
+            });
+        }
+        if let Some(t) = v
+            .pointer("/choices/0/delta/content")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
+            self.ensure_message_item(out);
+            self.message_text.push_str(t);
+            out.push_str(&responses_sse(
+                "response.output_text.delta",
+                json!({ "delta": t, "item_id": self.msg_id }),
+            ));
+        }
+        if let Some(calls) = v
+            .pointer("/choices/0/delta/tool_calls")
+            .and_then(Value::as_array)
+        {
+            self.flush_message_item(out);
+            for call in calls {
+                let idx = call.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                let entry = self.tools.entry(idx).or_insert_with(|| {
+                    (
+                        call.get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                        String::new(),
+                        String::new(),
+                    )
+                });
+                if let Some(id) = call.get("id").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+                    entry.0 = id.to_string();
+                }
+                if let Some(name) = call
+                    .pointer("/function/name")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                {
+                    entry.1 = name.to_string();
+                }
+                if let Some(args) = call.pointer("/function/arguments").and_then(Value::as_str) {
+                    entry.2.push_str(args);
+                }
+            }
+        }
+        match v
+            .pointer("/choices/0/finish_reason")
+            .and_then(Value::as_str)
+        {
+            Some("tool_calls") | Some("stop") | Some("length") => self.emit_completed(out),
+            _ => {}
+        }
+    }
+}
+
 // ==================== IO(send / relay) ====================
 
 #[derive(Debug)]
@@ -1912,5 +2427,80 @@ mod tests {
         assert_eq!(extract_error_message(&anthropic, ""), "忙");
         let garbage = json!(null);
         assert_eq!(extract_error_message(&garbage, "Bad Gateway"), "Bad Gateway");
+    }
+
+    #[test]
+    fn responses_request_to_chat_converts_history_and_tools() {
+        let inc = json!({
+            "model": "免费组",
+            "instructions": "你是助手",
+            "stream": true,
+            "max_output_tokens": 128,
+            "tools": [{ "type": "function", "name": "read_file", "parameters": { "type": "object" } }],
+            "input": [
+                { "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "你好" }] },
+                { "type": "function_call", "call_id": "c1", "name": "read_file", "arguments": "{\"p\":\"a\"}" },
+                { "type": "function_call_output", "call_id": "c1", "output": "ok" }
+            ]
+        });
+        let chat = responses_request_to_chat(&inc).unwrap();
+        assert_eq!(chat["model"], "免费组");
+        assert_eq!(chat["stream"], true);
+        assert_eq!(chat["max_tokens"], 128);
+        assert_eq!(chat["messages"][0]["role"], "system");
+        assert_eq!(chat["messages"][1]["role"], "user");
+        assert_eq!(chat["messages"][1]["content"], "你好");
+        assert_eq!(chat["messages"][2]["tool_calls"][0]["id"], "c1");
+        assert_eq!(chat["messages"][3]["role"], "tool");
+        assert_eq!(chat["messages"][3]["tool_call_id"], "c1");
+        assert_eq!(chat["tools"][0]["function"]["name"], "read_file");
+    }
+
+    #[test]
+    fn chat_completion_to_responses_maps_text_and_tools() {
+        let chat = json!({
+            "id": "chatcmpl-1",
+            "model": "up",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "hi",
+                    "tool_calls": [{
+                        "id": "c1",
+                        "type": "function",
+                        "function": { "name": "read_file", "arguments": "{}" }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": { "prompt_tokens": 2, "completion_tokens": 3 }
+        });
+        let resp = chat_completion_to_responses(&chat);
+        assert_eq!(resp["object"], "response");
+        assert_eq!(resp["output"][0]["content"][0]["text"], "hi");
+        assert_eq!(resp["output"][1]["type"], "function_call");
+        assert_eq!(resp["output"][1]["call_id"], "c1");
+        assert_eq!(resp["usage"]["total_tokens"], 5);
+    }
+
+    #[test]
+    fn responses_sse_out_translates_chat_chunks() {
+        let mut out = ResponsesSseOut::new();
+        let bytes = "data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n\n\
+data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2}}\n\n\
+data: [DONE]\n\n";
+        let text = String::from_utf8(out.translate(bytes.as_bytes())).unwrap()
+            + &String::from_utf8(out.finish()).unwrap();
+        assert!(text.contains("event: response.created"), "{text}");
+        assert!(text.contains("event: response.output_item.added"), "{text}");
+        assert!(text.contains("event: response.output_text.delta"), "{text}");
+        assert!(text.contains("event: response.output_item.done"), "{text}");
+        assert!(text.contains("你好"), "{text}");
+        assert!(text.contains("event: response.completed"), "{text}");
+        let added_at = text.find("output_item.added").expect("added");
+        let delta_at = text.find("output_text.delta").expect("delta");
+        assert!(added_at < delta_at, "Codex 要求 added 早于 delta:\n{text}");
+        assert!(!text.contains("[DONE]"), "{text}");
+        assert!(!text.contains("chat.completion"), "{text}");
     }
 }

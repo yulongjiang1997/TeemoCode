@@ -4,8 +4,10 @@
 // 以 {error} 拒绝,走 error 态外显原因。
 import { IconFolderOpen, IconX } from "@tabler/icons-react";
 
+import { Markdown } from "@/components/markdown/Markdown";
 import { useI18n } from "@/lib/i18n";
 import { isMacShell } from "@/lib/ipc/host";
+import { resolveMarkdownPath } from "@/lib/util/markdownPaths";
 import { CodeView } from "./CodeView";
 import { DiffView } from "./DiffView";
 import { basename, statusMeta } from "./status";
@@ -25,12 +27,18 @@ export function Preview({
   status,
   onReveal,
   onClose,
+  localImageUrl,
+  onLocalLink,
 }: {
   model: PreviewModel;
   status?: string;
   /** 在系统文件管理器中定位此文件(缺省则不渲染该入口) */
   onReveal?: () => void;
   onClose: () => void;
+  /** Markdown 预览里的工作区图片回读。收到的是相对当前 md 解析后的路径。 */
+  localImageUrl?: (path: string) => Promise<string>;
+  /** Markdown 预览里的本地链接。收到的是相对当前 md 解析后的路径。 */
+  onLocalLink?: (path: string) => void;
 }) {
   const { t } = useI18n();
   const meta = status ? statusMeta(status) : undefined;
@@ -65,13 +73,25 @@ export function Preview({
           都靠 whitespace-pre-wrap+wrap-anywhere 折行、撑不宽,但这条不能赌
           ——将来任何一个不折行的预览体都会在这里长出横滚条 */}
       <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
-        <PreviewBody model={model} />
+        <PreviewBody model={model} localImageUrl={localImageUrl} onLocalLink={onLocalLink} />
       </div>
     </div>
   );
 }
 
-function PreviewBody({ model }: { model: PreviewModel }) {
+function isMarkdownPath(path: string): boolean {
+  return /\.(?:md|markdown|mdx)$/i.test((path.split(/[?#]/, 1)[0] ?? path).trim());
+}
+
+function PreviewBody({
+  model,
+  localImageUrl,
+  onLocalLink,
+}: {
+  model: PreviewModel;
+  localImageUrl?: (path: string) => Promise<string>;
+  onLocalLink?: (path: string) => void;
+}) {
   const { t } = useI18n();
   if (model.state === "loading") {
     return (
@@ -90,6 +110,17 @@ function PreviewBody({ model }: { model: PreviewModel }) {
   }
   if (!model.text) return <Placeholder text={t("files.preview.empty")} />;
   if (model.text.includes("\0")) return <Placeholder text={t("files.preview.binary")} />;
+  if (isMarkdownPath(model.path)) {
+    const resolve = (href: string) => resolveMarkdownPath(model.path, href) ?? href;
+    return (
+      <Markdown
+        source={model.text}
+        className="px-4 py-3"
+        localImageUrl={localImageUrl ? (href) => localImageUrl(resolve(href)) : undefined}
+        onLocalLink={onLocalLink ? (href) => onLocalLink(resolve(href)) : undefined}
+      />
+    );
+  }
   return <CodeView path={model.path} text={model.text} />;
 }
 

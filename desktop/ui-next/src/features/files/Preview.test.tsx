@@ -57,4 +57,20 @@ describe("预览窗格", () => {
     expect(screen.getByText("@@ -1 +1 @@")).toBeTruthy();
     expect(screen.getByText("new")).toBeTruthy();
   });
+
+  it("Markdown 文件按渲染预览,相对链接相对当前文件解析", async () => {
+    const onLocalLink = vi.fn();
+    render(
+      <Preview
+        model={model({ path: "docs/guide.md", text: "# 标题\n\n[下一篇](next.md)" })}
+        onClose={() => {}}
+        onLocalLink={onLocalLink}
+      />,
+    );
+    expect(screen.getByRole("heading", { name: "标题" })).toBeTruthy();
+    const link = screen.getByRole("link", { name: "下一篇" });
+    expect(link.getAttribute("data-mc-local-href")).toBe("next.md");
+    await userEvent.click(link);
+    expect(onLocalLink).toHaveBeenCalledWith("docs/next.md");
+  });
 });

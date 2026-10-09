@@ -49,6 +49,7 @@ import {
   type SessionMeta,
 } from "@/lib/ipc/sessions";
 import { noticeForQueuedDelivery, noticeForSessionEvent, type NoticeKind, type SessionNotice } from "@/lib/notices";
+import { kickRelentless, relentlessCandidates, relentlessDue } from "@/lib/relentless";
 import { deliverQueued, dropStash } from "@/features/chat/composer/stash";
 import { readLastSession, writeLastSession, writeSpace, readBgImage, readBgOpacity, readMaskOpacity, readBgBlur, readSettingsMaskOpacity, type Space } from "@/lib/util/prefs";
 import { projectKey, readArchivedProjects } from "@/lib/util/projects";
@@ -577,7 +578,18 @@ export function App() {
         })
         .catch(() => {});
     }
-    // 后台会话状态/摘要/审批等待:全局事件驱动,不轮询
+    // 后台会话状态/摘要/审批等待:全局事件驱动,不轮询。
+    // 不死不休另起一个慢节拍:只补发已落到 error/interrupted 的勾选工作区任务。
+    const retryOpen = window.setInterval(() => {
+      if (!inDesktopShell()) return;
+      const now = Date.now();
+      const due = sessionsRef.current.filter((session) => relentlessDue(session.id, session.status, now));
+      for (const id of relentlessCandidates(due)) {
+        const session = due.find((item) => item.id === id);
+        const reason = session?.status === "interrupted" ? t("status.interrupted") : t("status.error");
+        void kickRelentless(id, t("chat.relentless.continue", { reason }));
+      }
+    }, 2_000);
     const off = onSessionEvent((e) => {
       if (sessionsRef.current.some((m) => m.id === e.id)) {
         setSessions((list) =>
@@ -620,6 +632,7 @@ export function App() {
     });
     return () => {
       alive = false;
+      window.clearInterval(retryOpen);
       off();
       offOpenSession();
       offOpenSettings();

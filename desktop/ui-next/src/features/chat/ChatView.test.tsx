@@ -252,6 +252,15 @@ describe("聊天视图", () => {
     }
   });
 
+  it("任务头部显示当前引擎", async () => {
+    stubShell();
+    const { unmount } = render(<ChatView meta={META} />);
+    await waitFor(() => expect(screen.getByLabelText("引擎").textContent).toBe("TeemoCode"));
+    unmount();
+    render(<ChatView meta={{ ...META, engine: "codex" }} />);
+    await waitFor(() => expect(screen.getByLabelText("引擎").textContent).toBe("Codex"));
+  });
+
   it("卸载即 session_close(会话切换不漏连接)", async () => {
     const { ops } = stubShell();
     const { unmount } = render(<ChatView meta={META} />);

@@ -37,7 +37,9 @@ import { getConfig } from "@/lib/ipc/config";
 import { afterEngineReady } from "@/lib/ipc/engine";
 import { isWindowsShell, pickDirectory, workdirPickBase } from "@/lib/ipc/host";
 import { sameModelName } from "@/lib/models/modelMenu";
+import { externalAgentProbe } from "@/lib/ipc/externalAgents";
 import { modelsList, sessionCreate, sessionSend, type ModelInfo, type SessionKind, type SessionMeta } from "@/lib/ipc/sessions";
+import { skillsList, type SkillInfo } from "@/lib/ipc/skills";
 import {
   isImagePath,
   nativePathOf,
@@ -51,10 +53,12 @@ import { attLineOf } from "@/lib/protocol/attLine";
 import { b64encode } from "@/lib/protocol/codec";
 import { THINK_KEY } from "@/lib/protocol/reduce";
 import { createImeGuard } from "@/lib/util/slash";
+import { insertNewlineAtSelection } from "@/lib/util/textarea";
 import { readLastTaskModel, rememberLastTaskModel } from "@/lib/util/prefs";
 import { DEFAULT_DIR, workdirMatchesEnv } from "@/lib/util/workdir";
 import { gitImport, importTaskData, relaunchApp } from "@/lib/ipc/git";
-import { ModelMenu, ThinkMenu } from "@/features/chat/composer/pickers";
+import { ModelMenu, SkillsMenu, ThinkMenu } from "@/features/chat/composer/pickers";
+import { clearNewTaskDraft, readNewTaskDraft, saveNewTaskDraft, type NewTaskDraft } from "./draftStash";
 import { NewCloudTask } from "@/features/cloud/NewCloudTask";
 import type { CloudProject, CloudTaskDetail } from "@/lib/ipc/cloudtasks";
 
@@ -139,6 +143,13 @@ export function NewTaskModal({
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [model, setModel] = useState("");
   const [think, setThink] = useState("");
+  const [engine, setEngine] = useState<"ohmy" | "codex">("ohmy");
+  const [isolate, setIsolate] = useState(false);
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [skillsLoaded, setSkillsLoaded] = useState(false);
+  /** null = 缺省启用集,不传给壳;[] = 显式停用全部。 */
+  const [enabledSkills, setEnabledSkills] = useState<string[] | null>(null);
+  const [codexReady, setCodexReady] = useState(false);
   const [kernelEnv, setKernelEnv] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -150,6 +161,9 @@ export function NewTaskModal({
   const dragDepth = useRef(0);
   // 用户改过目录后,异步到达的预填不再覆盖
   const dirTouched = useRef(false);
+  const createdRef = useRef(false);
+  const restoredModel = useRef("");
+  const draftSnap = useRef<NewTaskDraft | null>(null);
   // 从 Git 导入结果:迁移的会话数 > 0 时提示重启
   const [gitImportResult, setGitImportResult] = useState<{ migrated: number; ok: boolean; err?: string } | null>(null);
   // Enter 直接创建(Shift+Enter 换行);IME 组合中的 Enter 是选字,不触发
@@ -157,37 +171,68 @@ export function NewTaskModal({
   // 预填只取"打开那一刻"的最近目录;App 侧列表刷新不重置用户输入
   const recentRef = useRef(recentDirs);
   recentRef.current = recentDirs;
+  draftSnap.current = {
+    kind,
+    dir,
+    text,
+    think,
+    model,
+    engine,
+    isolate,
+    enabledSkills,
+    atts,
+    gitImportResult,
+  };
 
   useEffect(() => {
     if (!open) return;
     let alive = true;
-    // 每次打开都是一次全新的创建流:清掉上一次的草稿与错误态
-    // (待办派发带 initialText 时以它起步,仍可改)
-    dirTouched.current = false;
+    createdRef.current = false;
+    // 待办/项目预填强于内存草稿。普通重开恢复上次未创建的输入。
+    const dispatched =
+      initialText != null || (initialFiles?.length ?? 0) > 0 || !!initialDir || !!initialCloudProject;
+    const saved = dispatched ? null : readNewTaskDraft();
+    dirTouched.current = !!initialDir || !!saved?.dir;
+    restoredModel.current = saved?.model ?? "";
     setDirMenu(false);
-    setText(initialText ?? "");
-    setThink("");
+    setText(initialText ?? saved?.text ?? "");
+    setThink(saved?.think ?? "");
+    setEngine(saved?.engine ?? "ohmy");
+    setIsolate(saved?.isolate ?? false);
+    setEnabledSkills(saved?.enabledSkills ?? null);
+    setGitImportResult(saved?.gitImportResult ?? null);
     setError("");
     setOfferCreate(false);
-    // 附件区从预填起步(待办派发带图;无预填即空):上一次的暂存连预览一起清
+    // 附件区从预填起步(待办派发带图;无预填即空):上一次的暂存连预览一起清。
+    // 草稿里仍在用的 object URL 不能 revoke。
     setAtts((prev) => {
-      for (const a of prev) if (a.preview) URL.revokeObjectURL(a.preview);
-      return (initialFiles ?? []).map((file) => ({
-        file,
-        name: file.name || t("common.unnamedFile"),
-        // path-backed 占位 File 是 0 字节,不建 objectURL(下面 addFiles 同注)
-        preview: file.type.startsWith("image/") && file.size > 0 ? URL.createObjectURL(file) : undefined,
-      }));
+      const next = (initialFiles ?? saved?.atts.map((att) => att.file) ?? []).map((file) => {
+        const kept = saved?.atts.find((att) => att.file === file);
+        return {
+          file,
+          name: kept?.name || file.name || t("common.unnamedFile"),
+          preview:
+            kept?.preview ??
+            (file.type.startsWith("image/") && file.size > 0 ? URL.createObjectURL(file) : undefined),
+        };
+      });
+      const keep = new Set(next.map((att) => att.preview).filter(Boolean));
+      for (const att of prev) if (att.preview && !keep.has(att.preview)) URL.revokeObjectURL(att.preview);
+      return next;
     });
     dragDepth.current = 0;
     setDragging(false);
-    // 页签优先级:预填目录(项目组头「+」)> 预选云端项目 > 侧栏当前空间
+    // 页签优先级:预填目录(项目组头「+」)> 预选云端项目 > 侧栏当前空间 > 草稿页签。
+    // 侧栏空间是这次点击的意图,不能被上次没创建完的草稿盖掉。
     if (initialDir) {
       setKind("local");
       setDir(initialDir);
       dirTouched.current = true;
     } else if (initialCloudProject) {
       setKind("cloud");
+    } else if (saved) {
+      setKind(initialKind ?? saved.kind);
+      if (saved.dir) setDir(saved.dir);
     } else {
       setKind(initialKind ?? "local");
     }
@@ -205,12 +250,22 @@ export function NewTaskModal({
         // rememberLastTaskModel(model) 会把回落后的默认模型写回记忆,把用户
         // 的偏好永久覆盖掉。用户不看模型行直接开跑,任务就跑在与预期不同的
         // 档位/计费模型上。sameModelName 的头注也点名要服务 lastTaskModel。
+        const prefer = restoredModel.current;
+        const byRestore = prefer
+          ? (list.find((m) => m.name === prefer && !m.locked) ??
+            list.find((m) => sameModelName(m.name, prefer) && !m.locked))
+          : undefined;
         const byMemory = remembered
           ? (list.find((m) => m.name === remembered && !m.locked) ??
             list.find((m) => sameModelName(m.name, remembered) && !m.locked))
           : undefined;
-        const pick = byMemory || list.find((m) => m.default && !m.locked) || list.find((m) => !m.locked);
+        const pick = byRestore || byMemory || list.find((m) => m.default && !m.locked) || list.find((m) => !m.locked);
         if (pick) setModel(pick.name);
+      })
+      .catch(() => {});
+    void externalAgentProbe()
+      .then((p) => {
+        if (alive) setCodexReady(!!p.codex);
       })
       .catch(() => {});
     // 运行环境 → 最近目录过滤(默认目录恒为 DEFAULT_DIR:`~` 由壳按环境展开,
@@ -228,6 +283,36 @@ export function NewTaskModal({
     };
     // t 是模块级函数(useI18n 头注),身份恒稳,不会催动重置
   }, [open, initialDir, initialCloudProject, initialKind, initialText, initialFiles, t]);
+
+  useEffect(() => {
+    if (!open) return;
+    return () => {
+      if (createdRef.current) {
+        clearNewTaskDraft();
+        return;
+      }
+      if (draftSnap.current) saveNewTaskDraft(draftSnap.current);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || kind === "cloud" || engine !== "ohmy") return;
+    let alive = true;
+    setSkillsLoaded(false);
+    void skillsList()
+      .then((list) => {
+        if (alive) setSkills(Array.isArray(list) ? list : []);
+      })
+      .catch(() => {
+        if (alive) setSkills([]);
+      })
+      .finally(() => {
+        if (alive) setSkillsLoaded(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [open, kind, engine]);
 
   const pickDir = (p: string) => {
     dirTouched.current = true;
@@ -391,7 +476,12 @@ export function NewTaskModal({
         createDir: !chat && (forceCreateDir || workdir === DEFAULT_DIR),
         kind: chat ? "chat" : "local",
         think,
+        engine,
+        isolate: !chat && isolate,
+        ...(engine === "ohmy" && enabledSkills !== null ? { skills: enabledSkills } : {}),
       });
+      createdRef.current = true;
+      clearNewTaskDraft();
       if (model) rememberLastTaskModel(model);
       // 附件行与 composer 同口径并入正文(壳只解 content):正文在前、附件行在后
       const attLines = atts.length ? await uploadAtts(meta.id) : [];
@@ -444,6 +534,12 @@ export function NewTaskModal({
     { k: "chat" as const, icon: IconMessages, label: t("create.kind.chat") },
   ];
   const onTextKey = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.altKey) {
+      if (ime.current.isImeEnter(e.timeStamp, e.nativeEvent.isComposing)) return;
+      e.preventDefault();
+      insertNewlineAtSelection(e.currentTarget, text, setText);
+      return;
+    }
     if (e.key !== "Enter" || e.shiftKey) return;
     if (ime.current.isImeEnter(e.timeStamp, e.nativeEvent.isComposing)) return;
     e.preventDefault();
@@ -475,7 +571,7 @@ export function NewTaskModal({
       </header>
       {/* 向导列(对齐旧工程新建任务屏):logo+标语的 hero → 类型页签 → 一张
           大圆角输入卡承载全部配置——目录/描述/模型是"一件事",不拆散成表单 */}
-      <div className="mx-auto w-full max-w-xl px-6 pt-[max(1.5rem,calc(11vh-3.25rem))] pb-10">
+      <div className="mx-auto w-full max-w-2xl px-6 pt-[max(1.5rem,calc(11vh-3.25rem))] pb-10">
         <div className="flex flex-col gap-4">
           {/* Git 导入迁移结果提示:迁移了会话 → 重启重新加载任务数据 */}
           {gitImportResult && (
@@ -711,12 +807,12 @@ export function NewTaskModal({
                     ))}
                   </ul>
                 )}
-                <div className="flex items-center gap-1 px-2.5 pb-2.5">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1 px-2.5 pb-2.5">
                   <button
                     type="button"
                     aria-label={t("create.attach")}
                     title={t("create.attach")}
-                    className="btn btn-ghost btn-square btn-sm text-base-content/60"
+                    className="btn btn-ghost btn-square btn-sm shrink-0 text-base-content/60"
                     onClick={pickFiles}
                   >
                     <IconPaperclip size={15} stroke={1.75} aria-hidden />
@@ -740,13 +836,52 @@ export function NewTaskModal({
                     title={t("create.think")}
                     align="start"
                   />
-                  <span className="flex-1" />
-                  <button type="button" className="btn btn-primary btn-sm gap-1.5" disabled={busy} onClick={() => void submit()}>
+                  {kind !== "cloud" && engine === "ohmy" &&
+                    (skillsLoaded ? (
+                      <SkillsMenu
+                        skills={skills}
+                        enabled={enabledSkills}
+                        onChange={setEnabledSkills}
+                        title={t("chat.skills.tip")}
+                        align="start"
+                      />
+                    ) : (
+                      <button type="button" className="btn btn-ghost btn-sm" disabled aria-busy="true">
+                        <span className="loading loading-spinner loading-xs" aria-hidden />
+                      </button>
+                    ))}
+                  <label className="flex shrink-0 items-center gap-1 px-1 text-xs text-base-content/70">
+                    <span>{t("create.engine")}</span>
+                    <select
+                      className="select select-ghost select-xs w-auto"
+                      aria-label={t("create.engine")}
+                      value={engine}
+                      onChange={(e) => setEngine(e.target.value === "codex" ? "codex" : "ohmy")}
+                    >
+                      <option value="ohmy">{t("create.engine.ohmy")}</option>
+                      <option value="codex">{t("create.engine.codex")}</option>
+                    </select>
+                  </label>
+                  {kind === "local" && (
+                    <label className="flex shrink-0 items-center gap-1 px-1 text-xs text-base-content/70" title={t("create.isolate.hint")}>
+                      <input
+                        type="checkbox"
+                        className="checkbox checkbox-xs"
+                        checked={isolate}
+                        onChange={(e) => setIsolate(e.target.checked)}
+                      />
+                      {t("create.isolate")}
+                    </label>
+                  )}
+                  <button type="button" className="btn btn-primary btn-sm ml-auto shrink-0 gap-1.5" disabled={busy} onClick={() => void submit()}>
                     {busy && <span className="loading loading-spinner loading-xs" aria-hidden />}
                     {t("create.submit")}
                     {!busy && <IconSend size={12} stroke={2} aria-hidden />}
                   </button>
                 </div>
+                {engine === "codex" && !codexReady && (
+                  <p className="px-3 pb-2 text-[11px] leading-snug text-base-content/50">{t("create.engine.codexHint")}</p>
+                )}
               </>
             )}
           </div>

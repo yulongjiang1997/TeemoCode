@@ -95,6 +95,8 @@ fn main() {
                 // 工作区记忆(memory.rs:.monkeycode/MEMORY.md 面板)
                 "memory_read",
                 "memory_write",
+                "project_rules_read",
+                "project_rules_write",
                 // 自动化定时任务(automation.rs)
                 "automation_list",
                 "automation_save",

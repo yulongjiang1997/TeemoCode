@@ -558,3 +558,30 @@ describe("动态高度窗口化(性能契约)", () => {
     expect(ref.current?.ensureKey("2")).toBe(true);
   });
 });
+
+describe("助手回答复制", () => {
+  it("复制合并后的 Markdown 原文,而不是渲染 DOM", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    render(
+      <LogList
+        state={withItems([
+          { kind: "user", text: "问" },
+          { kind: "agent", text: "第一段 **粗**" },
+          { kind: "tool", tcId: "t", title: "Bash", status: "ok", out: "" },
+          { kind: "agent", text: "第二段" },
+          { kind: "sys", tag: "turn-end", text: "" },
+        ])}
+        sessionId="s1"
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "复制回答 Markdown 原文" }));
+    expect(writeText).toHaveBeenCalledWith("第一段 **粗**\n\n第二段");
+  });
+
+  it("进行中的回答不提供复制", () => {
+    const state = { ...withItems([{ kind: "agent", text: "半截" }]), running: true };
+    render(<LogList state={state} sessionId="s1" />);
+    expect(screen.queryByRole("button", { name: "复制回答 Markdown 原文" })).toBeNull();
+  });
+});

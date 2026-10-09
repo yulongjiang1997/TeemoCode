@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { t } from "@/lib/i18n";
+import { clearUserStop, markUserStop } from "@/lib/relentless";
 import { sessionCompact } from "@/lib/ipc/controls";
 import { sessionSend } from "@/lib/ipc/sessions";
 import { attLineOf } from "@/lib/protocol/attLine";
@@ -296,6 +297,7 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
   const send = useCallback((): boolean => {
     const text = [draft.trim(), ...atts.map(attLine)].filter(Boolean).join("\n");
     if (!text) return false;
+    clearUserStop(sessionId);
     // 注入前缀(计划在外层,团队其次,用户原文最后):渲染层
     // stripInjectedPreambles 会全部剥掉,用户看到的仍是原始消息。
     // 入队项存最终文本,补投/留档恢复路径不丢前缀。
@@ -523,6 +525,7 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
   const sendDirect = useCallback(async (text: string, datts?: ComposerAtt[]) => {
     const trimmed = text.trim();
     if (!trimmed) return;
+    clearUserStop(sessionId);
     // 先上传附件(路径直拷进会话 uploads 目录),拿到引擎可读路径
     const uploadedAtts: ComposerAtt[] = [];
     for (const a of datts ?? []) {
@@ -600,6 +603,7 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
   const toggleQueueOpen = useCallback(() => setQueueOpen((o) => !o), []);
 
   const stop = useCallback(() => {
+    markUserStop(sessionId);
     void sessionSend(sessionId, "user-cancel", {}).catch(() => {});
   }, [sessionId]);
 

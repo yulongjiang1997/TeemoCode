@@ -78,6 +78,27 @@ export async function repoChanges(id: string): Promise<RepoChangeSet> {
   return { changes: unwrap(r, []), isGitRepo: r.is_git_repo ?? false };
 }
 
+/** 丢弃单文件,恢复到最近一次会话 checkpoint。 */
+export async function repoDiscardFile(id: string, path: string): Promise<void> {
+  if (!inDesktopShell()) throw new Error("浏览器模式下无法丢弃改动");
+  const r = await call<boolean>(id, "repo_discard_file", { path });
+  unwrap(r, true);
+}
+
+/** 整树恢复到最近 checkpoint。 */
+export async function repoCheckpointRestore(id: string, commit = ""): Promise<void> {
+  if (!inDesktopShell()) throw new Error("浏览器模式下无法回滚");
+  const r = await call<boolean>(id, "repo_checkpoint_restore", { commit });
+  unwrap(r, true);
+}
+
+/** 导出会话 Markdown。path 空则只返回正文。 */
+export async function sessionExportMarkdown(id: string, path = ""): Promise<string> {
+  if (!inDesktopShell()) return "";
+  const r = await call<{ markdown?: string }>(id, "session_export", { path });
+  return unwrap(r, {}).markdown ?? "";
+}
+
 /** 在系统文件管理器中定位路径(动作类:浏览器模式随 invoke 一起 reject)。 */
 export async function repoReveal(id: string, path: string): Promise<void> {
   const r = await call<{ ok?: boolean }>(id, "repo_reveal", { path });

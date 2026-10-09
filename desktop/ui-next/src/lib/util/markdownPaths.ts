@@ -42,8 +42,46 @@ export function resolveMarkdownResource(src: string): MarkdownResource {
   return { kind: "local", path: decoded };
 }
 
+/** 把 Markdown 文件内的相对链接解析到该文件所在目录。绝对路径与外链原样返回。 */
+export function resolveMarkdownPath(markdownPath: string, href: string): string | null {
+  const raw = href.trim();
+  if (!raw || raw.startsWith("#") || /^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith("//")) return raw || null;
+  const decoded = decodePath(raw);
+  if (isAbsolutePath(decoded)) return decoded;
+  const sep = markdownPath.includes("\\") && !markdownPath.includes("/") ? "\\" : "/";
+  const dir = markdownPath.replace(/[\\/][^\\/]*$/, "") || (markdownPath.startsWith("/") ? "/" : "");
+  const combined = dir === "/" ? `/${decoded}` : `${dir}${sep}${decoded}`;
+  return normalizeMarkdownPath(combined, sep);
+}
+
+function normalizeMarkdownPath(path: string, sep: string): string {
+  const unc = path.startsWith("\\\\");
+  const drive = /^[A-Za-z]:/.test(path);
+  const absolute = path.startsWith("/");
+  const stack: string[] = [];
+  for (const part of path.split(/[\\/]/)) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      const top = stack[stack.length - 1];
+      if (stack.length && top !== ".." && !/^[A-Za-z]:$/.test(top ?? "")) stack.pop();
+      else if (!absolute && !drive && !unc) stack.push(part);
+      continue;
+    }
+    stack.push(part);
+  }
+  const body = stack.join(sep);
+  if (unc) return `\\\\${body}`;
+  if (absolute) return `/${body}`;
+  return body;
+}
+
 /** 把已识别的本地链接收敛为工作区相对路径,供 repo_reveal 使用。
  * 工作区外绝对路径返回 null;最终的组件级/符号链接校验仍由壳负责。 */
+
+function isAbsolutePath(path: string): boolean {
+  return path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("\\\\");
+}
+
 export function workspaceRelativePath(path: string, workdir: string): string | null {
   const normalize = (v: string) => v.replace(/\\/g, "/").replace(/\/{2,}/g, "/");
   const target = normalize(path);

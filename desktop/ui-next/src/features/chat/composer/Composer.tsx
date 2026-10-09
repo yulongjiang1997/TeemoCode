@@ -25,11 +25,14 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ClipboardEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 
 import { useI18n } from "@/lib/i18n";
+import { getRelentlessKeys, setRelentlessWorkspace, subscribeRelentless } from "@/lib/relentless";
+import { projectKey } from "@/lib/util/projects";
 import { useEscLayer } from "@/lib/util/escLayer";
 import { sessionSetMode, sessionSetModel, sessionSetSkills, sessionSetThink } from "@/lib/ipc/controls";
 import { afterEngineReady } from "@/lib/ipc/engine";
@@ -43,6 +46,7 @@ import type { ChatState, SlashCommand, Usage } from "@/lib/protocol/types";
 import { timelineDeltaOf } from "@/lib/protocol/reduce";
 import { fmtK } from "@/lib/util/fmt";
 import { commandText, createImeGuard, cycleIndex, filterCommands, slashQuery } from "@/lib/util/slash";
+import { insertNewlineAtSelection } from "@/lib/util/textarea";
 import { ComposerCard, ComposerTextarea, ErrorBar, RunBar, SlashPanel, UsageRing } from "./composerKit";
 import { ExternalAgentMenu, ModelMenu, SkillsMenu, ThinkMenu } from "./pickers";
 import { externalAgentRun, type ExternalAgent } from "@/lib/ipc/externalAgents";
@@ -324,6 +328,8 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
   onFocusRequestHandled,
 }: ComposerProps, ref) {
   const { t } = useI18n();
+  const relentlessKeys = useSyncExternalStore(subscribeRelentless, getRelentlessKeys, getRelentlessKeys);
+  const relentlessOn = !!meta.workdir && relentlessKeys.has(projectKey(meta.workdir));
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   useImperativeHandle(ref, () => ({ focus: () => taRef.current?.focus() }), []);
   const imeRef = useRef(createImeGuard());
@@ -580,6 +586,14 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
   };
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    // Ctrl/⌘+Enter 在光标处换行。Enter 仍发送,Shift+Enter 保持浏览器默认换行。
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.altKey) {
+      if (imeRef.current.isImeEnter(e.timeStamp, e.nativeEvent.isComposing)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      insertNewlineAtSelection(e.currentTarget, ctl.draft, ctl.setDraft);
+      return;
+    }
     // 斜杠面板优先:↑↓/↩/⇥ 归面板,不落到发送
     if (slashOpen) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -751,6 +765,20 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
 
           {/* 外部 CLI 子代理:选中后本条消息交给本机 CLI 执行(2026-09-09) */}
           <ExternalAgentMenu current={extAgent} onPick={setExtAgent} title={t("chat.extagent.tip")} />
+
+          {meta.kind !== "chat" && !!meta.workdir && (
+            <button
+              type="button"
+              className={`badge badge-sm shrink-0 cursor-pointer transition-colors ${
+                relentlessOn ? "border-warning/60 bg-warning/10 text-warning" : "badge-outline text-base-content/40 hover:text-base-content/60"
+              }`}
+              title={t("chat.relentless.hint")}
+              aria-pressed={relentlessOn}
+              onClick={() => setRelentlessWorkspace(meta.workdir, !relentlessOn)}
+            >
+              {t("chat.relentless")}
+            </button>
+          )}
 
           {/* 计划模式开关(对标 ZCode Plan Mode):本轮只调研与出计划,等确认再动手 */}
           <button

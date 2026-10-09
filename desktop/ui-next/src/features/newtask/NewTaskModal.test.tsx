@@ -1,10 +1,11 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { pathBackedFile } from "@/lib/ipc/uploads";
 import { b64encode } from "@/lib/protocol/codec";
 import { resetEscLayersForTest } from "@/lib/util/escLayer";
+import { resetNewTaskDraftForTests } from "./draftStash";
 import { NewTaskModal } from "./NewTaskModal";
 
 /** Esc = 走 escLayer 的 window capture 单一监听(层栈按后进先出派发)。 */
@@ -12,6 +13,10 @@ const pressEsc = () =>
   act(() => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
   });
+
+beforeEach(() => {
+  resetNewTaskDraftForTests();
+});
 
 afterEach(() => {
   resetEscLayersForTest(); // 模块级层栈跨用例会串
@@ -35,6 +40,7 @@ function stubShell(overrides: Record<string, (args?: Record<string, unknown>) =>
         const over = overrides[cmd];
         if (over) return over(args);
         if (cmd === "models_list") return Promise.resolve(models);
+        if (cmd === "external_agent_probe") return Promise.resolve({ claude: false, codex: false });
         if (cmd === "session_create")
           return Promise.resolve({ id: "s-new", title: "t", workdir: "/w", model: "gpt-5", turns: 0, status: "created", kind: (args?.kind as string) ?? "local" });
         return Promise.resolve(null);
@@ -82,8 +88,22 @@ describe("新建任务", () => {
     await userEvent.click(screen.getByRole("button", { name: "创建" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalled());
     const create = calls.find((c) => c.cmd === "session_create");
-    expect(create?.args).toEqual({ workdir: "~/TeemoCode", model: "gpt-5", createDir: true, kind: "local", think: "" });
+    expect(create?.args).toEqual({ workdir: "~/TeemoCode", model: "gpt-5", createDir: true, kind: "local", think: "", engine: "ohmy", isolate: false });
     expect(localStorage.getItem("mc.lastTaskModel")).toBe("gpt-5");
+  });
+
+  it("本机未装 Codex 仍可选,创建时 engine=codex,由壳自动获取 CLI", async () => {
+    const calls = stubShell();
+    const onCreated = vi.fn();
+    render(<NewTaskModal open onClose={() => {}} onCreated={onCreated} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "模型" }).textContent).toContain("gpt-5"));
+    const engine = screen.getByRole("combobox", { name: "引擎" });
+    expect((screen.getByRole("option", { name: "Codex" }) as HTMLOptionElement).disabled).toBe(false);
+    await userEvent.selectOptions(engine, "codex");
+    await userEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    const create = calls.find((c) => c.cmd === "session_create");
+    expect(create?.args).toMatchObject({ engine: "codex", isolate: false });
   });
 
   it("对话模式:workdir 空串、createDir=false、无目录字段", async () => {
@@ -96,7 +116,7 @@ describe("新建任务", () => {
     await userEvent.click(screen.getByRole("button", { name: "创建" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalled());
     const create = calls.find((c) => c.cmd === "session_create");
-    expect(create?.args).toEqual({ workdir: "", model: "gpt-5", createDir: false, kind: "chat", think: "" });
+    expect(create?.args).toEqual({ workdir: "", model: "gpt-5", createDir: false, kind: "chat", think: "", engine: "ohmy", isolate: false });
   });
 
   it("本地模式清空目录:前端拦截并提示,不发命令", async () => {
@@ -403,5 +423,76 @@ describe("首条消息附件", () => {
     expect((sent?.args?.payload as { content: string }).content).toBe(
       b64encode("看这张图\n[图片] .monkeycode/uploads/shot.png"),
     );
+  });
+
+  it("切走后保留草稿,创建成功后清空", async () => {
+    const calls = stubShell();
+    const first = render(<NewTaskModal open onClose={() => {}} onCreated={() => {}} />);
+    const box = await screen.findByRole("textbox", { name: "首条消息" });
+    await userEvent.type(box, "记得这句");
+    first.unmount();
+
+    const second = render(<NewTaskModal open onClose={() => {}} onCreated={() => {}} />);
+    await waitFor(() =>
+      expect((screen.getByRole("textbox", { name: "首条消息" }) as HTMLTextAreaElement).value).toBe("记得这句"),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "session_create")).toBe(true));
+    second.unmount();
+
+    render(<NewTaskModal open onClose={() => {}} onCreated={() => {}} />);
+    expect(((await screen.findByRole("textbox", { name: "首条消息" })) as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("侧栏空间强于草稿页签", async () => {
+    const first = render(<NewTaskModal open onClose={() => {}} onCreated={() => {}} />);
+    await userEvent.type(await screen.findByRole("textbox", { name: "首条消息" }), "旧草稿");
+    first.unmount();
+    render(<NewTaskModal open initialKind="chat" onClose={() => {}} onCreated={() => {}} />);
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "本地会话" }).getAttribute("aria-selected")).toBe("true"),
+    );
+    expect((screen.getByRole("textbox", { name: "首条消息" }) as HTMLTextAreaElement).value).toBe("旧草稿");
+  });
+
+  it("预填优先于草稿", async () => {
+    const first = render(<NewTaskModal open onClose={() => {}} onCreated={() => {}} />);
+    await userEvent.type(await screen.findByRole("textbox", { name: "首条消息" }), "旧草稿");
+    first.unmount();
+    render(<NewTaskModal open onClose={() => {}} onCreated={() => {}} initialText="待办正文" />);
+    await waitFor(() =>
+      expect((screen.getByRole("textbox", { name: "首条消息" }) as HTMLTextAreaElement).value).toBe("待办正文"),
+    );
+  });
+
+  it("缺省不传 skills,显式勾选才传,Codex 不传", async () => {
+    const calls = stubShell({
+      skills_list: () =>
+        Promise.resolve([
+          { name: "demo", description: "演示", source: "builtin", content: "", default_enabled: false },
+        ]),
+      external_agent_probe: () => Promise.resolve({ claude: false, codex: true }),
+    });
+    const view = render(<NewTaskModal open onClose={() => {}} onCreated={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "创建" }));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "session_create")).toBe(true));
+    expect(calls.find((c) => c.cmd === "session_create")?.args).not.toHaveProperty("skills");
+    view.unmount();
+    calls.length = 0;
+
+    render(<NewTaskModal open onClose={() => {}} onCreated={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "会话技能" }));
+    await userEvent.click(await screen.findByRole("checkbox", { name: "demo" }));
+    await userEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(calls.some((c) => c.cmd === "session_create")).toBe(true));
+    expect(calls.find((c) => c.cmd === "session_create")?.args?.skills).toEqual(["demo"]);
+
+    calls.length = 0;
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "引擎" }), "codex");
+    await userEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(calls.filter((c) => c.cmd === "session_create")).toHaveLength(1));
+    const codex = calls.find((c) => c.cmd === "session_create");
+    expect(codex?.args?.engine).toBe("codex");
+    expect(codex?.args).not.toHaveProperty("skills");
   });
 });

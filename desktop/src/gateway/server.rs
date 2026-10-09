@@ -1,7 +1,8 @@
 // 网关 HTTP 服务:手写最小面(browser/mcp.rs 同款风格,不引 HTTP 框架)。
 //
-// 对外契约(见 spec):GET /v1/models、POST /v1/chat/completions(流式
-// close-delimited SSE)、GET /health;Bearer = 组 Key → 组即调度与鉴权边界。
+// 对外契约(见 spec):GET /v1/models、POST /v1/chat/completions、
+// POST /v1/responses(Codex Responses 线,译成内部 Chat 再译回)、GET /health;
+// Bearer = 组 Key → 组即调度与鉴权边界。
 //
 // 与 mcp server 的两点差异:
 //   - 请求体上限 32MB(长上下文对话是真需求,不是异常);
@@ -18,7 +19,7 @@
 use std::io::{BufRead as _, Read, Write as _};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -346,6 +347,12 @@ fn openai_error(message: &str, err_type: &str, code: &str) -> Value {
     json!({ "error": { "message": message, "type": err_type, "code": code } })
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ClientWire {
+    Chat,
+    Responses,
+}
+
 // ==================== 请求分发 ====================
 
 fn handle_conn(conn: &mut TcpStream, host: &GatewayHost) {
@@ -395,32 +402,45 @@ fn handle_conn(conn: &mut TcpStream, host: &GatewayHost) {
                 .collect();
             write_json(conn, 200, &json!({ "object": "list", "data": data }), &[]);
         }
-        ("POST", "/v1/chat/completions") => {
+        ("POST", "/v1/chat/completions") | ("POST", "/v1/responses") => {
             let Some(group) = authed_group else {
                 write_json(conn, 401, &openai_error("无效的 API Key(模型组 Key 不匹配)", "invalid_request_error", "invalid_api_key"), &[]);
                 return;
             };
-            let Ok(incoming) = serde_json::from_slice::<Value>(&req.body) else {
+            let Ok(raw) = serde_json::from_slice::<Value>(&req.body) else {
                 write_json(conn, 400, &openai_error("请求体不是有效 JSON", "invalid_request_error", ""), &[]);
                 return;
             };
-            if incoming.get("messages").and_then(Value::as_array).is_none() {
-                write_json(conn, 400, &openai_error("请求缺少 messages 数组", "invalid_request_error", ""), &[]);
-                return;
-            }
+            let responses = req.path == "/v1/responses";
+            let incoming = if responses {
+                match upstream::responses_request_to_chat(&raw) {
+                    Ok(v) => v,
+                    Err(msg) => {
+                        write_json(conn, 400, &openai_error(&msg, "invalid_request_error", ""), &[]);
+                        return;
+                    }
+                }
+            } else {
+                if raw.get("messages").and_then(Value::as_array).is_none() {
+                    write_json(conn, 400, &openai_error("请求缺少 messages 数组", "invalid_request_error", ""), &[]);
+                    return;
+                }
+                raw
+            };
             let stream = incoming.get("stream").and_then(Value::as_bool).unwrap_or(false);
             let started = std::time::Instant::now();
+            let wire = if responses { ClientWire::Responses } else { ClientWire::Chat };
             if stream {
-                handle_streaming(conn, host, &group, incoming, started);
+                handle_streaming(conn, host, &group, incoming, started, wire);
             } else {
-                handle_buffered(conn, host, &group, incoming);
+                handle_buffered(conn, host, &group, incoming, wire);
             }
         }
-        ("POST", _) | ("GET", "/v1/chat/completions") => {
+        ("POST", _) | ("GET", "/v1/chat/completions") | ("GET", "/v1/responses") => {
             write_json(conn, 405, &openai_error("方法或路径不支持", "invalid_request_error", ""), &[]);
         }
         _ => {
-            write_json(conn, 404, &openai_error("未知路径(支持 /v1/models 与 /v1/chat/completions)", "invalid_request_error", ""), &[]);
+            write_json(conn, 404, &openai_error("未知路径(支持 /v1/models、/v1/chat/completions 与 /v1/responses)", "invalid_request_error", ""), &[]);
         }
     }
 }
@@ -622,14 +642,24 @@ pub(crate) async fn run_buffered(
     })
 }
 
-fn handle_buffered(conn: &mut TcpStream, host: &GatewayHost, group: &RuntimeGroup, incoming: Value) {
+fn handle_buffered(
+    conn: &mut TcpStream,
+    host: &GatewayHost,
+    group: &RuntimeGroup,
+    incoming: Value,
+    wire: ClientWire,
+) {
     match tauri::async_runtime::block_on(run_buffered(host, group, incoming)) {
         Ok(ok) => {
             let extra = [
                 ("X-Gateway-Group", group.group.name.clone()),
                 ("X-Gateway-Model", ok.model.clone()),
             ];
-            write_json(conn, 200, &ok.body, &extra);
+            let body = match wire {
+                ClientWire::Chat => ok.body,
+                ClientWire::Responses => upstream::chat_completion_to_responses(&ok.body),
+            };
+            write_json(conn, 200, &body, &extra);
         }
         Err(fail) => {
             let extra = [("X-Gateway-Group", group.group.name.clone())];
@@ -657,6 +687,7 @@ fn handle_streaming(
     group: &RuntimeGroup,
     incoming: Value,
     started: std::time::Instant,
+    wire: ClientWire,
 ) {
     // 立即写一条 pending 日志(2026-09-14)。
     let request_id = push_pending_log(host, group, true, Some(extract_content(&incoming)));
@@ -665,6 +696,11 @@ fn handle_streaming(
     let mut attempts = unavailable_notes(group);
     let prompt_est = upstream::estimate_tokens(upstream::incoming_prompt_chars(&incoming));
 
+    let responses_sse = if wire == ClientWire::Responses {
+        Some(Arc::new(Mutex::new(upstream::ResponsesSseOut::new())))
+    } else {
+        None
+    };
     let outcome = tauri::async_runtime::block_on(async {
         let mut rng = host.rng_next();
         let plan = {
@@ -724,8 +760,17 @@ fn handle_streaming(
                             };
                         }
                     };
+                    let sse_out = responses_sse.clone();
                     let write = move |bytes: &[u8]| -> std::io::Result<()> {
-                        write_conn.write_all(bytes)?;
+                        if let Some(out) = &sse_out {
+                            let translated = out.lock().unwrap_or_else(|e| e.into_inner()).translate(bytes);
+                            if translated.is_empty() {
+                                return Ok(());
+                            }
+                            write_conn.write_all(&translated)?;
+                        } else {
+                            write_conn.write_all(bytes)?;
+                        }
                         write_conn.flush()
                     };
                     let relay = upstream::relay_stream(reply, display_model.clone(), write, timeout.max(Duration::from_secs(60))).await;
@@ -791,6 +836,16 @@ fn handle_streaming(
             raw_response: String::new(),
         }
     });
+    // 全部候选失败时已经 write_json 出了带 Content-Length 的 JSON。
+    // finish() 会再塞一段 response.created/completed SSE,破坏 JSON 体。
+    if outcome.status == Some(200) {
+        if let Some(out) = &responses_sse {
+            let tail = out.lock().unwrap_or_else(|e| e.into_inner()).finish();
+            if !tail.is_empty() {
+                let _ = conn.write_all(&tail);
+            }
+        }
+    }
     // 流式响应以 Connection: close 定界。引擎在 complete_and_persist
     // 落盘之前就必须看到 EOF，否则会一直等下一个 delta。
     let _ = conn.flush();
@@ -1261,6 +1316,76 @@ Authorization: Bearer tgk-e2e\r\nContent-Length: {}\r\nExpect: 100-continue\r\nC
         assert!(text.contains("call-1"));
         assert!(text.contains("\"finish_reason\":\"tool_calls\"") || text.contains("\"finish_reason\": \"tool_calls\""), "{text}");
         assert!(text.contains("[DONE]"));
+        handle.stop();
+    }
+
+    #[test]
+    fn responses_api_translates_to_chat_upstream() {
+        let good = spawn_upstream(Arc::new(|_, req| {
+            assert!(req.get("messages").and_then(Value::as_array).is_some(), "应译成 chat messages: {req}");
+            let stream = req.get("stream").and_then(Value::as_bool).unwrap_or(false);
+            if stream {
+                (200, "text/event-stream".into(), sse_body())
+            } else {
+                (200, "application/json".into(), ok_json_body("up-model", "hello"))
+            }
+        }));
+        let (host, _rt) = make_host(group_with("mg-resp", "resp组", vec![custom(&good, "up-model", 1)]));
+        let handle = start(host.clone(), 0).expect("启动服务");
+        let port = handle.port;
+        let call = |stream: bool| -> (u16, String) {
+            let mut conn = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            let body = json!({
+                "model": "resp组",
+                "stream": stream,
+                "input": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "hi" }] }]
+            })
+            .to_string()
+            .into_bytes();
+            let req = format!(
+                "POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer tgk-e2e\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            conn.write_all(req.as_bytes()).unwrap();
+            conn.write_all(&body).unwrap();
+            let mut resp = Vec::new();
+            conn.set_read_timeout(Some(Duration::from_secs(15))).unwrap();
+            let _ = conn.read_to_end(&mut resp);
+            let split = resp.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or(0);
+            let head = String::from_utf8_lossy(&resp[..split]).to_string();
+            let status: u16 = head.lines().next().unwrap_or("").split_whitespace().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+            (status, String::from_utf8_lossy(&resp[split + 4..]).into_owned())
+        };
+
+        let (status, body) = call(false);
+        assert_eq!(status, 200);
+        assert!(body.contains("\"object\":\"response\"") || body.contains("\"object\": \"response\""), "{body}");
+        assert!(body.contains("hello"), "{body}");
+        assert!(body.contains("output_text"), "{body}");
+
+        let (status, body) = call(true);
+        assert_eq!(status, 200);
+        assert!(body.contains("event: response.created"), "{body}");
+        assert!(body.contains("event: response.output_item.added"), "{body}");
+        assert!(body.contains("event: response.output_text.delta"), "{body}");
+        assert!(body.contains("你好"), "{body}");
+        assert!(body.contains("event: response.completed"), "{body}");
+        assert!(!body.contains("[DONE]"), "{body}");
+        assert!(!body.contains("chat.completion.chunk"), "{body}");
+
+        let mut conn = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let body = br#"{"model":"x"}"#.to_vec();
+        let req = format!(
+            "POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer tgk-e2e\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        conn.write_all(req.as_bytes()).unwrap();
+        conn.write_all(&body).unwrap();
+        let mut resp = Vec::new();
+        conn.set_read_timeout(Some(Duration::from_secs(15))).unwrap();
+        let _ = conn.read_to_end(&mut resp);
+        let head = String::from_utf8_lossy(&resp);
+        assert!(head.contains("400"), "缺 input 应 400: {head}");
         handle.stop();
     }
 }

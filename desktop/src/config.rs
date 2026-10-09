@@ -411,7 +411,7 @@ pub fn load_config(app: &AppHandle) -> Result<DesktopConfig, String> {
 
 /// 从任意路径加载配置(不持 ConfigStore 锁),供 ShellCtx 内部调用时使用。
 pub fn load_config_from_dir(dir: &Path) -> Result<DesktopConfig, String> {
-    load_config_unlocked(&dir.join("config.json"))
+    load_config_unlocked(dir)
 }
 
 /// 设置页提交：在同一配置事务内合并壳自有偏好、生成引擎派生文件，最后
@@ -547,6 +547,92 @@ fn with_basic_userinfo(base_url: &str, user_pass: &str) -> String {
     }
     let _ = u.set_password(pass);
     u.to_string()
+}
+
+/// Codex 引擎用的 OpenAI 兼容接口(隔离 CODEX_HOME,不读 ~/.codex 登录态)。
+#[derive(Clone, Debug)]
+pub struct CodexEndpoint {
+    pub alias: String,
+    pub model: String,
+    pub base_url: String,
+    pub api_key: String,
+}
+
+/// 把设置里选中的模型解析成 Codex 可调用的 endpoint。
+/// Codex 只吃 chat/responses 线协议;anthropic 等请走 OhMyAgent。
+pub fn resolve_codex_endpoint(dir: &Path, cfg: &DesktopConfig, alias: &str) -> Result<CodexEndpoint, String> {
+    let alias = alias.trim();
+    if alias.is_empty() {
+        return Err("请先选择一个已配置的模型，再使用 Codex 引擎".into());
+    }
+    if let Some(arr) = cfg.models.as_array() {
+        let found = arr.iter().find(|m| m.get("name").and_then(|v| v.as_str()) == Some(alias)).or_else(|| {
+            arr.iter().find(|m| {
+                m.get("name")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|n| n == alias || alias.starts_with(n) || n.starts_with(alias))
+            })
+        });
+        if let Some(m) = found {
+            return endpoint_from_model_entry(dir, cfg, m);
+        }
+    }
+    if let Some(ep) = gateway_codex_endpoint(cfg, alias) {
+        return Ok(ep);
+    }
+    Err(format!("未知模型 {alias}，请在设置里配置后再用 Codex 引擎"))
+}
+
+fn endpoint_from_model_entry(dir: &Path, cfg: &DesktopConfig, m: &serde_json::Value) -> Result<CodexEndpoint, String> {
+    let get = |k: &str| m.get(k).and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let name = get("name");
+    let provider = get("provider");
+    let model = get("model");
+    if name.is_empty() || model.is_empty() {
+        return Err("模型条目缺少名称或模型 id".into());
+    }
+    let openai_compat = provider == "openai"
+        || provider == "openai_responses"
+        || provider == "openai-chat"
+        || provider == "openai-responses";
+    if !openai_compat {
+        return Err(format!(
+            "Codex 引擎目前只支持 OpenAI 兼容协议，当前模型「{name}」的 provider 是 {provider}。请换模型或改用 OhMyAgent。"
+        ));
+    }
+    let is_mc = m.get("source").and_then(|v| v.as_str()) == Some(crate::baizhi::monkeycode::SOURCE_MONKEYCODE);
+    let (base_url, api_key) = if is_mc {
+        (resolve_monkeycode_base_url(cfg), resolve_monkeycode_api_key(dir, cfg))
+    } else {
+        (get("base_url"), get("api_key"))
+    };
+    if base_url.is_empty() || api_key.is_empty() {
+        return Err(format!("模型「{name}」未配置接口地址或 API Key"));
+    }
+    Ok(CodexEndpoint {
+        alias: name,
+        model,
+        base_url,
+        api_key,
+    })
+}
+
+fn gateway_codex_endpoint(cfg: &DesktopConfig, alias: &str) -> Option<CodexEndpoint> {
+    let gw = &cfg.gateway;
+    if !gw.enabled || gw.port == 0 {
+        return None;
+    }
+    let g = gw.groups.iter().find(|g| g.enabled && g.name == alias && !g.key.is_empty())?;
+    // 用 localhost 而不是 127.0.0.1:Windows 系统代理(Clash 等)的绕过列表
+    // 通常含 localhost/<local>,却不一定认 127.0.0.1。Codex 的 reqwest 默认走
+    // 系统代理,把 127.0.0.1:8317 送进代理后会拿到空 body 的 502,
+    // 报 unexpected status 502 Bad Gateway: Unknown error。
+    Some(CodexEndpoint {
+        alias: g.name.clone(),
+        model: g.name.clone(),
+        base_url: format!("http://localhost:{}/v1", gw.port),
+        api_key: g.key.clone(),
+    })
 }
 
 /// 壳清单 → <engine_config_dir>/settings.json + mcp.json。
@@ -1463,5 +1549,71 @@ mod tests {
         // 外部工具(date -u -d @…)对表的锚点值
         assert_eq!(ms_to_rfc3339(1_700_000_000_000), "2023-11-14T22:13:20Z");
         assert_eq!(ms_to_rfc3339(1_721_001_600_000), "2024-07-15T00:00:00Z");
+    }
+
+    #[test]
+    fn resolve_codex_endpoint_openai_compat() {
+        let dir = test_dir("codex-ep");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let cfg = DesktopConfig {
+            models: serde_json::json!([{
+                "name": "qwen",
+                "provider": "openai",
+                "model": "qwen-plus",
+                "base_url": "https://dashscope.example/v1",
+                "api_key": "sk-test"
+            }]),
+            ..Default::default()
+        };
+        let ep = resolve_codex_endpoint(&dir, &cfg, "qwen").unwrap();
+        assert_eq!(ep.model, "qwen-plus");
+        assert_eq!(ep.base_url, "https://dashscope.example/v1");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_codex_endpoint_rejects_anthropic() {
+        let dir = test_dir("codex-anth");
+        let cfg = DesktopConfig {
+            models: serde_json::json!([{
+                "name": "claude",
+                "provider": "anthropic",
+                "model": "claude-3",
+                "base_url": "https://api.anthropic.com",
+                "api_key": "sk-ant"
+            }]),
+            ..Default::default()
+        };
+        let err = resolve_codex_endpoint(&dir, &cfg, "claude").unwrap_err();
+        assert!(err.contains("OpenAI 兼容"), "{err}");
+    }
+
+    #[test]
+    fn resolve_codex_endpoint_gateway_uses_localhost() {
+        let dir = test_dir("codex-gw-ep");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let mut cfg = DesktopConfig::default();
+        cfg.gateway.enabled = true;
+        cfg.gateway.port = 8317;
+        cfg.gateway.groups.push(crate::gateway::ModelGroup {
+            id: "mg-test".into(),
+            name: "免费组".into(),
+            enabled: true,
+            key: "tgk-test".into(),
+            strategy: "priority".into(),
+            context_window: 128_000,
+            max_output: 32_768,
+            temperature: None,
+            system_prompt: String::new(),
+            timeout_seconds: 120,
+            log_enabled: true,
+            models: vec![],
+        });
+        let ep = resolve_codex_endpoint(&dir, &cfg, "免费组").unwrap();
+        assert_eq!(ep.base_url, "http://localhost:8317/v1");
+        assert_eq!(ep.api_key, "tgk-test");
+        let _ = fs::remove_dir_all(&dir);
     }
 }
