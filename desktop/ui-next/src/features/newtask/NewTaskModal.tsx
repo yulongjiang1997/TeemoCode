@@ -836,7 +836,7 @@ export function NewTaskModal({
                     title={t("create.think")}
                     align="start"
                   />
-                  {kind !== "cloud" && engine === "ohmy" &&
+                  {engine === "ohmy" &&
                     (skillsLoaded ? (
                       <SkillsMenu
                         skills={skills}

@@ -64,6 +64,7 @@ describe("projectTimelineRows", () => {
     expect(agents[1]?.type === "item" ? agents[1].agentCopySource : undefined).toBe("第一段\n\n第二段");
 
     const running = { ...stateOf([{ kind: "agent", text: "半截" }]), running: true };
-    expect(projectTimelineRows(running, opts)[0]?.type === "item" ? projectTimelineRows(running, opts)[0]?.agentCopySource : undefined).toBeUndefined();
+    const runningRow = projectTimelineRows(running, opts)[0];
+    expect(runningRow?.type === "item" ? runningRow.agentCopySource : undefined).toBeUndefined();
   });
 });
