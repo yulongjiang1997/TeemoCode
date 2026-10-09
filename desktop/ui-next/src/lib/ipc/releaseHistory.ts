@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.50",
+    notes: "可选 Codex 引擎与隔离工作区；项目规则与会话导出；复制回答、不死不休自动续跑；文件改动可丢弃或整树回滚；网关支持 /v1/responses；公式渲染与补丁预览；新建任务可选技能并暂存草稿；Ctrl+Enter 换行；Markdown 预览；关掉网关后发送不再卡思考；双击最大化后标题栏仍可拖动",
+  },
+  {
     version: "0.1.49",
     notes: "消息路径可点打开(左键文件夹/右键复制与默认程序);Git上传导入修复(WSL路径/默认gitignore/任务数据三目录往返);cron周日7命中;技能git导入清理临时目录;网关日志轮转先写后删",
   },

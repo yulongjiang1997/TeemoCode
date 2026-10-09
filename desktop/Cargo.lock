@@ -2170,7 +2170,7 @@ dependencies = [
 
 [[package]]
 name = "monkeycode-desktop"
-version = "0.1.49"
+version = "0.1.50"
 dependencies = [
  "base64 0.22.1",
  "cookie",
