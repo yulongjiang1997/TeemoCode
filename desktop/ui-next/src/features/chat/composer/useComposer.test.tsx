@@ -273,7 +273,7 @@ describe("useComposer:队列补投", () => {
 });
 
 describe("useComposer:投递被壳拒", () => {
-  it("session_send 拒绝:该指令标 failed + 自动暂停,不再自动重试", async () => {
+  it("session_send 拒绝:该指令标 failed + 自动暂停 + 外显原因,不再自动重试", async () => {
     const { sends } = stubSend(() => {
       throw new Error("engine busy");
     });
@@ -289,6 +289,8 @@ describe("useComposer:投递被壳拒", () => {
     expect(sends()).toHaveLength(1);
     await waitFor(() => expect(result.current.queue[0]?.state).toBe("failed"));
     expect(result.current.paused).toBe(true);
+    // 原因必须外显:只标红的话用户看不出是壳拒了(网关关了/会话没打开),重试照样失败
+    expect(result.current.error).toContain("engine busy");
   });
 });
 

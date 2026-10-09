@@ -1394,6 +1394,11 @@ impl OhmyDriver {
                 if text.is_empty() {
                     return Err("空输入".into());
                 }
+                // 网关就绪闸(仅网关组模型):关掉网关后引擎会把请求打到已停的
+                // 端口并无限重试,必须在落乐观帧前拒掉(见 ensure_gateway_ready)。
+                // 放在忙碌守卫之前:网关真挂了的时候卡住的本轮最需要这条提示,
+                // 「已有任务在执行」会把根因盖掉。
+                self.ensure_gateway_ready(&self.session_model_name(id))?;
                 // 忙碌守卫:执行中不再开轮(UI 侧已排队,这里兜底;
                 // 不能靠引擎拒绝——乐观帧先落,误开轮会污染回放)
                 let opened_turn = {
@@ -2242,12 +2247,68 @@ impl OhmyDriver {
         }
     }
 
+    /// 权威 config.json(网关组、端口、开关都在这里)。读不到/损坏返回
+    /// None:调用方一律按"没有网关条目"处理,不因为读不到配置就拦下消息。
+    fn read_config_json(&self) -> Option<Value> {
+        let dir = self.0.app.config_dir().ok()?;
+        let raw = std::fs::read(dir.join("config.json")).ok()?;
+        serde_json::from_slice::<Value>(&raw).ok()
+    }
+
+    /// 发送前的网关就绪校验(2026-09-22 用户报障:关掉网关后发消息永远停在
+    /// 「思考中」)。引擎只在启动时读一次 settings.json,网关关闭/监听不在时
+    /// 运行中的引擎仍持有物化好的 127.0.0.1:<port>/v1 条目,把请求打到已停的
+    /// 端口;连接失败被引擎当瞬时错误反复重试,壳既收不到 task-error 也等不到
+    /// turn/stopped,UI 就一直转。这类「本轮根本起不来」的失败必须在乐观帧
+    /// **之前**按 Err 外显:Err ⟺ 消息未入会话,UI 保留草稿并报出原因,而不是
+    /// 等一个可能永远不来的终态。
+    fn ensure_gateway_ready(&self, model_name: &str) -> Result<(), String> {
+        let name = model_name.trim();
+        if name.is_empty() {
+            return Ok(());
+        }
+        // 壳清单里有这个名字就不是网关模型:物化时同名手编条目优先,网关组
+        // 让位(config.rs),比对口径与 resolve_model 的壳清单分支一致。
+        if self.0.models.iter().any(|m| m.name == name)
+            || self
+                .0
+                .models
+                .iter()
+                .any(|m| strip_source_suffix(&m.name) == strip_source_suffix(name))
+        {
+            return Ok(());
+        }
+        let Some(cfg) = self.read_config_json() else { return Ok(()) };
+        let Some(gw) = cfg.get("gateway") else { return Ok(()) };
+        // 组名命中才算网关模型;组被删/改名后不在此处判死,交回引擎报错路径
+        let is_group = gw
+            .get("groups")
+            .and_then(Value::as_array)
+            .is_some_and(|groups| {
+                groups.iter().any(|g| g.get("name").and_then(Value::as_str) == Some(name))
+            });
+        if !is_group {
+            return Ok(());
+        }
+        if !gw.get("enabled").and_then(Value::as_bool).unwrap_or(false) {
+            return Err(format!(
+                "模型网关已关闭,当前模型「{name}」来自本地网关:请在设置里重新开启模型网关,或切换到其它模型"
+            ));
+        }
+        let port = u16::try_from(gw.get("port").and_then(Value::as_u64).unwrap_or(0)).unwrap_or(0);
+        if !crate::gateway::port_accepting(port) {
+            return Err(format!(
+                "模型网关未在监听(127.0.0.1:{port} 无响应),当前模型「{name}」不可用:请检查模型网关设置,或切换到其它模型"
+            ));
+        }
+        Ok(())
+    }
+
     /// 本地网关组名校验:名字命中 config.gateway 里启用的组(总开关开 +
     /// 组 enabled + key 已生成)返回组名,否则 None。resolve_model 的兜底
     /// 分支用——网关组不在壳清单里(见 models_list 注入处的说明)。
     fn gateway_group_name(&self, name: &str) -> Option<String> {
-        let raw = std::fs::read(self.0.app.config_dir().ok()?.join("config.json")).ok()?;
-        let cfg = serde_json::from_slice::<Value>(&raw).ok()?;
+        let cfg = self.read_config_json()?;
         let gw = cfg.get("gateway")?;
         if !gw.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false) {
             return None;

@@ -2101,9 +2101,10 @@ fn main() {
             if matches!(event, WindowEvent::Resized(_)) {
                 update_main_window_runtime(window.app_handle(), window);
             }
-            // 窗口失焦时发事件,前端据此移除 data-tauri-drag-region(2026-09-14:
-            // 修复窗口在后台被遮挡时点击标题栏变成拖动而非聚焦前台的问题)。
-            // Tauri 的 drag-region 在 Windows 上不检查焦点,失焦状态下点击仍触发拖动。
+            // 窗口焦点变化发给前端,由它把 data-tauri-drag-region 改成 "false"/
+            // 空值(2026-09-14:Tauri 的 drag-region 在 Windows 上不看焦点,失焦时
+            // 点击标题栏会拖动而不是把窗口拉到前台)。只能改值不能删属性——
+            // 见 App.tsx 里的说明:最大化会触发一次假失焦,删了就回不来。
             if let WindowEvent::Focused(focused) = event {
                 if window.label() == "main" {
                     let _ = window.app_handle().emit("window-focus-changed", *focused);

@@ -69,6 +69,37 @@ describe("壳骨架(P1)", () => {
     expect(corner?.hasAttribute("data-tauri-drag-region")).toBe(true);
   });
 
+  // 2026-09-23 用户报障:双击标题栏最大化之后窗口再也拖不动。最大化会让
+  // Windows 发一轮带 SWP_NOACTIVATE 的 WM_WINDOWPOSCHANGING,tao 把它报成
+  // 一次失焦,而这次失焦没有配对的"重新聚焦"(窗口其实一直激活)。早先的
+  // 写法是失焦就 removeAttribute,于是热区被摘掉后再也回不来。
+  it("失焦只把拖拽热区改成 false,属性还在;回焦恢复为空值", async () => {
+    const handlers = new Map<string, (e: { payload: unknown }) => void>();
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
+      core: { invoke: () => Promise.resolve(false) },
+      event: {
+        listen: (name: string, cb: (e: { payload: unknown }) => void) => {
+          handlers.set(name, cb);
+          return Promise.resolve(() => handlers.delete(name));
+        },
+      },
+    };
+    vi.stubGlobal("navigator", { ...window.navigator, userAgent: "Windows NT 10.0" });
+    const { container } = render(<App />);
+    const bar = container.querySelector("[data-window-titlebar]") as HTMLElement;
+    expect(bar.getAttribute("data-tauri-drag-region")).toBe("");
+
+    await vi.waitFor(() => expect(handlers.has("window-focus-changed")).toBe(true));
+    handlers.get("window-focus-changed")?.({ payload: false });
+    // 属性必须留着:删掉的话,这次失焦若没有配对的聚焦事件,热区就永久丢失
+    expect(bar.hasAttribute("data-tauri-drag-region")).toBe(true);
+    // "false" 是 drag.js 里"明确不拖"的取值(空值才是"拖")
+    expect(bar.getAttribute("data-tauri-drag-region")).toBe("false");
+
+    handlers.get("window-focus-changed")?.({ payload: true });
+    expect(bar.getAttribute("data-tauri-drag-region")).toBe("");
+  });
+
   it("mac 壳:红绿灯在 rail 左上角(chrome 角落),无 Windows 三键", () => {
     (window as unknown as { __TAURI__?: unknown }).__TAURI__ = {
       core: { invoke: () => Promise.resolve(false) },

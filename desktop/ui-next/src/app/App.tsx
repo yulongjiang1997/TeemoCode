@@ -548,14 +548,18 @@ export function App() {
       setCloudTask(null);
       setCloudReload((n) => n + 1);
     });
-    // 窗口焦点切换(2026-09-14):失焦时移除 data-tauri-drag-region,
-    // 聚焦时恢复——修复窗口在后台被遮挡时点击标题栏变成拖动而非聚焦的问题。
+    // 窗口焦点切换(2026-09-14):失焦时把拖拽热区改成 "false",聚焦时恢复。
+    // 修的是"窗口在后台被遮挡时,点击标题栏变成拖动而不是把窗口拉到前台"。
+    //
+    // 只能改属性值,不能删属性。Tauri 的 drag.js 只在 mousedown 当下判
+    // isDragRegion,而 "false" 明确表示"这里不拖"(空值才是"拖")。早先的写法是
+    // 直接 removeAttribute,但最大化会让 Windows 发一轮带 SWP_NOACTIVATE 的
+    // WM_WINDOWPOSCHANGING,tao 把它报成失焦——于是双击标题栏最大化的瞬间,
+    // 所有热区属性被摘掉,而这次失焦没有对应的"重新聚焦"事件(窗口其实一直
+    // 是激活的),属性再也不会回来,标题栏从此点了没反应(2026-09-23 用户报障)。
     const offFocus = listen<boolean>("window-focus-changed", (focused) => {
-      const els = document.querySelectorAll<HTMLElement>("[data-tauri-drag-region]");
-      if (focused) {
-        els.forEach((el) => el.setAttribute("data-tauri-drag-region", ""));
-      } else {
-        els.forEach((el) => el.removeAttribute("data-tauri-drag-region"));
+      for (const el of document.querySelectorAll<HTMLElement>("[data-tauri-drag-region]")) {
+        el.setAttribute("data-tauri-drag-region", focused ? "" : "false");
       }
     });
     refresh();

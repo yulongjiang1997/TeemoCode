@@ -1063,6 +1063,11 @@ fn bare_inner(tag: &str) -> Arc<Inner> {
 
 /// 同 bare_inner,另给一份壳事件缓冲(断言 session-event 用)。
 fn bare_inner_events(tag: &str) -> (Arc<Inner>, EmittedEvents) {
+    bare_inner_with_models(tag, vec![])
+}
+
+/// 同 bare_inner_events,但带壳清单模型(名字重名判定等场景要它)。
+fn bare_inner_with_models(tag: &str, models: Vec<ManifestModel>) -> (Arc<Inner>, EmittedEvents) {
     let home = std::env::temp_dir().join(format!("ohmy-journal-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
     let data_dir = home.join("ohmy-sessions");
@@ -1102,7 +1107,7 @@ fn bare_inner_events(tag: &str) -> (Arc<Inner>, EmittedEvents) {
             agent_inputs: StdMutex::new(HashMap::new()),
             background_agents: StdMutex::new(HashMap::new()),
         },
-        models: vec![],
+        models,
         data_dir,
         engine_dir: home.join("ohmyagent"),
         chat_workspaces_dir: home.join("local-data/chat-workspaces"),
@@ -2719,4 +2724,132 @@ fn parse_manifest_models_tolerates_missing_model_field() {
     assert_eq!(models[1].source, "monkeycode");
     assert!(models[1].locked);
     assert_eq!(models[1].owner, "public");
+}
+
+// ==================== 网关模型发送前置闸 ====================
+//
+// 关掉网关后发消息必须**立刻**失败:引擎只在启动时读一次 settings.json,
+// 仍会把请求打到已停的 127.0.0.1:<port>,连接失败被它当瞬时错误反复重试,
+// 壳既收不到 task-error 也等不到 turn/stopped,UI 就永久停在「思考中」。
+// 闸必须在乐观帧之前(Err ⟺ 消息未入会话),UI 才能保留草稿并报出原因。
+
+/// 权威 config.json 写进测试 home(闸从它读开关/端口/组名)。
+fn write_gateway_config(inner: &Inner, enabled: bool, port: u16, group: &str) {
+    let cfg = json!({ "gateway": {
+        "enabled": enabled,
+        "port": port,
+        "groups": [{ "id": "g1", "name": group, "key": "k-1", "enabled": true }],
+    } });
+    let dir = inner.app.config_dir().unwrap();
+    std::fs::write(dir.join("config.json"), cfg.to_string()).unwrap();
+}
+
+fn user_input_frame(text: &str) -> Value {
+    use base64::Engine as _;
+    json!({ "content": base64::engine::general_purpose::STANDARD.encode(text) })
+}
+
+/// 会话跑在网关组模型上,而网关总开关是关的:发送立刻 Err,且**一个帧都
+/// 不能落**(落了消息就进会话流,UI 只能等一个不会来的终态)。
+#[tokio::test]
+async fn gateway_group_send_fails_fast_when_gateway_disabled() {
+    let (inner, _events) = bare_inner_events("gw-off");
+    write_gateway_config(&inner, false, 8317, "免费组");
+    let mut session = idle_session("s1");
+    session.model_name = "免费组".into();
+    inner.sess.sessions.lock().unwrap().insert("s1".into(), session);
+
+    let err = OhmyDriver(inner.clone())
+        .session_send("s1", "user-input", user_input_frame("你好"))
+        .await
+        .expect_err("关掉网关后发送必须立刻失败");
+    assert!(err.contains("模型网关已关闭"), "{err}");
+    assert!(journal_frames(&inner, "s1").is_empty(), "拒绝必须发生在乐观帧之前");
+}
+
+/// 网关开着但监听不在(端口没人 accept):同样立刻失败,提示指向可达性而不是
+/// 「已关闭」——两种原因用户的处置动作不同。
+#[tokio::test]
+async fn gateway_group_send_fails_fast_when_port_is_dead() {
+    let (inner, _events) = bare_inner_events("gw-dead");
+    // 借一个已释放的临时端口:绑过再关,连接必然被拒
+    let port = {
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        probe.local_addr().unwrap().port()
+    };
+    write_gateway_config(&inner, true, port, "免费组");
+    let mut session = idle_session("s1");
+    session.model_name = "免费组".into();
+    inner.sess.sessions.lock().unwrap().insert("s1".into(), session);
+
+    let err = OhmyDriver(inner.clone())
+        .session_send("s1", "user-input", user_input_frame("你好"))
+        .await
+        .expect_err("监听不在时发送必须立刻失败");
+    assert!(err.contains("模型网关未在监听"), "{err}");
+    assert!(err.contains(&port.to_string()), "提示要带上探不通的端口: {err}");
+    assert!(journal_frames(&inner, "s1").is_empty());
+}
+
+/// 网关在监听时闸必须放行(不能把正常发送拦下来当回归)。会话此刻在跑,
+/// 放行的证据是走到后面那条忙碌守卫而不是网关提示。
+#[tokio::test]
+async fn gateway_group_send_passes_when_listener_is_up() {
+    let (inner, _events) = bare_inner_events("gw-up");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    write_gateway_config(&inner, true, port, "免费组");
+    let mut session = bare_session("s1"); // running=true
+    session.model_name = "免费组".into();
+    inner.sess.sessions.lock().unwrap().insert("s1".into(), session);
+
+    let err = OhmyDriver(inner.clone())
+        .session_send("s1", "user-input", user_input_frame("你好"))
+        .await
+        .expect_err("在跑的会话仍受忙碌守卫拦截");
+    assert!(err.contains("已有任务在执行"), "网关在监听时不该被前置闸拦下: {err}");
+    assert!(journal_frames(&inner, "s1").is_empty());
+    drop(listener);
+}
+
+/// 普通模型(名字不是任何网关组)与网关开关无关:关掉网关照样能发。
+#[tokio::test]
+async fn non_gateway_model_is_not_gated_by_gateway_state() {
+    let (inner, _events) = bare_inner_events("gw-plain");
+    write_gateway_config(&inner, false, 8317, "免费组");
+    let mut session = bare_session("s1"); // running=true
+    session.model_name = "手编模型".into();
+    inner.sess.sessions.lock().unwrap().insert("s1".into(), session);
+
+    let err = OhmyDriver(inner.clone())
+        .session_send("s1", "user-input", user_input_frame("你好"))
+        .await
+        .expect_err("在跑的会话仍受忙碌守卫拦截");
+    assert!(err.contains("已有任务在执行"), "非网关模型被网关状态误伤: {err}");
+}
+
+/// 同名手编条目优先:物化时网关组对重名让位(config.rs),这类会话走的是
+/// 手编条目而不是网关——关掉网关也不能拦它的消息。
+#[tokio::test]
+async fn shell_model_sharing_group_name_is_not_gated_by_gateway() {
+    let same_name = ManifestModel {
+        name: "免费组".into(),
+        default: false,
+        source: String::new(),
+        think: String::new(),
+        model: "gpt-x".into(),
+        locked: false,
+        owner: String::new(),
+    };
+    let (inner, _events) = bare_inner_with_models("gw-namesake", vec![same_name]);
+    write_gateway_config(&inner, false, 8317, "免费组");
+    let mut session = bare_session("s1"); // running=true
+    session.model_name = "免费组".into();
+    inner.sess.sessions.lock().unwrap().insert("s1".into(), session);
+
+    let err = OhmyDriver(inner.clone())
+        .session_send("s1", "user-input", user_input_frame("你好"))
+        .await
+        .expect_err("在跑的会话仍受忙碌守卫拦截");
+    assert!(err.contains("已有任务在执行"), "重名手编条目被当成网关模型拦下: {err}");
 }

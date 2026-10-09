@@ -444,7 +444,7 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
     setQueue((cur) => cur.map((x) => (x.id === next.id ? { ...x, state: "executing" } : x)));
     // 正文 = 指令文本 + 附件行(与 send() 同一拼法)
     const payload = [next.text, ...next.atts.map(attLine)].filter(Boolean).join("\n");
-    void sessionSend(sessionId, "user-input", { content: b64encode(payload) }).catch(() => {
+    void sessionSend(sessionId, "user-input", { content: b64encode(payload) }).catch((e: unknown) => {
       sendingRef.current = false;
       flushBlockedRef.current = true;
       inFlightRef.current = null;
@@ -458,6 +458,10 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
         stashSet(forSid, { draft: prev?.draft ?? "", queue: prev?.queue ?? [], atts: prev?.atts ?? [] });
         return;
       }
+      // 同直发路径:**必须外显原因**(与 send() 的 catch 同口径)。只把指令标红
+      // 的话,用户只看到一个"失败"的条目,分不清是网关关了、会话没打开还是别的
+      // ——而重试同样会失败,只能干瞪眼。
+      notifyError(t("chat.sendFailed", { reason: e instanceof Error ? e.message : String(e) }));
       scheduleRetry();
     });
   }, [running, queue, paused, sessionId, historyLoaded, composerReady, lastSeq, flushTick, clearRetry, scheduleRetry, turnEnded]);

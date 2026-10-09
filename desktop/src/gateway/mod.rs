@@ -1439,6 +1439,21 @@ pub fn shutdown_all(app: &AppHandle) {
     }
 }
 
+/// 本机网关端口连探:有进程在 127.0.0.1:<port> 上 accept 才为 true。
+/// 壳按组把模型物化成 http://127.0.0.1:<port>/v1 条目,而引擎只在启动时读
+/// 一次 settings.json——网关关掉后运行中的引擎仍会把请求打到已停的端口,
+/// 连接失败被它当瞬时错误反复重试,UI 就永远停在「思考中」。发送前用这个
+/// 探针快速失败(纯连接探,不依赖 AppHandle,单测可直接用)。
+/// 同步调用:回环端口要么立刻接受、要么立刻 ECONNREFUSED,超时只兜住
+/// 防火墙丢包这种异常态。
+pub fn port_accepting(port: u16) -> bool {
+    if port == 0 {
+        return false;
+    }
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).is_ok()
+}
+
 /// 幂等自愈:配置 enabled 但监听没在跑(启动竞态失败/意外停止)时按
 /// 当前配置重建。已在跑或未启用则原样返回。工作区拉模型列表时调用,
 /// 避免用户在设置页之外无从发现"网关停了"。
