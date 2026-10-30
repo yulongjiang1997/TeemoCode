@@ -1,7 +1,7 @@
 [package]
 name = "monkeycode-desktop"
 # 版本 = YYMMDDNN(日期+两位序号)占主版本位,与 tauri.conf.json 保持一致
-version = "0.1.51"
+version = "0.1.52"
 description = "MonkeyCode 本地桌面客户端(Tauri 壳 + ohmyagent 引擎)"
 edition = "2021"
 
@@ -47,6 +47,13 @@ regex = "1"
 # cookie 罐过期时间的 RFC3339 解析。time 本就在依赖树里(cookie 的 Expires
 # 解析),显式声明 + parsing feature,替代手写历算(严格校验月/日范围)
 time = { version = "0.3", features = ["parsing", "local-offset"] }
+
+# 内置代理(2026-10-30):mihomo 内核管理 + 订阅拉取 + 节点切换
+parking_lot = "0.12"
+serde_yaml = "0.9"
+# mihomo 内核 zip 解压(Windows);.gz 解压(非 Windows)
+flate2 = "1"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 # baizhi 集成测试:假服务端 + async 测试运行时

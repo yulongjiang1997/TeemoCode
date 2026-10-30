@@ -114,6 +114,9 @@ pub struct GatewaySettings {
     /// 然后直接获取模型列表,无需重复手填。
     #[serde(default)]
     pub vendor_presets: Vec<VendorPreset>,
+    /// 内置代理(2026-10-30):mihomo 内核 + 订阅链接,网关流量自动走代理。
+    #[serde(default)]
+    pub proxy: crate::proxy::ProxyConfig,
 }
 
 /// 厂商预设(用户自建)。
@@ -145,7 +148,7 @@ pub struct VendorPreset {
 
 impl Default for GatewaySettings {
     fn default() -> Self {
-        Self { enabled: false, port: default_port(), groups: vec![], vendor_presets: vec![] }
+        Self { enabled: false, port: default_port(), groups: vec![], vendor_presets: vec![], proxy: Default::default() }
     }
 }
 
@@ -1097,7 +1100,7 @@ pub(crate) struct GatewayInner {
     server: StdMutex<Option<server::ServerHandle>>,
     /// 服务侧错误(端口被占等),UI 外显;服务正常时为 None。
     server_error: StdMutex<Option<String>>,
-    client: reqwest::Client,
+    client: StdMutex<reqwest::Client>,
     /// reload 串行闸(保存/重启并发时避免两个线程同时折腾监听线程)。
     reload_gate: StdMutex<()>,
     /// 请求序号(用于 pending→complete 匹配)。
@@ -1131,7 +1134,7 @@ impl GatewayHost {
             counters: StdMutex::new(HashMap::new()),
             server: StdMutex::new(None),
             server_error: StdMutex::new(None),
-            client,
+            client: StdMutex::new(client),
             reload_gate: StdMutex::new(()),
             log_stats: build_log_store().map(Arc::new),
             log_persistence: build_log_persistence().map(Arc::new),
@@ -1145,8 +1148,21 @@ impl GatewayHost {
         self.0.snapshot.lock_ok().clone()
     }
 
-    pub(crate) fn client(&self) -> &reqwest::Client {
-        &self.0.client
+    pub(crate) fn client(&self) -> reqwest::Client {
+        self.0.client.lock_ok().clone()
+    }
+
+    /// 重建 reqwest client(代理状态变更后调用)。
+    pub(crate) fn rebuild_client(&self, proxy_url: Option<&str>) {
+        let mut builder = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10));
+        if let Some(url) = proxy_url {
+            if let Ok(p) = reqwest::Proxy::all(url) {
+                builder = builder.proxy(p);
+            }
+        }
+        let client = builder.build().unwrap_or_default();
+        *self.0.client.lock_ok() = client;
     }
 
     pub(crate) fn health_map(&self) -> std::sync::MutexGuard<'_, HashMap<String, sched::ModelHealth>> {
@@ -1581,7 +1597,7 @@ fn spawn_latency_probe(host: GatewayHost, snapshot: &RuntimeSnapshot) {
                     continue;
                 }
                 let ctx = upstream::GroupCtx::of(&rg.group);
-                let client = host.client().clone();
+                let client = host.client();
                 let group_id = rg.group.id.clone();
                 let group_name = rg.group.name.clone();
                 for cand in &rg.candidates {
@@ -1704,7 +1720,7 @@ pub async fn gateway_probe_group(app: AppHandle, id: String, timeout_ms: Option<
     let probe_timeout_ms = timeout_ms.unwrap_or(15000);
     let probe_timeout = std::time::Duration::from_millis(probe_timeout_ms.max(500));
     let ctx = upstream::GroupCtx::of(&group.group);
-    let client = host.client().clone();
+    let client = host.client();
     // 并行探测:每个候选独立 call_buffered + 独立日志
     let tasks: Vec<_> = group.candidates.iter().map(|cand| {
         let host = host.clone();
@@ -1813,7 +1829,7 @@ pub async fn gateway_probe_model(
         return Err("base_url 不能为空".to_string());
     }
     let host = app.state::<GatewayHost>().inner().clone();
-    let client = host.client().clone();
+    let client = host.client();
     let probe_timeout_ms = timeout_ms.unwrap_or(15000).max(500);
     let probe_timeout = std::time::Duration::from_millis(probe_timeout_ms);
     let cand = ResolvedCandidate {

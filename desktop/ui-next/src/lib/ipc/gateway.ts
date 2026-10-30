@@ -304,3 +304,52 @@ export async function gatewayProbeGroup(id: string, timeoutMs?: number): Promise
 export async function gatewayEnsureRunning(): Promise<void> {
   return invoke<void>("gateway_ensure_running");
 }
+
+// ==================== 内置代理(2026-10-30) ====================
+// app 自带 mihomo(Clash Meta)内核,用户填入订阅链接后自动下载内核、
+// 拉取订阅、启动本地代理服务。网关上游请求自动走代理。
+
+/** 代理运行状态(proxy_status 返回)。 */
+export interface ProxyStatus {
+  running: boolean;
+  enabled: boolean;
+  proxy_port: number;
+  api_port: number;
+  kernel_ready: boolean;
+  has_subscription: boolean;
+  error: string | null;
+}
+
+/** 代理组(mihomo API 返回的 Selector/URLTest/Fallback)。 */
+export interface ProxyGroup {
+  name: string;
+  type: string;
+  now: string;
+  options: string[];
+}
+
+export async function proxyStatus(): Promise<ProxyStatus> {
+  if (!inDesktopShell()) return { running: false, enabled: false, proxy_port: 0, api_port: 0, kernel_ready: false, has_subscription: false, error: null };
+  return invoke<ProxyStatus>("proxy_status");
+}
+
+export async function proxyStart(): Promise<ProxyStatus> {
+  return invoke<ProxyStatus>("proxy_start");
+}
+
+export async function proxyStop(): Promise<ProxyStatus> {
+  return invoke<ProxyStatus>("proxy_stop");
+}
+
+export async function proxySaveConfig(subscriptionUrl: string, enabled: boolean): Promise<void> {
+  return invoke<void>("proxy_save_config", { subscriptionUrl, enabled });
+}
+
+export async function proxyProxies(): Promise<ProxyGroup[]> {
+  if (!inDesktopShell()) return [];
+  return invoke<ProxyGroup[]>("proxy_proxies");
+}
+
+export async function proxySelect(group: string, name: string): Promise<void> {
+  return invoke<void>("proxy_select", { group, name });
+}

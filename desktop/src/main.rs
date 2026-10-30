@@ -24,6 +24,7 @@ mod memory;
 mod project_rules;
 mod models_dev;
 mod import_mc;
+mod proxy;
 #[cfg(target_os = "windows")]
 mod native_pet;
 mod notification;
@@ -1980,6 +1981,12 @@ fn main() {
             import_mc::import_mc_scan,
             import_mc::import_mc_scan_dir,
             import_mc::import_mc_apply,
+            proxy::proxy_status,
+            proxy::proxy_start,
+            proxy::proxy_stop,
+            proxy::proxy_save_config,
+            proxy::proxy_proxies,
+            proxy::proxy_select,
             driver::usagestats
         ])
         .setup(|app| {
@@ -2011,6 +2018,25 @@ fn main() {
             // 模型网关(统一大模型调度平台):挂在配置加载之后,按 gateway 配置
             // 起停监听;失败只记错误外显在设置页,不阻塞应用其余功能。
             gateway::manage(app.handle());
+            // 内置代理(2026-10-30):mihomo 内核 + 订阅链接,网关流量自动走代理。
+            let proxy_mgr = proxy::ProxyManager::new(app.handle().clone());
+            // 若配置中已启用代理,自动启动
+            if proxy_mgr.status().enabled && proxy_mgr.status().has_subscription {
+                let mgr = proxy_mgr.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = mgr.start().await {
+                        eprintln!("[desktop] 代理自动启动失败: {e}");
+                    } else {
+                        eprintln!("[desktop] 代理已自动启动,端口 {}", mgr.status().proxy_port);
+                    }
+                    // 重建网关 client 走代理
+                    let app = mgr.0.app.clone();
+                    if let Some(host) = app.try_state::<gateway::GatewayHost>() {
+                        host.rebuild_client(mgr.proxy_url().as_deref());
+                    }
+                });
+            }
+            app.manage(proxy_mgr);
             // 自动化调度线程(20s 一扫,到点建会话发提示词)
             automation::start(app.handle());
 

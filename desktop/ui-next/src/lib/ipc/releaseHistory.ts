@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.52",
+    notes: "内置代理功能:填入 Clash 订阅链接即可自动下载 mihomo 内核、拉取订阅、启动本地代理服务;网关流量自动走代理,无需 Clash Verge 等外部工具;支持节点列表查看与切换",
+  },
+  {
     version: "0.1.51",
     notes: "大模型网关模型组编辑页面支持单个测试已添加的模型(保存前即可验证 provider/base_url/api_key/model 是否可用,引用模型库时自动解析连接信息)",
   },

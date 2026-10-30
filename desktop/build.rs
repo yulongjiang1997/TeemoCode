@@ -93,6 +93,13 @@ fn main() {
                 "gateway_probe_model",
                 "gateway_save_vendors",
                 "gateway_reset_model_health",
+                // 内置代理(proxy.rs:mihomo 内核管理)
+                "proxy_status",
+                "proxy_start",
+                "proxy_stop",
+                "proxy_save_config",
+                "proxy_proxies",
+                "proxy_select",
                 // 工作区记忆(memory.rs:.monkeycode/MEMORY.md 面板)
                 "memory_read",
                 "memory_write",

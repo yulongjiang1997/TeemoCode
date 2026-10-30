@@ -22,12 +22,20 @@ import {
   gatewaySaveGroup,
   gatewayStatus,
   gatewayUpdateSettings,
+  proxyProxies,
+  proxySaveConfig,
+  proxySelect,
+  proxyStart,
+  proxyStatus,
+  proxyStop,
   type GatewayLogEntry,
   type GatewayLogFilter,
   type GatewayProbeModelResult,
   type GatewayStatus,
   type GroupModel,
   type ModelGroup,
+  type ProxyGroup,
+  type ProxyStatus,
   type VendorPreset,
 } from "@/lib/ipc/gateway";
 import { inDesktopShell } from "@/lib/ipc/ipc";
@@ -143,6 +151,11 @@ export function GatewaySection() {
   /** 编辑表单单模型探测(2026-10-30):key = 行下标(idx) */
   const [modelProbe, setModelProbe] = useState<Record<number, GatewayProbeModelResult>>({});
   const [modelProbing, setModelProbing] = useState<Set<number>>(new Set());
+  /** 内置代理(2026-10-30):mihomo 内核 + 订阅链接 */
+  const [proxy, setProxy] = useState<ProxyStatus | null>(null);
+  const [proxyNodes, setProxyNodes] = useState<ProxyGroup[]>([]);
+  const [proxyBusy, setProxyBusy] = useState(false);
+  const [proxySubDraft, setProxySubDraft] = useState<string | null>(null);
   const [log, setLog] = useState<GatewayLogEntry[]>([]);
   const [logFilter, setLogFilter] = useState<{
     group_id: string;
@@ -204,6 +217,11 @@ export function GatewaySection() {
     })
       .then(setLogTotal)
       .catch(() => {});
+    // 代理状态(2026-10-30)
+    proxyStatus().then(setProxy).catch(() => {});
+    if (proxy?.running) {
+      proxyProxies().then(setProxyNodes).catch(() => {});
+    }
   }, [buildLogFilter]);
   useEffect(refresh, [refresh]);
 
@@ -401,6 +419,53 @@ export function GatewaySection() {
       }));
     } finally {
       const rest = new Set(modelProbing); rest.delete(idx); setModelProbing(rest);
+    }
+  };
+
+  /** 内置代理:启动/停止(2026-10-30) */
+  const startProxy = async () => {
+    setProxyBusy(true);
+    try {
+      if (proxySubDraft !== null && proxySubDraft.trim()) {
+        await proxySaveConfig(proxySubDraft, true);
+      }
+      const s = await proxyStart();
+      setProxy(s);
+      setProxySubDraft(null);
+      // 启动后拉取节点列表
+      if (s.running) {
+        try {
+          const nodes = await proxyProxies();
+          setProxyNodes(nodes);
+        } catch { /* 节点列表可能稍后才可用 */ }
+      }
+      refresh();
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setProxyBusy(false);
+    }
+  };
+  const stopProxy = async () => {
+    setProxyBusy(true);
+    try {
+      const s = await proxyStop();
+      setProxy(s);
+      setProxyNodes([]);
+      refresh();
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setProxyBusy(false);
+    }
+  };
+  const selectNode = async (group: string, name: string) => {
+    try {
+      await proxySelect(group, name);
+      const nodes = await proxyProxies();
+      setProxyNodes(nodes);
+    } catch (e) {
+      setError(errText(e));
     }
   };
 
@@ -850,6 +915,89 @@ export function GatewaySection() {
             <IconCopy size={13} stroke={1.75} aria-hidden />
             {t("settings.gateway.copy")}
           </button>
+        </div>
+      </div>
+
+      {/* 内置代理(2026-10-30):mihomo 内核 + 订阅链接 */}
+      <div className="flex flex-col gap-2 rounded-box border border-base-300 bg-base-100 p-4">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <span className="text-sm font-medium">{t("settings.gateway.proxy.title")}</span>
+            <span className="text-xs text-base-content/50">{t("settings.gateway.proxy.hint")}</span>
+          </div>
+          {proxy && (
+            <span className={`badge badge-soft badge-sm ${proxy.running ? "badge-success" : "badge-ghost"}`}>
+              {proxy.running ? t("settings.gateway.proxy.running") : t("settings.gateway.stopped")}
+            </span>
+          )}
+        </div>
+        {proxy?.error && (
+          <div role="alert" className="alert alert-error alert-soft text-xs">
+            {proxy.error}
+          </div>
+        )}
+        <div className="flex flex-col gap-2">
+          <label className="flex flex-col gap-1 text-xs">
+            {t("settings.gateway.proxy.subscription")}
+            <div className="flex gap-1">
+              <input
+                type="text"
+                className="input input-xs min-w-0 flex-1 font-mono"
+                placeholder={t("settings.gateway.proxy.subscriptionPlaceholder")}
+                value={proxySubDraft ?? ""}
+                onChange={(e) => setProxySubDraft(e.target.value)}
+              />
+              {proxy?.running ? (
+                <button
+                  type="button"
+                  className="btn btn-xs btn-ghost shrink-0"
+                  disabled={proxyBusy}
+                  onClick={stopProxy}
+                >
+                  {proxyBusy ? <span className="loading loading-spinner loading-xs" aria-hidden /> : null}
+                  {t("settings.gateway.proxy.stop")}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-xs btn-primary shrink-0"
+                  disabled={proxyBusy || (proxySubDraft === null && !proxy?.has_subscription)}
+                  onClick={startProxy}
+                >
+                  {proxyBusy ? <span className="loading loading-spinner loading-xs" aria-hidden /> : null}
+                  {proxyBusy ? t("settings.gateway.proxy.starting") : t("settings.gateway.proxy.start")}
+                </button>
+              )}
+            </div>
+          </label>
+          {proxy?.running && (
+            <div className="flex flex-wrap items-center gap-2 text-2xs">
+              <span className="text-base-content/50">
+                {t("settings.gateway.proxy.proxyPort")}: <code className="font-mono">{proxy.proxy_port}</code>
+              </span>
+              {proxyNodes.length > 0 && (
+                <div className="flex flex-col gap-1">
+                  {proxyNodes.map((g) => (
+                    <label key={g.name} className="flex items-center gap-1.5">
+                      <span className="text-base-content/50">{g.name}:</span>
+                      <select
+                        className="select select-2xs w-auto font-mono"
+                        value={g.now}
+                        onChange={(e) => selectNode(g.name, e.target.value)}
+                      >
+                        {g.options.map((opt) => (
+                          <option key={opt} value={opt}>{opt}</option>
+                        ))}
+                      </select>
+                    </label>
+                  ))}
+                </div>
+              )}
+              {proxyNodes.length === 0 && (
+                <span className="text-base-content/40">{t("settings.gateway.proxy.noNodes")}</span>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

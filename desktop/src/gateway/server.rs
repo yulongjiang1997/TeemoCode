@@ -590,7 +590,7 @@ pub(crate) async fn run_buffered(
     let mut usage_out = Usage { prompt_tokens: Some(prompt_est), completion_tokens: None };
     for cand in &plan {
         host.update_pending_model(request_id, &cand.model);
-        match upstream::call_buffered(host.client(), cand, &incoming, &ctx, timeout).await {
+        match upstream::call_buffered(&host.client(), cand, &incoming, &ctx, timeout).await {
             Ok(reply) => {
                 host.record_attempt(&group.group.id, &cand.id, true);
                 attempts.push(AttemptNote {
@@ -727,7 +727,7 @@ fn handle_streaming(
                 request_id,
                 if cand.model.is_empty() { &cand.label } else { &cand.model },
             );
-            match upstream::open_stream(host.client(), cand, &incoming, &ctx, timeout).await {
+            match upstream::open_stream(&host.client(), cand, &incoming, &ctx, timeout).await {
                 Ok((reply, model)) => {
                     let display_model = if model.is_empty() { cand.label.clone() } else { model.clone() };
                     host.record_attempt(&group.group.id, &cand.id, true);
