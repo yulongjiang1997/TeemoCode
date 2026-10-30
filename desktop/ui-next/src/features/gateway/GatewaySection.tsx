@@ -16,6 +16,7 @@ import {
   gatewayLogCount,
   gatewayLogDetail,
   gatewayProbeGroup,
+  gatewayProbeModel,
   gatewayRegenKey,
   gatewayResetModelHealth,
   gatewaySaveGroup,
@@ -23,6 +24,7 @@ import {
   gatewayUpdateSettings,
   type GatewayLogEntry,
   type GatewayLogFilter,
+  type GatewayProbeModelResult,
   type GatewayStatus,
   type GroupModel,
   type ModelGroup,
@@ -138,6 +140,9 @@ export function GatewaySection() {
   /** 远端模型列表拉取(2026-09-14):key = 行下标(idx),value = { ids, error } */
   const [fetched, setFetched] = useState<Record<number, { ids: string[]; error?: string }>>({});
   const [fetching, setFetching] = useState<Set<number>>(new Set());
+  /** 编辑表单单模型探测(2026-10-30):key = 行下标(idx) */
+  const [modelProbe, setModelProbe] = useState<Record<number, GatewayProbeModelResult>>({});
+  const [modelProbing, setModelProbing] = useState<Set<number>>(new Set());
   const [log, setLog] = useState<GatewayLogEntry[]>([]);
   const [logFilter, setLogFilter] = useState<{
     group_id: string;
@@ -280,6 +285,8 @@ export function GatewaySection() {
       .then(() => {
         setEdit(null);
         setExpanded(null);
+        setModelProbe({});
+        setModelProbing(new Set());
         refresh();
       })
       .catch((e) => {
@@ -355,6 +362,45 @@ export function GatewaySection() {
       setFetched((prev) => ({ ...prev, [idx]: { ids: [], error: e instanceof Error ? e.message : String(e) } }));
     } finally {
       const rest = new Set(fetching); rest.delete(idx); setFetching(rest);
+    }
+  };
+
+  /** 编辑表单单模型探测(2026-10-30):用当前行的连接参数直接探测,
+   *  不依赖已保存的组——保存前即可验证模型可用性。
+   *  引用模型库时,从 library 解析出 base_url/api_key/model 再探测。 */
+  const probeModel = async (idx: number) => {
+    if (!edit || modelProbing.has(idx)) return;
+    const m = edit.models[idx];
+    if (!m) return;
+    // 引用模型库:从 library 解析连接信息
+    let provider = m.provider;
+    let baseUrl = m.base_url;
+    let apiKey = m.api_key;
+    let model = m.model;
+    if (m.alias !== "") {
+      const lib = library.find((lm) => lm.name === m.alias);
+      if (!lib) return;
+      provider = lib.provider;
+      baseUrl = lib.base_url;
+      apiKey = lib.api_key;
+      model = lib.model;
+    }
+    if (!model.trim() || !baseUrl.trim()) return;
+    const next = new Set(modelProbing); next.add(idx); setModelProbing(next);
+    setModelProbe((prev) => {
+      const { [idx]: _, ...rest } = prev;
+      return rest;
+    });
+    try {
+      const r = await gatewayProbeModel(provider, baseUrl, apiKey, model);
+      setModelProbe((prev) => ({ ...prev, [idx]: r }));
+    } catch (e) {
+      setModelProbe((prev) => ({
+        ...prev,
+        [idx]: { ok: false, latency_ms: 0, error: e instanceof Error ? e.message : String(e) },
+      }));
+    } finally {
+      const rest = new Set(modelProbing); rest.delete(idx); setModelProbing(rest);
     }
   };
 
@@ -546,6 +592,38 @@ export function GatewaySection() {
                   </span>
                 )}
                 <span className="flex-1" />
+                {/* 单模型测试(2026-10-30):不依赖已保存的组,直接用当前行参数探测 */}
+                {(() => {
+                  // 判断当前行是否有足够参数可测试
+                  const canTest = isRef
+                    ? !!library.find((lm) => lm.name === m.alias)
+                    : !!(m.model.trim() && m.base_url.trim());
+                  const probingThis = modelProbing.has(idx);
+                  const result = modelProbe[idx];
+                  return (
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        disabled={!canTest || probingThis}
+                        onClick={() => probeModel(idx)}
+                        title={!canTest ? t("settings.gateway.model.testFailed") : undefined}
+                      >
+                        {probingThis
+                          ? <span className="loading loading-spinner loading-xs" aria-hidden />
+                          : <IconRefresh size={12} stroke={1.75} aria-hidden />}
+                        {t("settings.gateway.model.test")}
+                      </button>
+                      {result && (
+                        <span className={`font-mono text-2xs ${result.ok ? "text-success" : "text-error"}`} title={result.error}>
+                          {result.ok
+                            ? t("settings.gateway.model.testOk", { latency: result.latency_ms })
+                            : t("settings.gateway.model.testFailed")}
+                        </span>
+                      )}
+                    </>
+                  );
+                })()}
                 <button
                   type="button"
                   className="btn btn-ghost btn-xs"
@@ -703,7 +781,7 @@ export function GatewaySection() {
         <button type="button" className="btn btn-primary btn-sm" disabled={busy || !edit.name.trim()} onClick={save}>
           {t("settings.gateway.save")}
         </button>
-        <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setEdit(null)}>
+        <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => { setEdit(null); setModelProbe({}); setModelProbing(new Set()); }}>
           {t("settings.gateway.cancel")}
         </button>
       </div>

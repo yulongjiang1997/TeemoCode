@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.51",
+    notes: "大模型网关模型组编辑页面支持单个测试已添加的模型(保存前即可验证 provider/base_url/api_key/model 是否可用,引用模型库时自动解析连接信息)",
+  },
+  {
     version: "0.1.50",
     notes: "可选 Codex 引擎与隔离工作区；项目规则与会话导出；复制回答、不死不休自动续跑；文件改动可丢弃或整树回滚；网关支持 /v1/responses；公式渲染与补丁预览；新建任务可选技能并暂存草稿；Ctrl+Enter 换行；Markdown 预览；关掉网关后发送不再卡思考；双击最大化后标题栏仍可拖动",
   },

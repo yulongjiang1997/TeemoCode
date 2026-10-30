@@ -238,6 +238,32 @@ export interface GatewayProbeResult {
   models: GatewayProbeModel[];
 }
 
+/** 单模型探测结果(gateway_probe_model)。编辑表单中逐个测试模型用。 */
+export interface GatewayProbeModelResult {
+  ok: boolean;
+  latency_ms: number;
+  error?: string;
+}
+
+/** 单模型探测(2026-10-30):编辑表单中逐个测试已添加的模型,不依赖
+ * 已保存的组——直接用连接参数发起探测。用于保存前验证模型可用性。
+ * timeout_ms:探测超时(毫秒),默认 15000。 */
+export async function gatewayProbeModel(
+  provider: string,
+  baseUrl: string,
+  apiKey: string,
+  model: string,
+  timeoutMs?: number,
+): Promise<GatewayProbeModelResult> {
+  return invoke<GatewayProbeModelResult>("gateway_probe_model", {
+    provider,
+    baseUrl,
+    apiKey,
+    model,
+    timeoutMs: timeoutMs ?? null,
+  });
+}
+
 /** 用户自建厂商预设(对表 Rust VendorPreset)。 */
 export interface VendorPreset {
   id: string;

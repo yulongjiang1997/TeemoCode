@@ -1794,6 +1794,70 @@ pub async fn gateway_probe_group(app: AppHandle, id: String, timeout_ms: Option<
     Ok(serde_json::json!({ "id": id, "models": arr }))
 }
 
+/// 单模型探测(2026-10-30):编辑表单中逐个测试已添加的模型,不依赖
+/// 已保存的组——直接用前端传入的连接参数构造临时候选发起一次最小请求。
+/// 用于在保存前验证 provider/base_url/api_key/model 是否可用。
+#[tauri::command]
+pub async fn gateway_probe_model(
+    app: AppHandle,
+    provider: String,
+    base_url: String,
+    api_key: String,
+    model: String,
+    timeout_ms: Option<u64>,
+) -> Result<serde_json::Value, String> {
+    if model.trim().is_empty() {
+        return Err("模型标识不能为空".to_string());
+    }
+    if base_url.trim().is_empty() {
+        return Err("base_url 不能为空".to_string());
+    }
+    let host = app.state::<GatewayHost>().inner().clone();
+    let client = host.client().clone();
+    let probe_timeout_ms = timeout_ms.unwrap_or(15000).max(500);
+    let probe_timeout = std::time::Duration::from_millis(probe_timeout_ms);
+    let cand = ResolvedCandidate {
+        id: String::new(),
+        label: String::new(),
+        weight: 1,
+        provider: provider.clone(),
+        base_url: base_url.clone(),
+        api_key: api_key.clone(),
+        model: model.clone(),
+        unavailable: None,
+    };
+    // 组级上下文用缺省值:max_output=1(仅探测连通性)、无温度、无系统提示词
+    let ctx = upstream::GroupCtx {
+        max_output: 1,
+        temperature: None,
+        system_prompt: String::new(),
+    };
+    let body = serde_json::json!({
+        "model": &cand.model,
+        "messages": [{ "role": "user", "content": "hi" }],
+        "max_tokens": 1,
+    });
+    let started = std::time::Instant::now();
+    let result = tokio::time::timeout(
+        probe_timeout,
+        upstream::call_buffered(&client, &cand, &body, &ctx, probe_timeout),
+    ).await;
+    let latency = started.elapsed().as_millis() as u64;
+    Ok(match result {
+        Err(_) => serde_json::json!({
+            "ok": false, "latency_ms": latency,
+            "error": format!("探测超时({probe_timeout_ms}ms)"),
+        }),
+        Ok(Ok(_reply)) => serde_json::json!({
+            "ok": true, "latency_ms": latency,
+        }),
+        Ok(Err(e)) => serde_json::json!({
+            "ok": false, "latency_ms": latency,
+            "error": e.message(),
+        }),
+    })
+}
+
 /// 网关配置变更后同步物化引擎模型条目(组名 → 引擎 settings.models):
 /// 引擎在跑时 settings 不随 config.json 自动刷新,不物化则工作区切到
 /// 新组报「未知模型」。失败仅记日志——网关自身照常工作,模型条目下次

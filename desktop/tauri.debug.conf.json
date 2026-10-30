@@ -64,6 +64,7 @@
             "allow-gateway-status",
             "allow-gateway-test-group",
             "allow-gateway-probe-group",
+            "allow-gateway-probe-model",
             "allow-gateway-save-vendors",
             "allow-gateway-reset-model-health",
             "allow-gateway-update-settings",

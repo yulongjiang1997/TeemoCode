@@ -90,6 +90,7 @@ fn main() {
                 "gateway_regen_key",
                 "gateway_test_group",
                 "gateway_probe_group",
+                "gateway_probe_model",
                 "gateway_save_vendors",
                 "gateway_reset_model_health",
                 // 工作区记忆(memory.rs:.monkeycode/MEMORY.md 面板)

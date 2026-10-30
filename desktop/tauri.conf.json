@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "TeemoCode",
   "mainBinaryName": "TeemoCode",
-  "version": "0.1.50",
+  "version": "0.1.51",
   "identifier": "com.teemocode.desktop",
   "build": {
     "frontendDist": "uidist",
@@ -64,6 +64,7 @@
             "allow-gateway-status",
             "allow-gateway-test-group",
             "allow-gateway-probe-group",
+            "allow-gateway-probe-model",
             "allow-gateway-save-vendors",
             "allow-gateway-reset-model-health",
             "allow-gateway-update-settings",

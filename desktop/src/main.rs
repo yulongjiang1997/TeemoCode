@@ -1967,6 +1967,7 @@ fn main() {
             notification::set_notification_enabled,
             gateway::gateway_test_group,
             gateway::gateway_probe_group,
+            gateway::gateway_probe_model,
             gateway::gateway_save_vendors,
             gateway::gateway_reset_model_health,
             memory::memory_read,
