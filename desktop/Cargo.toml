@@ -26,7 +26,7 @@ tauri-plugin-notification = "2"
 
 # 引擎驱动层:壳直连 agent 内核(REST/WS/stdio),UI 只经 Tauri IPC
 # rustls 而非系统 openssl:老发行版无需系统 TLS 依赖
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "multipart"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "multipart", "gzip"] }
 tokio = { version = "1", features = ["sync", "time", "macros", "io-util", "process", "fs"] }
 # rustls-tls-webpki-roots 不能少:云端桥拨的是 wss,缺 TLS feature 时
 # connect_async 直接报 "TLS support not compiled in",所有云端 WS 秒败
@@ -54,6 +54,9 @@ serde_yaml = "0.9"
 # mihomo 内核 zip 解压(Windows);.gz 解压(非 Windows)
 flate2 = "1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# 读 Windows 系统代理(注册表 ProxyServer),内核下载走系统代理
+[target.'cfg(target_os = "windows")'.dependencies.winreg]
+version = "0.52"
 
 [dev-dependencies]
 # baizhi 集成测试:假服务端 + async 测试运行时

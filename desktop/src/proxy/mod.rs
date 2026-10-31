@@ -26,7 +26,7 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::config::{config_dir, load_config};
 
@@ -135,7 +135,7 @@ pub struct ProxyManager(pub Arc<ProxyInner_>);
 
 pub struct ProxyInner_ {
     inner: Mutex<ProxyInner>,
-    app: AppHandle,
+    pub(crate) app: AppHandle,
 }
 
 impl ProxyManager {
@@ -208,79 +208,199 @@ impl ProxyManager {
         }
     }
 
-    /// 下载 mihomo 内核(首次启动时自动调用)
-    async fn ensure_kernel(&self) -> Result<(), String> {
-        let path = Self::kernel_path(&self.0.app);
-        if path.exists() {
-            self.0.inner.lock().kernel_ready = true;
-            return Ok(());
-        }
-        let url = mihomo_download_url();
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(120))
-            .build()
-            .map_err(|e| format!("创建下载客户端失败: {e}"))?;
-        let resp = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| format!("下载内核失败: {e}"))?;
-        if !resp.status().is_success() {
-            return Err(format!("下载内核失败: HTTP {}", resp.status()));
-        }
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| format!("读取内核数据失败: {e}"))?;
+/// 下载 mihomo 内核(首次启动时自动调用)。
+///
+/// 内核从 GitHub 下载。中国大陆网络通常无法直连 GitHub,因此:
+/// 1. 优先走系统代理(Windows 注册表 ProxyServer)——用户本地若有
+///    Clash 等代理,下载也能成功;
+/// 2. 多镜像源:官方 GitHub + ghproxy 镜像,逐个尝试。
+/// 3. 启用 gzip 解码(GitHub 可能返回压缩响应)。
+async fn ensure_kernel(&self) -> Result<(), String> {
+    let path = Self::kernel_path(&self.0.app);
+    if path.exists() {
+        self.0.inner.lock().kernel_ready = true;
+        return Ok(());
+    }
+    let url = mihomo_download_url();
+    // 候选下载源:官方 + ghproxy 镜像(内地常用)
+    let sources = vec![
+        url.clone(),
+        format!("https://mirror.ghproxy.com/{url}"),
+        format!("https://ghfast.top/{url}"),
+        format!("https://ghproxy.net/{url}"),
+    ];
+    let dir = Self::data_dir(&self.0.app);
 
-        let dir = Self::data_dir(&self.0.app);
-        if cfg!(target_os = "windows") {
-            // .zip:提取 mihomo.exe
-            let cursor = std::io::Cursor::new(&bytes[..]);
-            let mut archive = zip::ZipArchive::new(cursor)
-                .map_err(|e| format!("解压内核失败: {e}"))?;
-            for i in 0..archive.len() {
-                let mut file = archive
-                    .by_index(i)
-                    .map_err(|e| format!("读取压缩包条目失败: {e}"))?;
-                let name = file.name().to_string();
-                // 取第一个可执行文件名(可能是 mihomo-windows-amd64-vX.Y.Z.exe)
-                if name.ends_with(".exe") {
-                    let out_path = dir.join("mihomo.exe");
-                    let mut out = std::fs::File::create(&out_path)
-                        .map_err(|e| format!("写入内核文件失败: {e}"))?;
-                    std::io::copy(&mut file, &mut out)
-                        .map_err(|e| format!("写入内核数据失败: {e}"))?;
-                    break;
+    // 直连客户端(镜像站国内可直连)
+    let direct = reqwest::Client::builder()
+        .timeout(Duration::from_secs(180))
+        .connect_timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("创建下载客户端失败: {e}"))?;
+    // 代理客户端(官方 GitHub 需代理;走系统代理)
+    let proxy_client = if let Some(proxy) = system_proxy() {
+        let built: Option<Result<reqwest::Client, reqwest::Error>> =
+            match reqwest::Proxy::all(&proxy) {
+                Ok(p) => Some(
+                    reqwest::Client::builder()
+                        .timeout(Duration::from_secs(180))
+                        .connect_timeout(Duration::from_secs(15))
+                        .proxy(p)
+                        .build(),
+                ),
+                Err(e) => {
+                    eprintln!("[proxy] 系统代理 {proxy} 配置失败: {e}");
+                    None
+                }
+            };
+        match built {
+            Some(Ok(c)) => {
+                eprintln!("[proxy] 内核下载可用系统代理: {proxy}");
+                Some(c)
+            }
+            Some(Err(e)) => {
+                eprintln!("[proxy] 系统代理 {proxy} 不可用: {e}");
+                None
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+
+    let mut last_err = String::new();
+    for (i, src) in sources.iter().enumerate() {
+        // 先直连,再代理(逐源尝试)
+        let mut clients: Vec<(&reqwest::Client, &str)> = vec![(&direct, "直连")];
+        if let Some(pc) = &proxy_client {
+            clients.push((pc, "代理"));
+        }
+        for (client, mode) in clients.iter() {
+            eprintln!("[proxy] 尝试内核[{}/{}]{}: {src}", i + 1, sources.len(), mode);
+            match download_and_extract(client, src, &dir, cfg!(target_os = "windows")).await {
+                Ok(()) => {
+                    self.0.inner.lock().kernel_ready = true;
+                    eprintln!("[proxy] 内核下载成功({mode}): {}", path.display());
+                    return Ok(());
+                }
+                Err(e) => {
+                    eprintln!("[proxy] 源 {src} {mode} 失败: {e}");
+                    last_err = e;
                 }
             }
-        } else {
-            // .gz:直接解压
-            let cursor = std::io::Cursor::new(&bytes[..]);
-            let mut decoder = flate2::read::GzDecoder::new(cursor);
-            let out_path = dir.join("mihomo");
-            let mut out = std::fs::File::create(&out_path)
-                .map_err(|e| format!("写入内核文件失败: {e}"))?;
-            std::io::copy(&mut decoder, &mut out)
-                .map_err(|e| format!("写入内核数据失败: {e}"))?;
-            // 设可执行权限
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(0o755));
-            }
         }
-        if !path.exists() {
-            return Err("内核下载后文件不存在".to_string());
+    }
+    Err(format!("内核下载失败(已试 {} 个源 × 直连/代理): {last_err}", sources.len()))
+}
+}
+
+/// 读取 Windows 系统代理(注册表 ProxyServer)。非 Windows 或未设置返回 None。
+fn system_proxy() -> Option<String> {
+    #[cfg(target_os = "windows")]
+    {
+        let key = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+            .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Internet Settings")
+            .ok()?;
+        let enabled: u32 = key.get_value("ProxyEnable").unwrap_or(0);
+        if enabled == 0 {
+            return None;
         }
-        self.0.inner.lock().kernel_ready = true;
-        Ok(())
+        let server: String = key.get_value("ProxyServer").ok()?;
+        // 注册表可能返回 "host:port" 或 "http=host:port;https=host:port"
+        let server = server.split(';').next().unwrap_or(&server).trim().to_string();
+        if server.is_empty() {
+            return None;
+        }
+        if server.starts_with("http://") || server.starts_with("https://") || server.starts_with("socks") {
+            return Some(server);
+        }
+        return Some(format!("http://{server}"));
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        None
+    }
+}
+
+/// 下载并解压内核。windows = 处理 .zip,否则处理 .gz。
+async fn download_and_extract(
+    client: &reqwest::Client,
+    url: &str,
+    dir: &std::path::Path,
+    windows: bool,
+) -> Result<(), String> {
+    let resp = client
+        .get(url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("读取响应体失败: {e}"))?;
+    if bytes.len() < 100_000 {
+        return Err(format!("响应体过小({}B),可能被拦截", bytes.len()));
     }
 
+    if windows {
+        // .zip:提取可执行文件
+        let cursor = std::io::Cursor::new(&bytes[..]);
+        let mut archive = zip::ZipArchive::new(cursor)
+            .map_err(|e| format!("解压 zip 失败: {e}"))?;
+        let mut extracted = false;
+        for i in 0..archive.len() {
+            let mut file = archive
+                .by_index(i)
+                .map_err(|e| format!("读取压缩包条目失败: {e}"))?;
+            let name = file.name().to_string();
+            if name.ends_with(".exe") {
+                let out_path = dir.join("mihomo.exe");
+                let mut out = std::fs::File::create(&out_path)
+                    .map_err(|e| format!("写入内核文件失败: {e}"))?;
+                std::io::copy(&mut file, &mut out)
+                    .map_err(|e| format!("写入内核数据失败: {e}"))?;
+                extracted = true;
+                break;
+            }
+        }
+        if !extracted {
+            return Err("zip 中未找到 .exe 文件".to_string());
+        }
+    } else {
+        // .gz:直接解压
+        let cursor = std::io::Cursor::new(&bytes[..]);
+        let mut decoder = flate2::read::GzDecoder::new(cursor);
+        let out_path = dir.join("mihomo");
+        let mut out = std::fs::File::create(&out_path)
+            .map_err(|e| format!("写入内核文件失败: {e}"))?;
+        std::io::copy(&mut decoder, &mut out)
+            .map_err(|e| format!("写入内核数据失败: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+    Ok(())
+}
+
+impl ProxyManager {
     /// 拉取订阅并生成 mihomo 配置
     async fn fetch_subscription(&self, url: &str) -> Result<String, String> {
-        let client = reqwest::Client::builder()
+        // 订阅链接可能在境外,同样走系统代理提高成功率
+        let mut builder = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(15));
+        if let Some(proxy) = system_proxy() {
+            if let Ok(p) = reqwest::Proxy::all(&proxy) {
+                builder = builder.proxy(p);
+            }
+        }
+        let client = builder
             .build()
             .map_err(|e| format!("创建订阅拉取客户端失败: {e}"))?;
         let resp = client
