@@ -34,6 +34,9 @@ use crate::config::{config_dir, load_config};
 const MIHOMO_VERSION: &str = "1.18.10";
 /// 代理监听端口(订阅配置中 mixed-port 优先,否则用此默认值)
 const DEFAULT_PROXY_PORT: u16 = 7897;
+/// 复用系统内核(Clash Verge 自带)时的独立端口:系统 Clash 通常已占用
+/// 7897,复用其内核再起一份必须用独立端口,避免端口冲突(仿 plantHelper)。
+const SYSTEM_CORE_PORT: u16 = 17897;
 /// mihomo RESTful API 端口(查代理列表/切换节点)
 const MIHOMO_API_PORT: u16 = 12090;
 /// mihomo API secret(简单防误访)
@@ -128,6 +131,9 @@ struct ProxyInner {
     error: Option<String>,
     /// 内核是否已下载
     kernel_ready: bool,
+    /// 实际使用的内核路径(缓存/系统复用/下载)。
+    /// 优先于 kernel_path():系统内核可能因文件锁复制失败,直接 spawn 原路径。
+    kernel_used: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -146,6 +152,7 @@ impl ProxyManager {
                 proxy_port: DEFAULT_PROXY_PORT,
                 error: None,
                 kernel_ready: false,
+                kernel_used: None,
             }),
             app,
         }))
@@ -208,19 +215,76 @@ impl ProxyManager {
         }
     }
 
+/// 检测系统已有的 mihomo 内核(仿 plantHelper findCore)。
+/// 复用 Clash Verge / Clash Party 自带的 mihomo 二进制,避免从 GitHub 下载
+/// (内地网络通常无法直连 GitHub)。找不到返回 None。
+fn find_system_core() -> Option<PathBuf> {
+    // Windows 常见安装路径(Clash Verge / Clash Party / Clash Verge Rev)
+    #[cfg(target_os = "windows")]
+    {
+        let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let candidates = vec![
+            "C:\\Program Files\\Clash Verge\\verge-mihomo.exe".to_string(),
+            "C:\\Program Files\\Clash Party\\resources\\sidecar\\mihomo.exe".to_string(),
+            format!("{}\\io.github.clash-verge-rev.clash-verge-rev\\verge-mihomo.exe", local),
+        ];
+        for c in candidates {
+            let p = PathBuf::from(&c);
+            if p.exists() {
+                eprintln!("[proxy] 复用系统内核: {}", p.display());
+                return Some(p);
+            }
+        }
+        None
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // 非 Windows:查找 PATH 中的 mihomo / clash
+        let path = std::env::var("PATH").unwrap_or_default();
+        let sep = if cfg!(target_os = "windows") { ';' } else { ':' };
+        for dir in path.split(sep) {
+            let p = PathBuf::from(dir).join("mihomo");
+            if p.exists() {
+                return Some(p);
+            }
+            let p = PathBuf::from(dir).join("clash");
+            if p.exists() {
+                return Some(p);
+            }
+        }
+        None
+    }
+}
+
 /// 下载 mihomo 内核(首次启动时自动调用)。
 ///
-/// 内核从 GitHub 下载。中国大陆网络通常无法直连 GitHub,因此:
-/// 1. 优先走系统代理(Windows 注册表 ProxyServer)——用户本地若有
-///    Clash 等代理,下载也能成功;
-/// 2. 多镜像源:官方 GitHub + ghproxy 镜像,逐个尝试。
-/// 3. 启用 gzip 解码(GitHub 可能返回压缩响应)。
+/// 获取顺序:
+/// 1. 数据目录已有缓存内核(之前下载/复制的)→ 直接用;
+/// 2. 系统已有 mihomo 内核(Clash Verge / Clash Party 自带的)→ 复制到数据目录;
+/// 3. 都没有 → 从 GitHub 下载(大陆网络通常无法直连,因此:
+///    - 优先走系统代理(Windows 注册表 ProxyServer);
+///    - 多镜像源:官方 GitHub + ghproxy 镜像,逐个尝试;
+///    - 启用 gzip 解码(GitHub 可能返回压缩响应))。
 async fn ensure_kernel(&self) -> Result<(), String> {
     let path = Self::kernel_path(&self.0.app);
+    // 1. 数据目录已有缓存内核(之前下载/复制的)→ 直接用
     if path.exists() {
         self.0.inner.lock().kernel_ready = true;
+        eprintln!("[proxy] 内核已缓存: {}", path.display());
+        // 缓存路径可能来自之前的下载;若数据目录内核版本过旧且系统有更新版,
+        // 用户仍可手动清理,这里不强制覆盖
+        self.0.inner.lock().kernel_used = Some(path.clone());
         return Ok(());
     }
+    // 2. 系统已有 mihomo 内核 → 直接用原路径 spawn(不复制,避免文件锁失败;
+    //    plantHelper 同款做法:复用 Clash Verge / Clash Party 自带内核)
+    if let Some(system_core) = Self::find_system_core() {
+        self.0.inner.lock().kernel_ready = true;
+        self.0.inner.lock().kernel_used = Some(system_core.clone());
+        eprintln!("[proxy] 复用系统内核: {}", system_core.display());
+        return Ok(());
+    }
+    // 3. 都没有 → 从 GitHub 下载
     let url = mihomo_download_url();
     // 候选下载源:官方 + ghproxy 镜像(内地常用)
     let sources = vec![
@@ -280,6 +344,7 @@ async fn ensure_kernel(&self) -> Result<(), String> {
             match download_and_extract(client, src, &dir, cfg!(target_os = "windows")).await {
                 Ok(()) => {
                     self.0.inner.lock().kernel_ready = true;
+                    self.0.inner.lock().kernel_used = Some(path.clone());
                     eprintln!("[proxy] 内核下载成功({mode}): {}", path.display());
                     return Ok(());
                 }
@@ -389,8 +454,9 @@ async fn download_and_extract(
 }
 
 impl ProxyManager {
-    /// 拉取订阅并生成 mihomo 配置
-    async fn fetch_subscription(&self, url: &str) -> Result<String, String> {
+    /// 拉取订阅并生成 mihomo 配置。
+    /// `force_mixed_port`:复用系统内核时强制用独立端口(避免与系统 Clash 冲突)。
+    async fn fetch_subscription(&self, url: &str, force_mixed_port: Option<u16>) -> Result<String, String> {
         // 订阅链接可能在境外,同样走系统代理提高成功率
         let mut builder = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
@@ -431,11 +497,18 @@ impl ProxyManager {
                 serde_yaml::Value::String("secret".into()),
                 serde_yaml::Value::String(MIHOMO_API_SECRET.into()),
             );
-            // 确保 mixed-port 存在(若订阅未指定则用默认值)
+            // 确保 mixed-port 存在(若订阅未指定则用默认值;复用系统内核则用独立端口)
+            let mixed_port = force_mixed_port.unwrap_or(DEFAULT_PROXY_PORT);
             if !m.contains_key(serde_yaml::Value::String("mixed-port".into())) {
                 m.insert(
                     serde_yaml::Value::String("mixed-port".into()),
-                    serde_yaml::Value::Number(serde_yaml::Number::from(DEFAULT_PROXY_PORT)),
+                    serde_yaml::Value::Number(serde_yaml::Number::from(mixed_port)),
+                );
+            } else if let Some(fp) = force_mixed_port {
+                // 复用系统内核:强制覆盖订阅里的 mixed-port(可能 = 7897 被系统占用)
+                m.insert(
+                    serde_yaml::Value::String("mixed-port".into()),
+                    serde_yaml::Value::Number(serde_yaml::Number::from(fp)),
                 );
             }
             // 禁止 mihomo 的 DNS 劫持(避免干扰本机 DNS)
@@ -476,14 +549,30 @@ impl ProxyManager {
         // 1. 确保内核已下载
         self.ensure_kernel().await?;
 
+        // 复用系统内核(Clash Verge 自带)时用独立端口,避免与系统 Clash 冲突
+        let kernel_used = self.0.inner.lock().kernel_used.clone();
+        let is_system_core = kernel_used.as_ref().map_or(false, |k| {
+            Self::find_system_core().as_ref().map_or(false, |sys| sys == k)
+        });
+
         // 2. 拉取订阅(每次启动都刷新,获取最新节点)
-        self.fetch_subscription(&cfg.subscription_url).await?;
+        self.fetch_subscription(
+            &cfg.subscription_url,
+            if is_system_core { Some(SYSTEM_CORE_PORT) } else { None },
+        )
+        .await?;
 
         // 3. 先停掉旧进程
         self.stop_sync();
 
-        // 4. 启动 mihomo
-        let kernel = Self::kernel_path(&self.0.app);
+        // 4. 启动 mihomo(优先用 ensure_kernel 确定的内核路径:缓存/系统复用/下载)
+        let kernel = self
+            .0
+            .inner
+            .lock()
+            .kernel_used
+            .clone()
+            .unwrap_or_else(|| Self::kernel_path(&self.0.app));
         let data_dir = Self::data_dir(&self.0.app);
         let config_path = Self::config_path(&self.0.app);
 

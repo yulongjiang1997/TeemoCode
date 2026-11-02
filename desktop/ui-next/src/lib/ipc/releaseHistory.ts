@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.53",
+    notes: "代理内核获取优化:优先复用本机已有的代理内核(Clash Verge / Clash Party 自带),无需从网络下载;本机没有时才回退到下载(自动走系统代理和镜像源)",
+  },
+  {
     version: "0.1.52",
     notes: "内置代理功能:填入 Clash 订阅链接即可自动下载 mihomo 内核、拉取订阅、启动本地代理服务;网关流量自动走代理,无需 Clash Verge 等外部工具;支持节点列表查看与切换",
   },
