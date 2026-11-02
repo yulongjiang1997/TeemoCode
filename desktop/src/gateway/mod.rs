@@ -214,6 +214,10 @@ pub struct GroupModel {
     pub api_key: String,
     #[serde(default)]
     pub model: String,
+    /// 是否走代理(2026-10-31):None=跟随模型库配置,Some(true)=强制走代理,
+    /// Some(false)=强制不走。组内单独配置,修改不影响模型库的原配置。
+    #[serde(default)]
+    pub proxy: Option<bool>,
 }
 
 pub(crate) fn new_hex(bytes: usize) -> String {
@@ -338,6 +342,10 @@ pub struct ResolvedCandidate {
     pub api_key: String,
     pub model: String,
     pub unavailable: Option<String>,
+    /// 是否走代理(2026-10-31):最终决定值。None=模型库未配置或 false;
+    /// Some(proxy_url)=走代理。由 build_snapshot 按 GroupModel.proxy →
+    /// 模型库 proxy_enabled 解析。
+    pub proxy: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -385,7 +393,7 @@ pub(crate) fn build_snapshot(
             if !m.enabled {
                 continue;
             }
-            let (label, provider, base_url, api_key, model, unavailable) = if m.alias.is_empty() {
+            let (label, provider, base_url, api_key, model, unavailable, proxy) = if m.alias.is_empty() {
                 (
                     if m.model.is_empty() { "自定义".to_string() } else { m.model.clone() },
                     m.provider.clone(),
@@ -393,6 +401,7 @@ pub(crate) fn build_snapshot(
                     m.api_key.clone(),
                     m.model.clone(),
                     None,
+                    m.proxy.unwrap_or(false),
                 )
             } else {
                 match model_index.get(m.alias.as_str()) {
@@ -403,6 +412,7 @@ pub(crate) fn build_snapshot(
                         String::new(),
                         String::new(),
                         Some(format!("模型库中不存在「{}」(可能已删除或改名)", m.alias)),
+                        m.proxy.unwrap_or(false),
                     ),
                     Some(entry) => {
                         let get = |k: &str| entry.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -420,7 +430,9 @@ pub(crate) fn build_snapshot(
                         };
                         let unavailable =
                             if model.is_empty() { Some(format!("模型库条目「{}」缺少模型标识", m.alias)) } else { None };
-                        (m.alias.clone(), provider, base_url, api_key, model, unavailable)
+                        // 跟随模型库配置:模型库 proxy_enabled=true → 走代理;组内 proxy=Some 覆盖
+                        let lib_proxy = entry.get("proxy_enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+                        (m.alias.clone(), provider, base_url, api_key, model, unavailable, m.proxy.unwrap_or(lib_proxy))
                     }
                 }
             };
@@ -433,6 +445,7 @@ pub(crate) fn build_snapshot(
                 api_key,
                 model,
                 unavailable,
+                proxy,
             });
         }
         groups.push(RuntimeGroup { group: group.clone(), candidates });
@@ -1101,6 +1114,9 @@ pub(crate) struct GatewayInner {
     /// 服务侧错误(端口被占等),UI 外显;服务正常时为 None。
     server_error: StdMutex<Option<String>>,
     client: StdMutex<reqwest::Client>,
+    /// 代理客户端(2026-10-31):走内置代理的模型用此 client。
+    /// 代理未启动时为 None → 回退到直连 client。
+    client_proxy: StdMutex<Option<reqwest::Client>>,
     /// reload 串行闸(保存/重启并发时避免两个线程同时折腾监听线程)。
     reload_gate: StdMutex<()>,
     /// 请求序号(用于 pending→complete 匹配)。
@@ -1135,6 +1151,7 @@ impl GatewayHost {
             server: StdMutex::new(None),
             server_error: StdMutex::new(None),
             client: StdMutex::new(client),
+            client_proxy: StdMutex::new(None),
             reload_gate: StdMutex::new(()),
             log_stats: build_log_store().map(Arc::new),
             log_persistence: build_log_persistence().map(Arc::new),
@@ -1152,17 +1169,36 @@ impl GatewayHost {
         self.0.client.lock_ok().clone()
     }
 
-    /// 重建 reqwest client(代理状态变更后调用)。
-    pub(crate) fn rebuild_client(&self, proxy_url: Option<&str>) {
-        let mut builder = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(10));
-        if let Some(url) = proxy_url {
-            if let Ok(p) = reqwest::Proxy::all(url) {
-                builder = builder.proxy(p);
+    /// 按候选的代理配置选择 client(2026-10-31)。
+    /// proxy=true → 代理 client(若代理未启动则回退直连);
+    /// proxy=false → 直连 client。
+    pub(crate) fn client_for(&self, proxy: bool) -> reqwest::Client {
+        if proxy {
+            if let Some(c) = self.0.client_proxy.lock_ok().as_ref() {
+                return c.clone();
             }
         }
-        let client = builder.build().unwrap_or_default();
-        *self.0.client.lock_ok() = client;
+        self.0.client.lock_ok().clone()
+    }
+
+    /// 重建代理 client(代理状态变更后调用)。
+    /// proxy_url=Some → 创建走代理的 client;None → 清除代理 client(回退直连)。
+    pub(crate) fn rebuild_client(&self, proxy_url: Option<&str>) {
+        match proxy_url {
+            Some(url) => {
+                if let Ok(p) = reqwest::Proxy::all(url) {
+                    let c = reqwest::Client::builder()
+                        .connect_timeout(std::time::Duration::from_secs(10))
+                        .proxy(p)
+                        .build()
+                        .unwrap_or_default();
+                    *self.0.client_proxy.lock_ok() = Some(c);
+                    return;
+                }
+            }
+            None => {}
+        }
+        *self.0.client_proxy.lock_ok() = None;
     }
 
     pub(crate) fn health_map(&self) -> std::sync::MutexGuard<'_, HashMap<String, sched::ModelHealth>> {
@@ -1597,7 +1633,6 @@ fn spawn_latency_probe(host: GatewayHost, snapshot: &RuntimeSnapshot) {
                     continue;
                 }
                 let ctx = upstream::GroupCtx::of(&rg.group);
-                let client = host.client();
                 let group_id = rg.group.id.clone();
                 let group_name = rg.group.name.clone();
                 for cand in &rg.candidates {
@@ -1625,7 +1660,7 @@ fn spawn_latency_probe(host: GatewayHost, snapshot: &RuntimeSnapshot) {
                     let host = host.clone();
                     let cand = cand.clone();
                     let ctx = ctx.clone();
-                    let client = client.clone();
+                    let client = host.client_for(cand.proxy);
                     let group_id = group_id.clone();
                     let group_name = group_name.clone();
                     let key_clone = key.clone();
@@ -1720,12 +1755,11 @@ pub async fn gateway_probe_group(app: AppHandle, id: String, timeout_ms: Option<
     let probe_timeout_ms = timeout_ms.unwrap_or(15000);
     let probe_timeout = std::time::Duration::from_millis(probe_timeout_ms.max(500));
     let ctx = upstream::GroupCtx::of(&group.group);
-    let client = host.client();
     // 并行探测:每个候选独立 call_buffered + 独立日志
     let tasks: Vec<_> = group.candidates.iter().map(|cand| {
         let host = host.clone();
         let cand = cand.clone();
-        let client = client.clone();
+        let client = host.client_for(cand.proxy);
         let ctx = ctx.clone();
         let group_id = group.group.id.clone();
         let group_name = group.group.name.clone();
@@ -1841,6 +1875,7 @@ pub async fn gateway_probe_model(
         api_key: api_key.clone(),
         model: model.clone(),
         unavailable: None,
+        proxy: false,
     };
     // 组级上下文用缺省值:max_output=1(仅探测连通性)、无温度、无系统提示词
     let ctx = upstream::GroupCtx {
@@ -2354,6 +2389,7 @@ mod tests {
             base_url: url.into(),
             api_key: "k".into(),
             model: model.into(),
+            proxy: None,
         }
     }
 

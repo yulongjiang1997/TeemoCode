@@ -647,6 +647,20 @@ export function ModelsSection({
                     <span className="text-xs">{t("settings.models.vision.on")}</span>
                   </label>
                 </fieldset>
+                {/* 是否走代理(2026-10-31):模型库条目级代理开关。true=走内置代理,
+                    false 或缺省=直连。组内 GroupModel.proxy=null 时跟随此值 */}
+                <fieldset className="fieldset gap-1.5">
+                  <legend className="fieldset-legend">{t("settings.models.proxy")}</legend>
+                  <label className="label h-8 cursor-pointer justify-start gap-2" title={t("settings.models.proxy.hint")}>
+                    <input
+                      type="checkbox"
+                      className="toggle toggle-sm"
+                      checked={!!m.proxy_enabled}
+                      onChange={(e) => patch(i, { proxy_enabled: e.target.checked || undefined })}
+                    />
+                    <span className="text-xs">{t("settings.models.proxy.on")}</span>
+                  </label>
+                </fieldset>
               </div>
             )}
           </li>

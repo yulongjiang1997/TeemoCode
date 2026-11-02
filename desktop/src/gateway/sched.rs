@@ -214,6 +214,7 @@ mod tests {
             api_key: "k".into(),
             model: id.into(),
             unavailable: None,
+            proxy: false,
         }
     }
 

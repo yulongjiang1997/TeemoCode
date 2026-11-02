@@ -16,6 +16,9 @@ export interface GroupModel {
   base_url: string;
   api_key: string;
   model: string;
+  /** 是否走代理(2026-10-31):null=跟随模型库配置,true=强制走代理,false=强制不走。
+   * 组内单独配置,修改不影响模型库的原配置。 */
+  proxy: boolean | null;
 }
 
 /** 模型组(对表 Rust ModelGroup;组级上下文全组共享)。 */

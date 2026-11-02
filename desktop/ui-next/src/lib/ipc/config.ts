@@ -37,6 +37,9 @@ export interface HostModel {
   locked?: boolean;
   /** 会员条目的服务端归属(public/private/team) */
   owner?: string;
+  /** 是否走代理(2026-10-31):模型库条目级代理开关。true=走内置代理,
+   * false 或缺省=直连。组内 GroupModel.proxy=null 时跟随此值。 */
+  proxy_enabled?: boolean;
 }
 
 /** 壳持有的应用配置(config.json 全量;经 get_config/save_config 读写)。 */

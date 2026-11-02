@@ -84,6 +84,7 @@ function emptyModel(): GroupModel {
     base_url: "",
     api_key: "",
     model: "",
+    proxy: null,
   };
 }
 
@@ -689,6 +690,23 @@ export function GatewaySection() {
                     </>
                   );
                 })()}
+                {/* 组内代理覆盖(2026-10-31):null=跟随模型库,true=强制走代理,false=强制不走 */}
+                <select
+                  className="select select-2xs w-auto"
+                  value={m.proxy === null ? "" : String(m.proxy)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    const proxy = v === "" ? null : v === "true";
+                    const models = [...edit.models];
+                    models[idx] = { ...m, proxy };
+                    setEdit({ ...edit, models });
+                  }}
+                  title={t("settings.gateway.model.proxy.title")}
+                >
+                  <option value="">{t("settings.gateway.model.proxy.follow")}</option>
+                  <option value="true">{t("settings.gateway.model.proxy.on")}</option>
+                  <option value="false">{t("settings.gateway.model.proxy.off")}</option>
+                </select>
                 <button
                   type="button"
                   className="btn btn-ghost btn-xs"
@@ -1099,6 +1117,7 @@ export function GatewaySection() {
                         base_url: m.base_url,
                         api_key: m.api_key,
                         model: m.model,
+                        proxy: m.proxy,
                       })),
                     });
                   }}

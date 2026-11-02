@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.54",
+    notes: "代理可精细化到单个模型:模型库支持为每个模型配置是否走代理;模型组内也可单独勾选(默认跟随模型库配置,组内修改不影响原配置)",
+  },
+  {
     version: "0.1.53",
     notes: "代理内核获取优化:优先复用本机已有的代理内核(Clash Verge / Clash Party 自带),无需从网络下载;本机没有时才回退到下载(自动走系统代理和镜像源)",
   },

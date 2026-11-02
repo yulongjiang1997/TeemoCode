@@ -38,6 +38,7 @@ const groupStatus = (over: Partial<GatewayStatus> = {}): GatewayStatus => ({
           base_url: "",
           api_key: "",
           model: "m-lib",
+          proxy: null,
           label: "库模型",
           upstream_model: "m-lib",
           unavailable: null,

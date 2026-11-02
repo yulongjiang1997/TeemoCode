@@ -21,6 +21,7 @@ function emptyModel(preset: VendorPreset): GroupModel {
     base_url: preset.base_url,
     api_key: preset.api_key,
     model: "",
+    proxy: null,
   };
 }
 
