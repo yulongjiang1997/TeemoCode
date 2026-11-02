@@ -469,19 +469,44 @@ impl ProxyManager {
         let client = builder
             .build()
             .map_err(|e| format!("创建订阅拉取客户端失败: {e}"))?;
-        let resp = client
-            .get(url)
-            .header("User-Agent", "clash-verge/1.5")
-            .send()
-            .await
-            .map_err(|e| format!("拉取订阅失败: {e}"))?;
-        if !resp.status().is_success() {
-            return Err(format!("拉取订阅失败: HTTP {}", resp.status()));
+        // 很多订阅站按 User-Agent 分流,固定一个标识会被拒绝(403/426/502)。
+        // 仿 plantHelper:多个 UA 轮流重试,命中一个能用的即可。
+        let agents = [
+            "clash-verge/v2.4.2",
+            "clash.meta",
+            "mihomo/1.19.31",
+            "ClashForWindows/0.20.39",
+        ];
+        let mut last_err = String::new();
+        let mut text = String::new();
+        for agent in agents {
+            let resp = client
+                .get(url)
+                .header("User-Agent", agent)
+                .header("Accept", "*/*")
+                .send()
+                .await
+                .map_err(|e| format!("拉取订阅失败: {e}"))?;
+            if !resp.status().is_success() {
+                last_err = format!("HTTP {} (UA={})", resp.status(), agent);
+                eprintln!("[proxy] 订阅 UA={agent} 被拒: HTTP {}", resp.status());
+                continue;
+            }
+            text = resp
+                .text()
+                .await
+                .map_err(|e| format!("读取订阅内容失败: {e}"))?;
+            if text.trim().is_empty() {
+                last_err = format!("空响应 (UA={agent})",);
+                eprintln!("[proxy] 订阅 UA={agent} 返回空");
+                continue;
+            }
+            eprintln!("[proxy] 订阅拉取成功 (UA={agent})");
+            break;
         }
-        let text = resp
-            .text()
-            .await
-            .map_err(|e| format!("读取订阅内容失败: {e}"))?;
+        if text.trim().is_empty() {
+            return Err(format!("订阅拉取失败: 所有 User-Agent 均被拒绝。{last_err}"));
+        }
         // 订阅返回 Clash 配置 YAML,我们只注入 external-controller 让 UI 能查询
         // 和切换节点。直接在原有配置上追加/覆盖必要字段。
         let mut yaml: serde_yaml::Value =
