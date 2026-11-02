@@ -53,6 +53,7 @@ const groupStatus = (over: Partial<GatewayStatus> = {}): GatewayStatus => ({
           base_url: "",
           api_key: "",
           model: "",
+          proxy: null,
           label: "旧模型",
           upstream_model: "",
           unavailable: "模型库中不存在「旧模型」(可能已删除或改名)",
