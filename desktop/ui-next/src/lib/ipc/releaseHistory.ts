@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.57",
+    notes: "使用前自动检测端口占用并切换空闲端口,启动失败时显示具体错误原因",
+  },
+  {
     version: "0.1.56",
     notes: "网关调用统计增强:增加每秒吞吐 token 与平均延迟计算、成功/失败次数展示;支持手动清理统计后从零重新计算;每次调用完成自动更新",
   },

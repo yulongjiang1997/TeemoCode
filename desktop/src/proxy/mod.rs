@@ -34,13 +34,36 @@ use crate::config::{config_dir, load_config};
 const MIHOMO_VERSION: &str = "1.18.10";
 /// 代理监听端口(订阅配置中 mixed-port 优先,否则用此默认值)
 const DEFAULT_PROXY_PORT: u16 = 7897;
-/// 复用系统内核(Clash Verge 自带)时的独立端口:系统 Clash 通常已占用
-/// 7897,复用其内核再起一份必须用独立端口,避免端口冲突(仿 plantHelper)。
-const SYSTEM_CORE_PORT: u16 = 17897;
 /// mihomo RESTful API 端口(查代理列表/切换节点)
 const MIHOMO_API_PORT: u16 = 12090;
 /// mihomo API secret(简单防误访)
 const MIHOMO_API_SECRET: &str = "mc-proxy";
+/// API 端口候选:系统 Clash 可能已占用 12090,逐个尝试直到找到空闲端口。
+const API_PORT_CANDIDATES: [u16; 4] = [12090, 12091, 12092, 12093];
+/// 代理端口候选(mixed-port):7890/7897 通常被系统 Clash 占用,逐个尝试。
+const PROXY_PORT_CANDIDATES: [u16; 6] = [7897, 7890, 17897, 17898, 17899, 17900];
+
+/// 检测 TCP 端口是否空闲(未被监听)。true = 可用。
+/// 在 0.0.0.0 上探测:与 mihomo 的默认监听地址一致(allow-lan 模式),
+/// 比只探测 127.0.0.1 更严格 —— 系统 Clash 若已监听 0.0.0.0:7890,
+/// 探测 127.0.0.1 可能漏检,导致 mihomo 启动时仍绑定失败。
+fn port_is_free(port: u16) -> bool {
+    std::net::TcpListener::bind(("0.0.0.0", port)).is_ok()
+}
+
+/// 从候选端口中选第一个空闲的;全都占用则随机分配一个高位端口。
+fn pick_free_port(candidates: &[u16]) -> u16 {
+    for &p in candidates {
+        if port_is_free(p) {
+            return p;
+        }
+    }
+    // 兜底:让操作系统分配一个随机空闲端口
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|l| l.local_addr())
+        .map(|a| a.port())
+        .unwrap_or(0)
+}
 
 /// 下载 URL(mihomo releases):
 /// Windows: mihomo-windows-amd64-v{ver}.zip
@@ -112,11 +135,15 @@ pub struct ProxyStatus {
 }
 
 /// mihomo API:代理组
+/// 注意:mihomo API 返回字段是 `all`(节点列表),这里用 alias 兼容;
+/// 序列化给前端仍用 `options`(前端契约)。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProxyGroup {
     pub name: String,
     pub r#type: String,
+    #[serde(default)]
     pub now: String,
+    #[serde(default, alias = "all")]
     pub options: Vec<String>,
 }
 
@@ -131,6 +158,8 @@ struct ProxyInner {
     child: Option<tokio::process::Child>,
     /// 当前代理端口(从订阅配置解析或默认值)
     proxy_port: u16,
+    /// 实际使用的 mihomo API 端口(external-controller,启动时选定)
+    api_port: u16,
     /// 错误信息
     error: Option<String>,
     /// 内核是否已下载
@@ -154,6 +183,7 @@ impl ProxyManager {
             inner: Mutex::new(ProxyInner {
                 child: None,
                 proxy_port: DEFAULT_PROXY_PORT,
+                api_port: MIHOMO_API_PORT,
                 error: None,
                 kernel_ready: false,
                 kernel_used: None,
@@ -206,13 +236,26 @@ impl ProxyManager {
 
     /// 查询当前状态
     pub fn status(&self) -> ProxyStatus {
-        let inner = self.0.inner.lock();
+        let mut inner = self.0.inner.lock();
         let cfg = Self::read_config(&self.0.app);
+        // 检查子进程是否仍存活:child 为 Some 但进程已退出时(外部 Clash
+        // kill、内核崩溃),running 会虚假为 true,这里同步清理
+        let alive = match inner.child.as_mut() {
+            Some(child) => child.try_wait().map(|st| st.is_none()).unwrap_or(false),
+            None => false,
+        };
+        if !alive {
+            // 进程已退出:清理 child,补一条错误(若此前无错误)
+            if inner.child.is_some() && inner.error.is_none() {
+                inner.error = Some("内核进程已停止".to_string());
+            }
+            inner.child = None;
+        }
         ProxyStatus {
             running: inner.child.is_some(),
             enabled: cfg.enabled,
             proxy_port: inner.proxy_port,
-            api_port: MIHOMO_API_PORT,
+            api_port: inner.api_port,
             kernel_ready: inner.kernel_ready,
             has_subscription: !cfg.subscription_url.is_empty(),
             subscription_url: cfg.subscription_url.clone(),
@@ -460,8 +503,14 @@ async fn download_and_extract(
 
 impl ProxyManager {
     /// 拉取订阅并生成 mihomo 配置。
-    /// `force_mixed_port`:复用系统内核时强制用独立端口(避免与系统 Clash 冲突)。
-    async fn fetch_subscription(&self, url: &str, force_mixed_port: Option<u16>) -> Result<String, String> {
+    /// `proxy_port`/`api_port`:启动前选定的空闲端口,强制写入配置,
+    /// 覆盖订阅自带的 port/external-controller(可能已被本机系统 Clash 占用)。
+    async fn fetch_subscription(
+        &self,
+        url: &str,
+        proxy_port: u16,
+        api_port: u16,
+    ) -> Result<String, String> {
         // 订阅链接可能在境外,同样走系统代理提高成功率
         let mut builder = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
@@ -512,35 +561,39 @@ impl ProxyManager {
         if text.trim().is_empty() {
             return Err(format!("订阅拉取失败: 所有 User-Agent 均被拒绝。{last_err}"));
         }
-        // 订阅返回 Clash 配置 YAML,我们只注入 external-controller 让 UI 能查询
-        // 和切换节点。直接在原有配置上追加/覆盖必要字段。
+        // 订阅返回 Clash 配置 YAML。订阅自带的 port/external-controller 可能
+        // 与本机系统 Clash 冲突(如 port:7890、external-controller:9099),
+        // 因此这里强制覆盖为我们选定的空闲端口,而不是沿用订阅里的值。
         let mut yaml: serde_yaml::Value =
             serde_yaml::from_str(&text).map_err(|e| format!("解析订阅配置失败: {e}"))?;
 
-        // 注入 external-controller + secret(UI 查询/切换节点用)
         if let serde_yaml::Value::Mapping(ref mut m) = yaml {
+            // 强制覆盖 external-controller + secret(UI 查询/切换节点用)
             m.insert(
                 serde_yaml::Value::String("external-controller".into()),
-                serde_yaml::Value::String(format!("127.0.0.1:{MIHOMO_API_PORT}")),
+                serde_yaml::Value::String(format!("127.0.0.1:{api_port}")),
             );
             m.insert(
                 serde_yaml::Value::String("secret".into()),
                 serde_yaml::Value::String(MIHOMO_API_SECRET.into()),
             );
-            // 确保 mixed-port 存在(若订阅未指定则用默认值;复用系统内核则用独立端口)
-            let mixed_port = force_mixed_port.unwrap_or(DEFAULT_PROXY_PORT);
-            if !m.contains_key(serde_yaml::Value::String("mixed-port".into())) {
-                m.insert(
-                    serde_yaml::Value::String("mixed-port".into()),
-                    serde_yaml::Value::Number(serde_yaml::Number::from(mixed_port)),
-                );
-            } else if let Some(fp) = force_mixed_port {
-                // 复用系统内核:强制覆盖订阅里的 mixed-port(可能 = 7897 被系统占用)
-                m.insert(
-                    serde_yaml::Value::String("mixed-port".into()),
-                    serde_yaml::Value::Number(serde_yaml::Number::from(fp)),
-                );
+            // 强制设定 mixed-port 为选定的空闲端口(覆盖订阅自带值,避免冲突)
+            m.insert(
+                serde_yaml::Value::String("mixed-port".into()),
+                serde_yaml::Value::Number(serde_yaml::Number::from(proxy_port)),
+            );
+            // 移除订阅自带的 port/socks-port/redir-port/tproxy-port:
+            // 只保留 mixed-port 一个入口,防止端口定义互相打架
+            for key in ["port", "socks-port", "redir-port", "tproxy-port"] {
+                m.remove(serde_yaml::Value::String(key.into()));
             }
+            // 关闭 allow-lan:网关只需本机回环访问,没必要监听局域网
+            // (订阅常带 allow-lan: true,会让 mihomo 监听 0.0.0.0,更易与
+            // 本机其他 Clash 实例的 0.0.0.0 监听冲突)
+            m.insert(
+                serde_yaml::Value::String("allow-lan".into()),
+                serde_yaml::Value::Bool(false),
+            );
             // 禁止 mihomo 的 DNS 劫持(避免干扰本机 DNS)
             m.insert(
                 serde_yaml::Value::String("dns".into()),
@@ -550,22 +603,13 @@ impl ProxyManager {
 
         let config_text = serde_yaml::to_string(&yaml).map_err(|e| format!("序列化配置失败: {e}"))?;
 
-        // 解析代理端口
-        let port = if let serde_yaml::Value::Mapping(ref m) = yaml {
-            m.get(serde_yaml::Value::String("mixed-port".into()))
-                .and_then(|v| v.as_u64())
-                .map(|v| v as u16)
-                .unwrap_or(DEFAULT_PROXY_PORT)
-        } else {
-            DEFAULT_PROXY_PORT
-        };
-
         // 写入配置文件
         let config_path = Self::config_path(&self.0.app);
         std::fs::write(&config_path, &config_text)
             .map_err(|e| format!("写入配置文件失败: {e}"))?;
 
-        self.0.inner.lock().proxy_port = port;
+        self.0.inner.lock().proxy_port = proxy_port;
+        self.0.inner.lock().api_port = api_port;
         Ok(config_text)
     }
 
@@ -577,25 +621,31 @@ impl ProxyManager {
         }
 
         // 1. 确保内核已下载
-        self.ensure_kernel().await?;
+        self.ensure_kernel()
+            .await
+            .map_err(|e| self.set_error(e))?;
 
-        // 复用系统内核(Clash Verge 自带)时用独立端口,避免与系统 Clash 冲突
-        let kernel_used = self.0.inner.lock().kernel_used.clone();
-        let is_system_core = kernel_used.as_ref().map_or(false, |k| {
-            Self::find_system_core().as_ref().map_or(false, |sys| sys == k)
-        });
+        // 2. 选定空闲端口(写配置前先探测占用,避免与系统 Clash 冲突)。
+        //    订阅自带的 port(如 7890)和我们的默认端口都可能已被本机
+        //    Clash Verge 占用 —— 不探测直接启动必然绑定失败。
+        let proxy_port = pick_free_port(&PROXY_PORT_CANDIDATES);
+        let api_port = pick_free_port(&API_PORT_CANDIDATES);
+        if proxy_port == 0 || api_port == 0 {
+            let msg = "无可用空闲端口(代理端口或 API 端口分配失败)".to_string();
+            self.0.inner.lock().error = Some(msg.clone());
+            return Err(msg);
+        }
+        eprintln!("[proxy] 选定端口: mixed-port={proxy_port}, api={api_port}");
 
-        // 2. 拉取订阅(每次启动都刷新,获取最新节点)
-        self.fetch_subscription(
-            &cfg.subscription_url,
-            if is_system_core { Some(SYSTEM_CORE_PORT) } else { None },
-        )
-        .await?;
+        // 3. 拉取订阅(每次启动都刷新,获取最新节点),写入选定的端口
+        self.fetch_subscription(&cfg.subscription_url, proxy_port, api_port)
+            .await
+            .map_err(|e| self.set_error(e))?;
 
-        // 3. 先停掉旧进程
+        // 4. 先停掉旧进程
         self.stop_sync();
 
-        // 4. 启动 mihomo(优先用 ensure_kernel 确定的内核路径:缓存/系统复用/下载)
+        // 5. 启动 mihomo(优先用 ensure_kernel 确定的内核路径:缓存/系统复用/下载)
         let kernel = self
             .0
             .inner
@@ -618,36 +668,99 @@ impl ProxyManager {
         #[cfg(target_os = "windows")]
         {
             // Windows:用 CREATE_NO_WINDOW 避免黑框
-            use std::os::windows::process::CommandExt;
+            // (tokio::process::Command 在 Windows 上提供 inherent creation_flags)
             const CREATE_NO_WINDOW: u32 = 0x08000000;
             command.creation_flags(CREATE_NO_WINDOW);
         }
 
-        let child = command
+        let mut child = command
             .spawn()
-            .map_err(|e| format!("启动内核失败: {e}"))?;
+            .map_err(|e| {
+                let msg = format!("启动内核失败: {e}");
+                self.0.inner.lock().error = Some(msg.clone());
+                msg
+            })?;
+
+        // 6. 等待内核初始化,并确认进程没有立即崩溃(端口冲突/配置错误会秒退)
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        match child.try_wait() {
+            Ok(None) => { /* 进程仍在运行 */ }
+            Ok(Some(status)) => {
+                // 进程已退出 —— 读 stderr 拿到真实原因
+                let stderr = match child.stderr.take() {
+                    Some(mut s) => {
+                        use tokio::io::AsyncReadExt;
+                        let mut buf = String::new();
+                        let _ = s.read_to_string(&mut buf).await;
+                        buf
+                    }
+                    None => String::new(),
+                };
+                let tail = stderr.trim().lines().last().unwrap_or("").to_string();
+                let msg = if tail.is_empty() {
+                    format!("内核启动后立即退出(status={status}),可能端口冲突或配置错误")
+                } else {
+                    format!("内核启动失败: {tail}")
+                };
+                eprintln!("[proxy] {msg}");
+                self.0.inner.lock().error = Some(msg.clone());
+                self.0.inner.lock().child = None;
+                return Err(msg);
+            }
+            Err(e) => {
+                let msg = format!("检查内核进程失败: {e}");
+                self.0.inner.lock().error = Some(msg.clone());
+                return Err(msg);
+            }
+        }
 
         self.0.inner.lock().child = Some(child);
         self.0.inner.lock().error = None;
 
-        // 等待内核初始化(最多 3 秒)
-        tokio::time::sleep(Duration::from_secs(2)).await;
-
-        // 验证代理端口可达
-        let port = self.0.inner.lock().proxy_port;
-        let test_url = format!("http://127.0.0.1:{port}");
-        let test_client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(5))
-            .proxy(reqwest::Proxy::all(&test_url).map_err(|e| format!("配置代理失败: {e}"))?)
-            .build()
-            .map_err(|e| format!("创建测试客户端失败: {e}"))?;
-        // 尝试通过代理访问一个轻量端点验证连通性(不阻塞流程)
-        let _ = test_client
-            .get("https://www.google.com/generate_204")
-            .send()
-            .await;
+        // 7. 轮询等待 mihomo API 就绪(内核起来到 API 可用有延迟),
+        //    API 通了才说明节点列表能查;超时不视为致命错误(代理本身可能能用)
+        let api_ready = Self::wait_api_ready(api_port, Duration::from_secs(8)).await;
+        if !api_ready {
+            let msg = format!("代理已启动(端口 {proxy_port}),但管理 API({api_port})响应超时");
+            eprintln!("[proxy] {msg}");
+            self.0.inner.lock().error = Some(msg);
+        }
 
         Ok(())
+    }
+
+    /// 轮询检查 mihomo API 是否就绪(GET /version 返回 200)。
+    async fn wait_api_ready(api_port: u16, timeout: Duration) -> bool {
+        let url = format!("http://127.0.0.1:{api_port}/version");
+        let client = match reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            match client
+                .get(&url)
+                .header("Authorization", format!("Bearer {MIHOMO_API_SECRET}"))
+                .send()
+                .await
+            {
+                Ok(r) if r.status().is_success() => return true,
+                _ => tokio::time::sleep(Duration::from_millis(300)).await,
+            }
+        }
+    }
+
+    /// 记录错误到状态(前端 proxy_status 可见),并原样返回该错误。
+    /// 用于 start() 内部各步骤的 `map_err`,保证失败原因不丢失。
+    fn set_error(&self, msg: String) -> String {
+        self.0.inner.lock().error = Some(msg.clone());
+        msg
     }
 
     /// 停止代理(同步,用于 start 内部重启)
@@ -667,7 +780,8 @@ impl ProxyManager {
 
     /// 查询代理节点列表(mihomo API)
     pub async fn list_proxies(&self) -> Result<Vec<ProxyGroup>, String> {
-        let url = format!("http://127.0.0.1:{MIHOMO_API_PORT}/proxies");
+        let api_port = self.0.inner.lock().api_port;
+        let url = format!("http://127.0.0.1:{api_port}/proxies");
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
             .build()
@@ -698,7 +812,8 @@ impl ProxyManager {
 
     /// 切换节点
     pub async fn select_proxy(&self, group: &str, name: &str) -> Result<(), String> {
-        let url = format!("http://127.0.0.1:{MIHOMO_API_PORT}/proxies/{group}");
+        let api_port = self.0.inner.lock().api_port;
+        let url = format!("http://127.0.0.1:{api_port}/proxies/{group}");
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
             .build()
