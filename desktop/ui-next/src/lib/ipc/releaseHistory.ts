@@ -15,6 +15,10 @@ export interface ReleaseNote {
 
 export const RELEASE_HISTORY: ReleaseNote[] = [
   {
+    version: "0.1.58",
+    notes: "设置页支持本地网关外部调用(显示调用地址与 API Key);网络节点面板精简并支持节点测速;本地大模型网关与用量统计空间隐藏任务侧栏;修复待发送指令队列首条完成后后续指令不再自动补发的问题",
+  },
+  {
     version: "0.1.57",
     notes: "使用前自动检测端口占用并切换空闲端口,启动失败时显示具体错误原因",
   },
