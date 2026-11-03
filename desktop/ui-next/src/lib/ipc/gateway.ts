@@ -381,3 +381,8 @@ export async function proxyProxies(): Promise<ProxyGroup[]> {
 export async function proxySelect(group: string, name: string): Promise<void> {
   return invoke<void>("proxy_select", { group, name });
 }
+
+/** 节点测速(2026-11-03):返回延迟毫秒数;失败抛错。 */
+export async function proxyDelay(name: string): Promise<number> {
+  return invoke<number>("proxy_delay", { name });
+}

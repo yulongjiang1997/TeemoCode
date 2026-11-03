@@ -4,7 +4,7 @@
 // 行形态照 SkillsSection(list-row + 行内展开编辑);删除用两段确认
 // (第一次点变红为"确认删除",失焦/超时还原),不引入弹窗。
 import { IconArrowsExchange, IconChevronDown, IconCopy, IconDownload, IconPlus, IconRefresh, IconTrash, IconSearch, IconX } from "@tabler/icons-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
 import { fetchModelIds } from "@/lib/ipc/config";
@@ -22,6 +22,7 @@ import {
   gatewaySaveGroup,
   gatewayStatus,
   gatewayUpdateSettings,
+  proxyDelay,
   proxyProxies,
   proxySaveConfig,
   proxySelect,
@@ -157,6 +158,32 @@ export function GatewaySection() {
   const [proxyNodes, setProxyNodes] = useState<ProxyGroup[]>([]);
   const [proxyBusy, setProxyBusy] = useState(false);
   const [proxySubDraft, setProxySubDraft] = useState<string | null>(null);
+  /** 节点测速结果(2026-11-03):节点名 → {ms|0(失败)|null(测速中)} */
+  const [nodeDelays, setNodeDelays] = useState<Record<string, number | null>>({});
+  const [nodeTesting, setNodeTesting] = useState<Set<string>>(new Set());
+  /**
+   * 节点视图派生(2026-11-03):
+   * 订阅的信息条目(剩余流量/套餐到期/客服邮箱等)也是 Selector 组,
+   * 全部渲染会让面板爆炸;过滤掉非"服务器节点"的组,只留真节点。
+   */
+  const NODE_INFO_PAT = /剩余流量|套餐到期|距离下次|客服|邮箱|重置|官网|公告|流量：|到期|公告/;
+  const nodeGroups = useMemo(
+    () => proxyNodes.filter((g) => g.options.length > 0 && !NODE_INFO_PAT.test(g.name)),
+    [proxyNodes],
+  );
+  /** 所有真节点名(去重);测速/展示用 */
+  const allNodes = useMemo(() => {
+    const s = new Set<string>();
+    nodeGroups.forEach((g) => g.options.forEach((o) => s.add(o)));
+    return Array.from(s);
+  }, [nodeGroups]);
+  /** 各组当前选中节点 */
+  const currentNodes = useMemo(
+    () => nodeGroups.map((g) => g.now).filter(Boolean),
+    [nodeGroups],
+  );
+  /** 主分组:第一个真节点组,点击节点时切换它 */
+  const primaryGroup = nodeGroups[0]?.name ?? "";
   const [log, setLog] = useState<GatewayLogEntry[]>([]);
   const [logFilter, setLogFilter] = useState<{
     group_id: string;
@@ -218,11 +245,18 @@ export function GatewaySection() {
     })
       .then(setLogTotal)
       .catch(() => {});
-    // 代理状态(2026-10-30)
-    proxyStatus().then(setProxy).catch(() => {});
-    if (proxy?.running) {
-      proxyProxies().then(setProxyNodes).catch(() => {});
-    }
+    // 代理状态(2026-10-30):拿到最新 running 后再决定是否拉节点列表 ——
+    // 不能用闭包里的 proxy?.running(首次渲染为 null,切页面回来就丢列表)
+    proxyStatus()
+      .then((p) => {
+        setProxy(p);
+        if (p.running) {
+          proxyProxies().then(setProxyNodes).catch(() => {});
+        } else {
+          setProxyNodes([]);
+        }
+      })
+      .catch(() => {});
   }, [buildLogFilter]);
   useEffect(refresh, [refresh]);
 
@@ -467,6 +501,24 @@ export function GatewaySection() {
       setProxyNodes(nodes);
     } catch (e) {
       setError(errText(e));
+    }
+  };
+  /** 单节点测速(2026-11-03) */
+  const testNode = async (name: string) => {
+    if (nodeTesting.has(name)) return;
+    setNodeTesting((s) => new Set(s).add(name));
+    setNodeDelays((d) => ({ ...d, [name]: null }));
+    try {
+      const ms = await proxyDelay(name);
+      setNodeDelays((d) => ({ ...d, [name]: ms }));
+    } catch {
+      setNodeDelays((d) => ({ ...d, [name]: 0 }));
+    } finally {
+      setNodeTesting((s) => {
+        const n = new Set(s);
+        n.delete(name);
+        return n;
+      });
     }
   };
 
@@ -992,35 +1044,127 @@ export function GatewaySection() {
             </div>
           </label>
           {proxy?.running && (
-            <div className="flex flex-wrap items-center gap-2 text-2xs">
-              <span className="text-base-content/50">
-                {t("settings.gateway.proxy.proxyPort")}: <code className="font-mono">{proxy.proxy_port}</code>
-              </span>
-              {proxyNodes.length > 0 && (
-                <div className="flex flex-col gap-1">
-                  {proxyNodes.map((g) => (
-                    <label key={g.name} className="flex items-center gap-1.5">
-                      <span className="text-base-content/50">{g.name}:</span>
-                      <select
-                        className="select select-2xs w-auto font-mono"
-                        value={g.now}
-                        onChange={(e) => selectNode(g.name, e.target.value)}
-                      >
-                        {g.options.map((opt) => (
-                          <option key={opt} value={opt}>{opt}</option>
-                        ))}
-                      </select>
-                    </label>
-                  ))}
-                </div>
-              )}
-              {proxyNodes.length === 0 && (
+            <div className="flex flex-col gap-2 text-2xs">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-base-content/50">
+                  {t("settings.gateway.proxy.proxyPort")}: <code className="font-mono">{proxy.proxy_port}</code>
+                </span>
+                {nodeGroups.length > 0 && (
+                  <div className="flex flex-col gap-1">
+                    {nodeGroups.map((g) => (
+                      <label key={g.name} className="flex items-center gap-1.5">
+                        <span className="text-base-content/50">{g.name}:</span>
+                        <select
+                          className="select select-2xs w-auto font-mono"
+                          value={g.now}
+                          onChange={(e) => selectNode(g.name, e.target.value)}
+                        >
+                          {g.options.map((opt) => (
+                            <option key={opt} value={opt}>{opt}</option>
+                          ))}
+                        </select>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {nodeGroups.length === 0 ? (
                 <span className="text-base-content/40">{t("settings.gateway.proxy.noNodes")}</span>
+              ) : (
+                <div className="flex flex-wrap gap-1">
+                  {allNodes.map((n) => {
+                    const d = nodeDelays[n];
+                    const testing = nodeTesting.has(n);
+                    const active = currentNodes.includes(n);
+                    return (
+                      <button
+                        key={n}
+                        type="button"
+                        className={`btn btn-2xs font-mono ${active ? "btn-primary" : "btn-ghost"}`}
+                        disabled={testing}
+                        title={active ? t("settings.gateway.proxy.nodeActive") : t("settings.gateway.proxy.nodeTest")}
+                        onClick={() => (active ? selectNode(primaryGroup, n) : testNode(n))}
+                      >
+                        {testing ? (
+                          <span className="loading loading-spinner loading-2xs" aria-hidden />
+                        ) : d === undefined ? (
+                          <IconArrowsExchange size={10} stroke={1.75} aria-hidden />
+                        ) : d === 0 ? (
+                          <span className="text-error">✕</span>
+                        ) : (
+                          <span className="text-success">{d}ms</span>
+                        )}
+                        <span className="max-w-32 truncate">{n}</span>
+                      </button>
+                    );
+                  })}
+                </div>
               )}
             </div>
           )}
         </div>
       </div>
+
+      {/* 外部调用(2026-11-03):本地网关的 OpenAI 兼容地址 + 模型组 Key,
+          方便用户拿去填 ClaudeCode / Cursor / 其他客户端 */}
+      {status?.enabled && (
+        <div className="flex flex-col gap-2 rounded-box border border-base-300 bg-base-100 p-4">
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <span className="text-sm font-medium">{t("settings.gateway.external.title")}</span>
+            <span className="text-xs text-base-content/50">{t("settings.gateway.external.hint")}</span>
+          </div>
+          {(() => {
+            const enabledGroups = (status?.groups ?? []).filter((g) => g.enabled);
+            if (enabledGroups.length === 0) {
+              return (
+                <span className="text-2xs text-base-content/40">{t("settings.gateway.external.noGroups")}</span>
+              );
+            }
+            const base = `http://127.0.0.1:${status?.port ?? 0}`;
+            return (
+              <div className="flex flex-col gap-1.5 text-2xs">
+                <div className="flex items-center gap-2">
+                  <span className="text-base-content/50">{t("settings.gateway.external.url")}:</span>
+                  <code className="rounded bg-base-200/70 px-2 py-0.5 font-mono">{base}/v1</code>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs"
+                    onClick={() => copy(`${base}/v1`)}
+                    title={t("settings.gateway.copy")}
+                  >
+                    <IconCopy size={12} stroke={1.75} aria-hidden />
+                  </button>
+                </div>
+                {enabledGroups.map((g) => (
+                  <div key={g.id} className="flex items-center gap-2">
+                    <span className="text-base-content/50">{t("settings.gateway.external.key")}:</span>
+                    <span className="font-mono text-base-content/60">{g.name}</span>
+                    <code className="rounded bg-base-200/70 px-2 py-0.5 font-mono">{g.key}</code>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => copy(g.key)}
+                      title={t("settings.gateway.copy")}
+                    >
+                      <IconCopy size={12} stroke={1.75} aria-hidden />
+                    </button>
+                    <button
+                      type="button"
+                      className={`btn btn-ghost btn-xs ${confirmingRegen === g.id ? "text-error" : "text-base-content/60"}`}
+                      disabled={busy}
+                      onClick={() => regenKey(g)}
+                      onBlur={() => setConfirmingRegen(null)}
+                    >
+                      <IconRefresh size={12} stroke={1.75} aria-hidden />
+                      {confirmingRegen === g.id ? t("settings.gateway.group.regenArm") : t("settings.gateway.group.regen")}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+        </div>
+      )}
 
       {/* 模型组列表 */}
       <div className="mt-1 flex w-fit items-center gap-1.5 px-1 text-xs font-bold text-base-content/60">

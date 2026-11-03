@@ -65,6 +65,23 @@ fn pick_free_port(candidates: &[u16]) -> u16 {
         .unwrap_or(0)
 }
 
+/// URL path 段的百分号编码(节点名常含中文/emoji/空格,直接拼 path 会被
+/// reqwest 原样发送导致 mihomo 解析 404)。保留安全字符,其余按 UTF-8 字节编码。
+fn pct_encode_path(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for &b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => {
+                out.push_str(&format!("%{b:02X}"));
+            }
+        }
+    }
+    out
+}
+
 /// 下载 URL(mihomo releases):
 /// Windows: mihomo-windows-amd64-v{ver}.zip
 /// macOS:   mihomo-darwin-amd64-v{ver}.zip 或 arm64
@@ -810,10 +827,10 @@ impl ProxyManager {
         Ok(groups)
     }
 
-    /// 切换节点
+    /// 切换节点(注意:mihomo 的 API 是 PUT /proxies/{组名},body={"name": 节点})
     pub async fn select_proxy(&self, group: &str, name: &str) -> Result<(), String> {
         let api_port = self.0.inner.lock().api_port;
-        let url = format!("http://127.0.0.1:{api_port}/proxies/{group}");
+        let url = format!("http://127.0.0.1:{api_port}/proxies/{}", pct_encode_path(group));
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
             .build()
@@ -829,6 +846,48 @@ impl ProxyManager {
             return Err(format!("切换节点失败: HTTP {}", resp.status()));
         }
         Ok(())
+    }
+
+    /// 测速:对指定节点发起延迟测试,返回毫秒。
+    /// mihomo API: GET /proxies/{name}/delay?url=...&timeout=...
+    pub async fn test_delay(&self, name: &str) -> Result<u64, String> {
+        let api_port = self.0.inner.lock().api_port;
+        let url = format!(
+            "http://127.0.0.1:{api_port}/proxies/{}/delay",
+            pct_encode_path(name)
+        );
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| format!("创建测速客户端失败: {e}"))?;
+        let resp = client
+            .get(&url)
+            .header("Authorization", format!("Bearer {MIHOMO_API_SECRET}"))
+            .query(&[
+                ("url", "http://www.gstatic.com/generate_204"),
+                ("timeout", "5000"),
+            ])
+            .send()
+            .await
+            .map_err(|e| format!("测速请求失败: {e}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("测速失败: HTTP {status} {body}"));
+        }
+        // mihomo 返回 {"delay": 123} 或 {"message": "..."} 表示失败
+        let v: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("解析测速结果失败: {e}"))?;
+        if let Some(msg) = v.get("message").and_then(|m| m.as_str()) {
+            return Err(msg.to_string());
+        }
+        let delay = v
+            .get("delay")
+            .and_then(|d| d.as_u64())
+            .unwrap_or(0);
+        Ok(delay)
     }
 }
 
@@ -890,4 +949,11 @@ pub async fn proxy_select(
 ) -> Result<(), String> {
     let mgr = app.state::<ProxyManager>().inner().clone();
     mgr.select_proxy(&group, &name).await
+}
+
+/// 节点测速(2026-11-03):对指定节点发起延迟测试,返回毫秒数。
+#[tauri::command]
+pub async fn proxy_delay(app: AppHandle, name: String) -> Result<u64, String> {
+    let mgr = app.state::<ProxyManager>().inner().clone();
+    mgr.test_delay(&name).await
 }

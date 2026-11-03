@@ -1988,6 +1988,7 @@ fn main() {
             proxy::proxy_save_config,
             proxy::proxy_proxies,
             proxy::proxy_select,
+            proxy::proxy_delay,
             driver::usagestats
         ])
         .setup(|app| {

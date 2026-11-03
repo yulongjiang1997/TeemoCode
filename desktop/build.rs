@@ -101,6 +101,7 @@ fn main() {
                 "proxy_save_config",
                 "proxy_proxies",
                 "proxy_select",
+                "proxy_delay",
                 // 工作区记忆(memory.rs:.monkeycode/MEMORY.md 面板)
                 "memory_read",
                 "memory_write",
