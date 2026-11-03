@@ -122,6 +122,43 @@ describe("useComposer:队列补投", () => {
     await waitFor(() => expect(result.current.queue).toHaveLength(0));
   });
 
+  // 2026-11-03 回归:成功结束后下一条 pending 必须立即补投。
+  // "投出即出队"改动后,成功路径不再修改 queue(投出时已移除),若直接
+  // return 则 effect 不会重跑(queue 未变、sendingRef 是 ref 不触发重跑),
+  // 队列里剩余的 pending 永远不会被投出。
+  it("多条指令:首条成功结束后,下一条立即补投(不留尾)", async () => {
+    const { calls, sends } = stubSend();
+    const { result, rerender } = renderHook(
+      ({ running, turnEnded, lastSeq }: { running: boolean; turnEnded: boolean; lastSeq: number }) =>
+        useComposer("a", feed({ running, turnEnded, lastSeq })),
+      { initialProps: { running: true, turnEnded: false, lastSeq: 0 } },
+    );
+    act(() => result.current.setDraft("第一条"));
+    act(() => {
+      result.current.send();
+    });
+    act(() => result.current.setDraft("第二条"));
+    act(() => {
+      result.current.send();
+    });
+    expect(result.current.queue.map((x) => x.text)).toEqual(["第一条", "第二条"]);
+
+    rerender({ running: false, turnEnded: true, lastSeq: 1 }); // 轮结束 → 投出首条
+    await waitFor(() => expect(sends().length).toBe(1));
+    expect(textOf(calls[0]!.args)).toBe("第一条");
+
+    // 首条完整跑完(开轮 → task-ended 结束)
+    rerender({ running: true, turnEnded: false, lastSeq: 2 });
+    rerender({ running: false, turnEnded: true, lastSeq: 3 });
+    // 关键断言:首条成功后,第二条必须立即补投(而非卡在队列里)
+    await waitFor(() => expect(sends().length).toBe(2));
+    expect(textOf(calls[1]!.args)).toBe("第二条");
+    // 第二条也完整跑完后,队列应清空
+    rerender({ running: true, turnEnded: false, lastSeq: 4 });
+    rerender({ running: false, turnEnded: true, lastSeq: 5 });
+    await waitFor(() => expect(result.current.queue).toHaveLength(0));
+  });
+
   it("task-error 失败结束:当前指令标 failed + 自动暂停,不再自动补投", async () => {
     const { sends } = stubSend();
     const { result, rerender } = renderHook(

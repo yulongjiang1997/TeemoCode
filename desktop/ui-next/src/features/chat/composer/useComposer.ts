@@ -426,12 +426,14 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
         flushBlockedRef.current = true;
         return;
       }
-      // task-ended 正常结束:该项执行成功,已被投出时移除队列(无需再删,
-      // 直接继续投下一条;return 让 effect 用新队列重跑)。
-      // task-ended 到达 = 上一轮上行彻底完成(回显帧也已来),在途标记可摘,
-      // 让 effect 重跑时立即投下一条(不然 sendingRef=true 会挡住下一条补投)
+      // task-ended 正常结束:该项执行成功,已被投出时移除队列(无需再删)。
+      // 2026-11-03:成功后不能直接 return —— "投出即出队"改动后成功路径
+      // 不再修改 queue(投出时已移除),queue 引用不变、sendingRef 是 ref
+      // 不触发重跑,导致队列里下一条 pending 永远不会被投出。
+      // 修复:设 sendingRef=false 后 **fall-through 到 L442 投出下一条**,
+      // 而不是 return。如果队列已空,L442 的 next=undefined 自然 return。
       sendingRef.current = false;
-      return;
+      // 继续 fall-through(不 return),让 effect 在同一重跑里投出下一条
     }
 
     // 队列非空 + 未暂停 + 队头未失败 → 投出队首下一条。
