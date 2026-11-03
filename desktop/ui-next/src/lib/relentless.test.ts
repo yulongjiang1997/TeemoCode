@@ -11,7 +11,7 @@ import {
   relentlessCandidates,
   relentlessDue,
   resetRelentlessForTests,
-  setRelentlessWorkspace,
+  setRelentlessSession,
 } from "./relentless";
 
 vi.mock("@/lib/ipc/sessions", () => ({
@@ -35,8 +35,10 @@ describe("不死不休", () => {
     vi.mocked(sessionOpen).mockReset();
   });
 
-  it("只重试勾选工作区里出错或中断、且没在等用户的任务", () => {
-    setRelentlessWorkspace("D:/repo", true);
+  it("只重试勾选会话里出错或中断、且没在等用户的任务(按对话隔离,同工作区不同会话互不影响)", () => {
+    // 勾选会话 err(同工作区还有其他会话,但只有 err 被勾选 → 只有 err 命中)
+    setRelentlessSession("err", true);
+    setRelentlessSession("stop", true);
     const ids = relentlessCandidates(
       [
         session({ id: "err" }),
@@ -44,7 +46,8 @@ describe("不死不休", () => {
         session({ id: "idle", status: "idle" }),
         session({ id: "ask", waiting_ask: true }),
         session({ id: "arch", archived: true }),
-        session({ id: "other", workdir: "D:/other" }),
+        // 同工作区但未勾选的会话:不补发(旧版按 workdir 会误补)
+        session({ id: "other", workdir: "D:/repo" }),
       ],
       getRelentlessKeys(),
       new Set(),
@@ -53,8 +56,23 @@ describe("不死不休", () => {
     expect(ids).toEqual(["err", "stop"]);
   });
 
+  it("同一工作区:只勾选的那个会话被补发,同工作区其他会话不受影响", () => {
+    // 只勾选 err;同工作区的 stop 不勾选 → 只有 err 命中
+    setRelentlessSession("err", true);
+    const ids = relentlessCandidates(
+      [
+        session({ id: "err" }),
+        session({ id: "stop", status: "interrupted" }),
+      ],
+      getRelentlessKeys(),
+      new Set(),
+      new Set(),
+    );
+    expect(ids).toEqual(["err"]);
+  });
+
   it("用户点停止后不再自动重开", () => {
-    setRelentlessWorkspace("/repo", true);
+    setRelentlessSession("s1", true);
     markUserStop("s1");
     expect(isUserStopped("s1")).toBe(true);
     expect(relentlessCandidates([session({})], getRelentlessKeys(), new Set(["s1"]), new Set())).toEqual([]);

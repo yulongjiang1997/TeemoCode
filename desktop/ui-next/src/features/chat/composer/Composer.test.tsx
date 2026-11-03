@@ -478,14 +478,13 @@ describe("运行态 / 停止 / 排队", () => {
       expect(sent).toHaveLength(1);
       expect(b64decode((sent[0]?.args?.payload as { content: string }).content)).toBe("补充问题"); // 队首先发
     });
-    // 投出的"补充问题"开启新轮,结束后出队,自动补投下一条
-    emit("frames:s1", [{ type: "task-started", timestamp: 8, seq: 8 }]);
-    emit("frames:s1", [{ type: "task-ended", timestamp: 9, seq: 9 }]);
-    await waitFor(() => {
-      const sent = sends(ops, "user-input");
-      expect(sent).toHaveLength(2);
-      expect(b64decode((sent[1]?.args?.payload as { content: string }).content)).toBe("换个问法");
-    });
+    // 2026-11-02 投出即出队:投出的"补充问题"已从队列消失,不再留队显示"执行中";
+    // 队列里只剩待发送的"换个问法"(未执行项可继续编辑)
+    expect(screen.getByText("1 条")).toBeTruthy();
+    expect(screen.queryByText("补充问题")).toBeNull();
+    expect(screen.getByText("换个问法")).toBeTruthy();
+    // 队列里不存在"执行中"项(投出即出队,旧版会留队显示 executing)
+    expect(screen.queryByText(/执行中/)).toBeNull();
   });
 
   it("队列项可移除:展开后移除,轮结束不补投", async () => {

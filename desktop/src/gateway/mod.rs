@@ -485,6 +485,14 @@ pub struct LogEntry {
     /// 每 30 秒一条 ping 记录淹没真实请求。真实请求恒为 false。
     #[serde(default)]
     pub probe: bool,
+    /// 最终候选的接口地址(2026-11-02):前端日志按厂商名显示。
+    /// 内存日志有;PersistedLogEntry 持久化记录缺省空(历史查询无厂商)。
+    #[serde(default)]
+    pub base_url: String,
+    /// 厂商端点 URL(2026-11-02):「网关→厂商」请求的目标地址。
+    /// 形如 https://api.openai.com/v1/chat/completions。日志详情展示。
+    #[serde(default)]
+    pub vendor_url: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize)]
@@ -561,6 +569,10 @@ pub struct GatewayModelStats {
     pub total_tokens: u64,
     /// 请求耗时累计(毫秒)。
     pub duration_ms: u64,
+    /// 平均吞吐:total_tokens / 总时长(秒),即每秒 token 数(2026-11-02)。
+    pub tokens_per_sec: f64,
+    /// 平均延迟:duration_ms / calls(毫秒,2026-11-02)。
+    pub avg_latency_ms: f64,
 }
 
 /// 单日热力图数据点。
@@ -583,8 +595,16 @@ pub struct GatewayLogStats {
     pub total_tokens: u64,
     /// 范围内总调用次数。
     pub total_calls: u64,
+    /// 范围内成功次数(2026-11-02)。
+    pub total_ok_calls: u64,
+    /// 范围内失败次数(2026-11-02)。
+    pub total_fail_calls: u64,
     /// 范围内请求耗时累计(毫秒,面板换算秒)。
     pub total_duration_ms: u64,
+    /// 范围内平均吞吐:total_tokens / 总时长(秒),即每秒 token 数(2026-11-02)。
+    pub total_tokens_per_sec: f64,
+    /// 范围内平均延迟:total_duration_ms / total_calls(毫秒,2026-11-02)。
+    pub total_avg_latency_ms: f64,
     /// 按 total_tokens 降序;total_tokens 相同按模型名升序(稳定排序)。
     pub models: Vec<GatewayModelStats>,
     /// 全部留存天数(热力图,按日期升序)。
@@ -691,6 +711,10 @@ impl GatewayLogStore {
                 m.output_tokens = m.output_tokens.saturating_add(rec.output_tokens);
                 m.total_tokens = m.total_tokens.saturating_add(tokens);
                 m.duration_ms = m.duration_ms.saturating_add(rec.duration_ms);
+                // 平均延迟 & 平均吞吐(2026-11-02):按累计 duration_ms 与 tokens 实时算
+                m.avg_latency_ms = if m.calls > 0 { (m.duration_ms as f64) / (m.calls as f64) } else { 0.0 };
+                let secs = m.duration_ms as f64 / 1000.0;
+                m.tokens_per_sec = if secs > 0.0 { (m.total_tokens as f64) / secs } else { 0.0 };
             }
         }
         // 模型列表稳定排序:总 tokens 降序 → 调用数降序 → 名称升序
@@ -701,6 +725,11 @@ impl GatewayLogStore {
                 .then(a.model.cmp(&b.model))
         });
         let total_duration_ms: u64 = models.iter().map(|m| m.duration_ms).sum();
+        let total_tokens: u64 = totals.0.saturating_add(totals.1);
+        let total_calls: u64 = totals.2;
+        let total_avg_latency_ms = if total_calls > 0 { (total_duration_ms as f64) / (total_calls as f64) } else { 0.0 };
+        let total_secs = total_duration_ms as f64 / 1000.0;
+        let total_tokens_per_sec = if total_secs > 0.0 { (total_tokens as f64) / total_secs } else { 0.0 };
         let heatmap: Vec<GatewayHeatDay> = heat.into_iter().map(|(date, (tok, calls))| GatewayHeatDay {
             date,
             total_tokens: tok,
@@ -710,11 +739,24 @@ impl GatewayLogStore {
             range,
             total_input_tokens: totals.0,
             total_output_tokens: totals.1,
-            total_tokens: totals.0.saturating_add(totals.1),
-            total_calls: totals.2,
+            total_tokens,
+            total_calls,
+            total_ok_calls: totals.3,
+            total_fail_calls: totals.4,
             total_duration_ms,
+            total_tokens_per_sec,
+            total_avg_latency_ms,
             models,
             heatmap,
+        }
+    }
+
+    /// 清空全部网关调用统计(2026-11-02):手动清理后从零重新计算。
+    pub fn clear(&self) {
+        self.days.lock_ok().clear();
+        let data = serde_json::to_vec_pretty(&*self.days.lock_ok());
+        if let Ok(data) = data {
+            let _ = crate::config::atomic_write_private(&self.path, &data);
         }
     }
 }
@@ -801,6 +843,10 @@ pub struct PersistedLogEntry {
     /// Full response body (truncated to 10KB). Only in JSONL, not in memory.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_response: Option<String>,
+    /// 厂商端点 URL(2026-11-02):「网关→厂商」请求的目标地址。
+    /// 形如 https://api.openai.com/v1/chat/completions。
+    #[serde(default)]
+    pub vendor_url: String,
 }
 
 /// Filter parameters for querying persisted log entries.
@@ -1087,6 +1133,7 @@ fn to_persisted(
         probe: entry.probe,
         raw_request: raw_request.map(|s| truncate_bytes(s, RAW_SNIPPET_CAP)),
         raw_response: raw_response.map(|s| truncate_bytes(s, RAW_SNIPPET_CAP)),
+        vendor_url: entry.vendor_url.clone(),
     }
 }
 
@@ -1336,6 +1383,7 @@ impl GatewayHost {
         response_content: Option<String>,
         raw_request: Option<String>,
         raw_response: Option<String>,
+        vendor_url: Option<&str>,
     ) {
         let mut persisted_entry: Option<PersistedLogEntry> = None;
         {
@@ -1354,6 +1402,9 @@ impl GatewayHost {
                     entry.request_content = request_content.clone();
                     entry.response_content = response_content.clone();
                     entry.pending = false;
+                    if let Some(vu) = vendor_url {
+                        if !vu.is_empty() { entry.vendor_url = vu.to_string(); }
+                    }
                     persisted_entry = Some(to_persisted(
                         entry,
                         raw_request.as_deref(),
@@ -1383,6 +1434,7 @@ impl GatewayHost {
             probe: false,
             raw_request: raw_request.as_deref().map(|s| truncate_bytes(s, RAW_SNIPPET_CAP)),
             raw_response: raw_response.as_deref().map(|s| truncate_bytes(s, RAW_SNIPPET_CAP)),
+            vendor_url: vendor_url.unwrap_or_default().to_string(),
         });
         if let Some(persistence) = &self.0.log_persistence {
             persistence.append(persisted.clone(), raw_request.as_deref(), raw_response.as_deref());
@@ -1406,6 +1458,8 @@ impl GatewayHost {
                 response_content: None,
                 pending: false,
                 probe: false,
+                base_url: String::new(),
+                vendor_url: String::new(),
             });
         }
         let mut counters = self.0.counters.lock_ok();
@@ -1685,6 +1739,8 @@ fn spawn_latency_probe(host: GatewayHost, snapshot: &RuntimeSnapshot) {
                                 request_content: Some("[fastest 探测]".to_string()),
                                 response_content: None, pending: true,
                                 probe: true,
+                                base_url: cand.base_url.clone(),
+                                vendor_url: String::new(),
                             });
                         }
                         let result = tokio::time::timeout(timeout, {
@@ -1793,6 +1849,8 @@ pub async fn gateway_probe_group(app: AppHandle, id: String, timeout_ms: Option<
                 response_content: None,
                 pending: true,
                 probe: true,
+                base_url: cand.base_url.clone(),
+                vendor_url: String::new(),
             });
             }
             // 用 tokio::time::timeout 硬超时包裹 call_buffered
@@ -2147,6 +2205,16 @@ pub fn gateway_log_stats(app: AppHandle, range: Option<String>) -> Result<Gatewa
     })
 }
 
+/// 清空网关调用统计(2026-11-02):清除落盘的 天×模型 聚合,之后从零重新计算。
+#[tauri::command]
+pub fn gateway_log_stats_clear(app: AppHandle) -> Result<(), String> {
+    let host = app.state::<GatewayHost>();
+    if let Some(store) = &host.0.log_stats {
+        store.clear();
+    }
+    Ok(())
+}
+
 /// 保存事务体:校验失败经 err_slot 透出且不改配置;成功则原位替换/追加。
 /// 保存事务体:校验失败经 err_slot 透出且不改配置;成功则原位替换/追加,
 /// 并把**归一化后的组**(含新生成的 id/key)经 saved_slot 交还调用方——
@@ -2447,7 +2515,7 @@ mod tests {
         ];
         let cfg = crate::config::DesktopConfig {
             models,
-            gateway: GatewaySettings { enabled: true, port: 1000, groups: vec![g], vendor_presets: vec![] },
+            gateway: GatewaySettings { enabled: true, port: 1000, groups: vec![g], vendor_presets: vec![], ..Default::default() },
             ..Default::default()
         };
         let snap = build_snapshot(&cfg, &dir);
@@ -2468,7 +2536,7 @@ mod tests {
             models: serde_json::json!([
                 { "name": "会员", "provider": "anthropic", "base_url": "", "api_key": "", "model": "m-mc", "source": "monkeycode" }
             ]),
-            gateway: GatewaySettings { enabled: true, port: 1000, groups: vec![g2], vendor_presets: vec![] },
+            gateway: GatewaySettings { enabled: true, port: 1000, groups: vec![g2], vendor_presets: vec![], ..Default::default() },
             ..Default::default()
         };
         let snap2 = build_snapshot(&cfg2, &dir);
@@ -2550,6 +2618,7 @@ mod tests {
             probe: false,
             raw_request: None,
             raw_response: None,
+            vendor_url: String::new(),
         }
     }
 

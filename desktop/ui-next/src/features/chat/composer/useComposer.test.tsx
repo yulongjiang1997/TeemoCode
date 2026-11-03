@@ -433,47 +433,88 @@ describe("useComposer:restorePersisted ref 重置", () => {
   });
 });
 
-describe("useComposer:僵尸 executing 兜底", () => {
-  it("残留 executing(无在途上行)保持原样,可手动移除", async () => {
-    // 僵尸场景:空闲(running=false)、无任何在途上行,但队列里残留 executing 项
-    // (从持久化恢复/时序丢失造成)。补投不得自动重发它(可能已真执行=重复执行),
-    // 但 UI 已放开 executing 的移除按钮(Composer.tsx removable),用户可手动删。
-        const { sends } = stubSend();
+describe("useComposer:投出即出队(2026-11-02)", () => {
+  it("投出的指令立即出队,队列里不再有 executing 态", async () => {
+    // 新语义:投出 = 从队列移除(inFlightRef 跟踪),轮结束成功则继续投下一条。
+    // 队列只剩 pending/failed,不会卡"执行中"。
+    const { sends } = stubSend();
     const { result } = renderHook(
       () => useComposer("a", feed({ running: false, turnEnded: false })),
     );
-    act(() => result.current.restorePersisted([qi("僵尸任务", "executing")]));
-    await settle();
-    // 不被自动重投:保持 executing,不产生新的 session_send
-    await settle();
-    expect(result.current.queue[0]?.state).toBe("executing");
-    expect(sends()).toHaveLength(0);
-    // 用户手动移除(removeInstr 清在途标记),队列清空
-    act(() => result.current.removeInstr(result.current.queue[0]!.id));
-    await settle();
-    expect(result.current.queue).toHaveLength(0);
+    // 空闲时 send 直发(不进队列)
+    act(() => result.current.setDraft("任务A"));
+    act(() => result.current.send());
+    await waitFor(() => expect(sends()).toHaveLength(1));
+    // 再次发送(此时 sendingRef 在途)→ 入队 pending
+    act(() => result.current.setDraft("任务B"));
+    act(() => result.current.send());
+    await waitFor(() => expect(result.current.queue).toHaveLength(1));
+    expect(result.current.queue[0]?.state).toBe("pending");
+    expect(result.current.queue[0]?.text).toBe("任务B");
+    // 队列里不存在 executing
+    expect(result.current.queue.some((x) => x.state === "executing")).toBe(false);
   });
 
-  it("执行中项允许手动移除,移除后在途标记不锁死后续补投", async () => {
+  it("轮正常结束(task-ended)后,队列首条被投出并出队,继续投下一条", async () => {
+    const { sends } = stubSend();
+    const { result, rerender } = renderHook(
+      ({ lastSeq, running, turnEnded }) => useComposer("a", feed({ lastSeq, running, turnEnded })),
+      { initialProps: { lastSeq: 0, running: true, turnEnded: false } },
+    );
+    // running 中连发两条:都进队列 pending
+    act(() => result.current.setDraft("任务A"));
+    act(() => result.current.send());
+    act(() => result.current.setDraft("任务B"));
+    act(() => result.current.send());
+    await waitFor(() => expect(result.current.queue).toHaveLength(2));
+    expect(result.current.queue.every((x) => x.state === "pending")).toBe(true);
+    const firstId = result.current.queue[0]!.id;
+    // 轮结束:队首被投出(即出队),session_send 拿到任务A
+    rerender({ lastSeq: 1, running: false, turnEnded: true });
+    await waitFor(() => expect(sends().length).toBe(1));
+    expect(textOf(sends()[0]!.args)).toContain("任务A");
+    // 任务A 已出队:队列里只剩任务B(不再有 executing 残留)
+    await waitFor(() => expect(result.current.queue).toHaveLength(1));
+    expect(result.current.queue[0]?.id).not.toBe(firstId);
+    expect(result.current.queue.some((x) => x.state === "executing")).toBe(false);
+  });
+
+  it("轮失败(task-error)后,在途指令插回队首标 failed 且自动暂停", async () => {
     const { sends } = stubSend();
     const { result, rerender } = renderHook(
       ({ running, turnEnded }) => useComposer("a", feed({ running, turnEnded })),
       { initialProps: { running: true, turnEnded: false } },
     );
-    // 执行中补投:running 期间 send 入队,轮结束投出 → executing
+    // running 中连发两条:都进队列 pending
     act(() => result.current.setDraft("任务A"));
     act(() => result.current.send());
-    rerender({ running: false, turnEnded: true });
-    await waitFor(() => expect(sends().length).toBe(1));
-    await waitFor(() => expect(result.current.queue[0]?.state).toBe("executing"));
-    // 手动移除此执行中项
-    act(() => result.current.removeInstr(result.current.queue[0]!.id));
-    await settle();
-    expect(result.current.queue).toHaveLength(0);
-    // 后续新指令照常入队补投(未被僵尸 in-flight 锁死)
     act(() => result.current.setDraft("任务B"));
     act(() => result.current.send());
+    await waitFor(() => expect(result.current.queue).toHaveLength(2));
+    // 轮结束:队首任务A 投出(出队)
     rerender({ running: false, turnEnded: true });
-    await waitFor(() => expect(sends().length).toBeGreaterThanOrEqual(1));
+    await waitFor(() => expect(sends().length).toBe(1));
+    expect(textOf(sends()[0]!.args)).toContain("任务A");
+    await waitFor(() => expect(result.current.queue).toHaveLength(1));
+    // 任务A 轮次失败(task-error):任务A 插回队首标 failed,任务B 仍在队
+    turnCycle(rerender, false);
+    await waitFor(() => expect(result.current.queue[0]?.state).toBe("failed"));
+    expect(result.current.queue[0]?.text).toBe("任务A");
+    expect(result.current.queue[1]?.text).toBe("任务B");
+    expect(result.current.queue[1]?.state).toBe("pending");
+    expect(result.current.paused).toBe(true);
+    // 队列里不存在 executing
+    expect(result.current.queue.some((x) => x.state === "executing")).toBe(false);
+  });
+
+  it("持久化恢复的 executing 残留归 pending 重投(跨重启不再卡执行中)", async () => {
+    // 旧版本可能把 executing 写入 localStorage;新版本读取时归 pending。
+    const { result } = renderHook(
+      () => useComposer("a", feed({ running: false, turnEnded: false })),
+    );
+    act(() => result.current.restorePersisted([qi("僵尸任务", "executing")]));
+    await settle();
+    // 残留 executing 归 pending(新语义:队列无 executing,重投安全)
+    expect(result.current.queue.some((x) => x.state === "executing")).toBe(false);
   });
 });

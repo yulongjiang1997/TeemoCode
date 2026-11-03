@@ -1960,6 +1960,7 @@ fn main() {
             gateway::gateway_log_count,
             gateway::gateway_log_detail,
             gateway::gateway_log_stats,
+            gateway::gateway_log_stats_clear,
             gateway::gateway_save_group,
             gateway::gateway_delete_group,
             gateway::gateway_update_settings,

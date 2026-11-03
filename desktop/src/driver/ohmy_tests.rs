@@ -2842,6 +2842,7 @@ async fn shell_model_sharing_group_name_is_not_gated_by_gateway() {
         model: "gpt-x".into(),
         locked: false,
         owner: String::new(),
+        base_url: String::new(),
     };
     let (inner, _events) = bare_inner_with_models("gw-namesake", vec![same_name]);
     write_gateway_config(&inner, false, 8317, "免费组");

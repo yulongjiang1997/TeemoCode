@@ -344,7 +344,9 @@ export function writeSoundConfig(cfg: SoundConfig): void {
   }
 }
 
-/** 指令队列项(本地持久化 + 内存队列共用):待发送 / 执行中 / 失败。 */
+/** 指令队列项(本地持久化 + 内存队列共用):待发送 / 失败。
+ * 2026-11-02:队列只有 pending/failed 两态——投出的指令即出队(inFlightRef
+ * 单独跟踪),不再有 executing 态,避免帧被吞后 executing 永久卡死。 */
 export type QueueItemState = "pending" | "executing" | "failed";
 export interface QueueItem {
   id: string;
@@ -383,8 +385,10 @@ export function readComposerQueue(sid: string): ComposerPersisted | null {
       })
       .map((x) => {
         const o = x as Record<string, unknown>;
+        // 旧格式兼容:跨重启不会再有 executing(2026-11-02 投出即出队),
+        // 残留 executing 一律归 pending 重投;非预期 state 同样归 pending
         const st = o.state;
-        const state: QueueItemState = st === "executing" || st === "failed" ? st : "pending";
+        const state: QueueItemState = st === "failed" ? st : "pending";
         const atts = Array.isArray(o.atts)
           ? (o.atts as ComposerAtt[]).filter(
               (a): a is ComposerAtt => Boolean(a && typeof a === "object" && typeof (a as ComposerAtt).path === "string"),

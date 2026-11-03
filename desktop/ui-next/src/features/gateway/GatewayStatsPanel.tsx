@@ -7,11 +7,11 @@
 // 调用总时长,精确到秒)→ 按模型分类表(跟随范围联动)→ 按天热力图(全量留存)。
 // token 数值用 K/M 缩写(与 UsageStatsView 同款 fmtCompact),完整值进 tooltip。
 // 调用总时长由后端按 LogEntry.latency_ms 累加(total_duration_ms),前端换算秒展示。
-import { IconRefresh } from "@tabler/icons-react";
+import { IconRefresh, IconTrash } from "@tabler/icons-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { useI18n } from "@/lib/i18n";
-import { gatewayLogStats, type GatewayLogStats, type GatewayModelStats, type GatewayRangeKind } from "@/lib/ipc/gateway";
+import { gatewayLogStats, gatewayLogStatsClear, type GatewayLogStats, type GatewayModelStats, type GatewayRangeKind } from "@/lib/ipc/gateway";
 import { fmtCompact, fmtFull } from "@/features/stats/UsageStatsView";
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -26,6 +26,13 @@ export const fmtDuration = (ms: number): string => {
   const m = Math.floor((totalSec % 3600) / 60);
   const s = totalSec % 60;
   return `${h}h ${m}m ${s}s`;
+};
+
+/** 平均延迟(毫秒):<1s 显示整数 ms,≥1s 显示秒带 1 位小数。 */
+const fmtAvgLatency = (ms: number): string => {
+  if (!Number.isFinite(ms) || ms <= 0) return "0ms";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
 };
 
 const RANGES: { kind: GatewayRangeKind; key: "today" | "day7" | "all" }[] = [
@@ -169,6 +176,8 @@ function ModelTable({ models }: { models: GatewayModelStats[] }) {
             <th className="text-end">{t("gateway.stats.totalTokens")}</th>
             <th className="text-end">{t("gateway.stats.calls")}</th>
             <th className="text-end">{t("gateway.stats.duration")}</th>
+            <th className="text-end">{t("gateway.stats.throughput")}</th>
+            <th className="text-end">{t("gateway.stats.avgLatency")}</th>
           </tr>
         </thead>
         <tbody>
@@ -180,6 +189,12 @@ function ModelTable({ models }: { models: GatewayModelStats[] }) {
               <td className="text-end tabular-nums" title={fmtFull(m.total_tokens)}>{fmtCompact(m.total_tokens)}</td>
               <td className="text-end tabular-nums">{m.calls.toLocaleString("en-US")}</td>
               <td className="text-end tabular-nums" title={`${fmtFull(m.duration_ms)}ms`}>{fmtDuration(m.duration_ms)}</td>
+              <td className="text-end tabular-nums" title={`${m.tokens_per_sec.toFixed(1)} tok/s`}>
+                {m.tokens_per_sec > 0 ? fmtCompact(m.tokens_per_sec) : "—"}
+              </td>
+              <td className="text-end tabular-nums" title={`${m.avg_latency_ms.toFixed(0)}ms`}>
+                {m.avg_latency_ms > 0 ? fmtAvgLatency(m.avg_latency_ms) : "—"}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -208,6 +223,21 @@ export function GatewayStatsPanel() {
     }
   }, []);
 
+  /** 清空网关调用统计(2026-11-02):清理落盘聚合后从零重新计算。 */
+  const clearStats = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await gatewayLogStatsClear();
+      const d = await gatewayLogStats(range);
+      setData(d);
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [range]);
+
   useEffect(() => {
     void fetchStats(range);
   }, [range, fetchStats]);
@@ -218,7 +248,11 @@ export function GatewayStatsPanel() {
         input_tokens: data.total_input_tokens,
         output_tokens: data.total_output_tokens,
         calls: data.total_calls,
+        ok_calls: data.total_ok_calls,
+        fail_calls: data.total_fail_calls,
         duration_ms: data.total_duration_ms,
+        avg_latency_ms: data.total_avg_latency_ms,
+        tokens_per_sec: data.total_tokens_per_sec,
       }
     : null;
 
@@ -248,6 +282,15 @@ export function GatewayStatsPanel() {
           <IconRefresh size={14} stroke={1.75} aria-hidden />
           {loading ? "…" : t("gateway.stats.title")}
         </button>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm text-error"
+          onClick={() => void clearStats()}
+          title={t("gateway.stats.clear")}
+        >
+          <IconTrash size={14} stroke={1.75} aria-hidden />
+          {t("gateway.stats.clear")}
+        </button>
       </div>
 
       {error && (
@@ -273,7 +316,9 @@ export function GatewayStatsPanel() {
           <div className="flex min-w-0 flex-1 flex-col gap-1 rounded-box border border-base-300 bg-base-100 px-4 py-3">
             <span className="text-xs text-base-content/50">{t("gateway.stats.calls")}</span>
             <span className="text-2xl font-semibold tabular-nums leading-none">{totals.calls.toLocaleString("en-US")}</span>
-            <span className="text-xs text-base-content/50">{t("gateway.stats.desc")}</span>
+            <span className="text-xs tabular-nums text-base-content/50">
+              {t("gateway.stats.successFail", { ok: totals.ok_calls, fail: totals.fail_calls })}
+            </span>
           </div>
           <div
             className="flex min-w-0 flex-1 flex-col gap-1 rounded-box border border-base-300 bg-base-100 px-4 py-3"
@@ -281,6 +326,14 @@ export function GatewayStatsPanel() {
           >
             <span className="text-xs text-base-content/50">{t("gateway.stats.duration")}</span>
             <span className="text-2xl font-semibold tabular-nums leading-none">{fmtDuration(totals.duration_ms)}</span>
+            <span className="text-xs tabular-nums text-base-content/50">{fmtAvgLatency(totals.avg_latency_ms)}</span>
+          </div>
+          <div
+            className="flex min-w-0 flex-1 flex-col gap-1 rounded-box border border-base-300 bg-base-100 px-4 py-3"
+            title={`${totals.tokens_per_sec.toFixed(1)} tok/s`}
+          >
+            <span className="text-xs text-base-content/50">{t("gateway.stats.throughput")}</span>
+            <span className="text-2xl font-semibold tabular-nums leading-none">{fmtCompact(totals.tokens_per_sec)}<span className="text-sm font-normal text-base-content/50">/s</span></span>
             <span className="text-xs text-base-content/50">{t(`gateway.stats.range.${range}` as const)}</span>
           </div>
         </div>

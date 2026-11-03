@@ -84,6 +84,7 @@ fn main() {
                 "gateway_log_count",
                 "gateway_log_detail",
                 "gateway_log_stats",
+                "gateway_log_stats_clear",
                 "gateway_save_group",
                 "gateway_delete_group",
                 "gateway_update_settings",

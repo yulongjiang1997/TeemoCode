@@ -1734,6 +1734,8 @@ pub(crate) struct BufferedReply {
     pub model: String,
     pub body: Value,
     pub usage: Usage,
+    /// 厂商端点 URL(2026-11-02):日志详情显示「网关→厂商」请求的 URL。
+    pub vendor_url: String,
 }
 
 pub(crate) enum StreamReply {
@@ -1763,6 +1765,51 @@ fn build_request(
     }
 }
 
+/// 构造「网关→厂商」请求的 HTTP 风格表示(2026-11-02)。
+/// 用于日志详情的 raw_request 字段:显示厂商端点 URL、协议、请求头(脱敏)和请求体。
+/// 与本地客户端请求(网关的 /v1/chat/completions)区分开。
+pub(crate) fn vendor_request_repr(
+    cand: &ResolvedCandidate,
+    protocol: Protocol,
+    body: &Value,
+    stream: bool,
+) -> String {
+    let url = endpoint_url(
+        &cand.base_url,
+        match protocol {
+            Protocol::Anthropic => "messages",
+            Protocol::Responses => "responses",
+            Protocol::OpenAi => "chat/completions",
+        },
+    );
+    let protocol_label = match protocol {
+        Protocol::OpenAi => "openai",
+        Protocol::Anthropic => "anthropic",
+        Protocol::Responses => "openai_responses",
+    };
+    let _ = protocol_label;
+    // 脱敏:API Key 只显示前 4 后 4
+    let key_masked = {
+        let k = cand.api_key.as_str();
+        if k.len() > 8 {
+            format!("{}***{}", &k[..4], &k[k.len()-4..])
+        } else {
+            "****".to_string()
+        }
+    };
+    let auth_header = match protocol {
+        Protocol::Anthropic => format!("x-api-key: {key_masked}\n  anthropic-version: 2023-06-01"),
+        _ => format!("Authorization: Bearer {key_masked}"),
+    };
+    let body_text = body.to_string();
+    let _ = stream;
+    format!(
+        "POST {url} HTTP/1.1\nHost: {host}\n{auth_header}\nContent-Type: application/json\n\n{body_text}",
+        url = url,
+        host = url.trim_start_matches("https://").trim_start_matches("http://"),
+    )
+}
+
 /// 单次尝试(非流式):构造请求 → 发送 → 状态检查 → 解析。
 pub(crate) async fn call_buffered(
     client: &reqwest::Client,
@@ -1774,6 +1821,14 @@ pub(crate) async fn call_buffered(
     let protocol = normalize_provider(&cand.provider);
     let body = build_upstream_body(protocol, incoming, &cand.model, ctx, false)?;
     let req = build_request(client, cand, protocol, &body);
+    let vendor_url = endpoint_url(
+        &cand.base_url,
+        match protocol {
+            Protocol::Anthropic => "messages",
+            Protocol::Responses => "responses",
+            Protocol::OpenAi => "chat/completions",
+        },
+    );
     let resp = tokio::time::timeout(timeout, req.send())
         .await
         .map_err(|_| UpstreamError::Timeout)?
@@ -1805,6 +1860,7 @@ pub(crate) async fn call_buffered(
             &(model.clone(), text, finish, usage),
         ),
         model,
+        vendor_url,
     })
 }
 
@@ -1819,10 +1875,18 @@ pub(crate) async fn open_stream(
     incoming: &Value,
     ctx: &GroupCtx,
     timeout: Duration,
-) -> Result<(StreamReply, String), UpstreamError> {
+) -> Result<(StreamReply, String, String), UpstreamError> {
     let protocol = normalize_provider(&cand.provider);
     let body = build_upstream_body(protocol, incoming, &cand.model, ctx, true)?;
     let req = build_request(client, cand, protocol, &body);
+    let vendor_url = endpoint_url(
+        &cand.base_url,
+        match protocol {
+            Protocol::Anthropic => "messages",
+            Protocol::Responses => "responses",
+            Protocol::OpenAi => "chat/completions",
+        },
+    );
     let resp = tokio::time::timeout(timeout, req.send())
         .await
         .map_err(|_| UpstreamError::Timeout)?
@@ -1840,7 +1904,7 @@ pub(crate) async fn open_stream(
     Ok((match protocol {
         Protocol::OpenAi => StreamReply::RawPass(resp),
         p => StreamReply::Translated { resp, protocol: p },
-    }, cand.model.clone()))
+    }, cand.model.clone(), vendor_url))
 }
 
 /// 流式中继结果。

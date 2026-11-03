@@ -739,13 +739,20 @@ export function ModelsSection({
                 if (!vg) { vg = { items: [] }; vendorMap.set(vk, vg); }
                 vg.items.push({ m, i });
               });
+              // 厂商名映射(base_url → vendor.name),优先显示厂商名,回落到 URL 提取
+              const vendorName = (url: string) => {
+                const preset = vendorPresets.find((v) => v.base_url === url);
+                if (preset?.name) return preset.name;
+                return url.replace(/^https?:\/\//, "").replace(/\/v1$/, "").replace(/\/api.*$/, "") || url;
+              };
               const vendorGroups = [...vendorMap.entries()];
               return (
                 <div className="flex flex-col gap-1.5">
                   {vendorGroups.map(([vk, vg]) => {
                     const vKey = `vendor:${vk}`;
                     const vOpen = !collapsedGroups.has(vKey);
-                    const vLabel = vk.replace(/^https?:\/\//, "").replace(/\/v1$/, "").replace(/\/api.*$/, "") || vk;
+                    // 厂商名显示在地址前面:厂商名 + 小字地址
+                    const vLabel = vendorName(vk);
                     const enabledCount = vg.items.filter(({ m }) => !m.locked).length;
                     return (
                       <div key={vk} className="rounded-box border border-base-300 bg-base-100 overflow-hidden">
@@ -763,6 +770,8 @@ export function ModelsSection({
                               className={`shrink-0 transition-transform duration-150 ${vOpen ? "" : "-rotate-90"}`}
                             />
                             <span className="min-w-0 truncate text-xs font-bold">{vLabel}</span>
+                            {/* 厂商地址小字显示在名称后(2026-10-31) */}
+                            <span className="hidden max-w-32 truncate font-mono text-2xs text-base-content/40 sm:inline">{vk}</span>
                             <span className="badge badge-ghost badge-xs shrink-0">{vg.items.length}</span>
                             <span className="text-2xs text-base-content/40">{enabledCount}/{vg.items.length}</span>
                           </button>

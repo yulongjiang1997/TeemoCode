@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use super::upstream::{self, GroupCtx, UpstreamError, Usage};
+use super::upstream::{self, GroupCtx, Protocol, UpstreamError, Usage};
 use super::{sched, LogEntry, RuntimeGroup, GatewayHost};
 
 const MAX_HEADER_BYTES: usize = 32 * 1024;
@@ -515,6 +515,12 @@ fn push_pending_log(host: &GatewayHost, group: &RuntimeGroup, stream: bool, requ
         .find(|c| c.unavailable.is_none())
         .map(|c| if c.model.is_empty() { c.label.clone() } else { c.model.clone() })
         .unwrap_or_default();
+    let initial_base_url = group
+        .candidates
+        .iter()
+        .find(|c| c.unavailable.is_none())
+        .map(|c| c.base_url.clone())
+        .unwrap_or_default();
     host.push_log(LogEntry {
         request_id,
         ts_ms: super::now_ms(),
@@ -533,6 +539,8 @@ fn push_pending_log(host: &GatewayHost, group: &RuntimeGroup, stream: bool, requ
         response_content: None,
         pending: true,
         probe: false,
+        base_url: initial_base_url,
+        vendor_url: String::new(),
     });
     request_id
 }
@@ -600,12 +608,18 @@ pub(crate) async fn run_buffered(
                     message: String::new(),
                 });
                 usage_out.merge(&reply.usage);
+                // 构造「网关→厂商」请求的 HTTP 风格表示(2026-11-02)
+                let protocol = upstream::normalize_provider(&cand.provider);
+                let body = upstream::build_upstream_body(protocol, &incoming, &cand.model, &ctx, false).ok();
+                let raw_req = body.as_ref()
+                    .map(|b| upstream::vendor_request_repr(cand, protocol, b, false))
+                    .or_else(|| Some(incoming.to_string()));
                 // 更新 pending 条目(而不是追加新条目),使前端"请求中"态翻为完成
                 // Use complete_and_persist to also write to JSONL with full bodies.
                 host.complete_and_persist(request_id, &group.group.id, &group.group.name, false, true, Some(200), started.elapsed().as_millis() as u64,
                     &reply.model, attempts.len() as u32, &usage_out, None,
                     Some(extract_content(&incoming)), Some(extract_response_content(&reply.body)),
-                    Some(incoming.to_string()), Some(reply.body.to_string()));
+                    raw_req, Some(reply.body.to_string()), Some(reply.vendor_url.as_str()));
                 return Ok(BufferedOk { body: reply.body, model: reply.model, attempts: attempts.len() });
             }
             Err(e) => {
@@ -628,12 +642,20 @@ pub(crate) async fn run_buffered(
     };
     let status = last_error.as_ref().and_then(|e| e.status()).unwrap_or(502);
     let model = attempts.last().map(|a| a.model.clone()).unwrap_or_default();
+    // 构造「网关→厂商」请求的 HTTP 风格表示(失败时:vendor_url 空,raw_request 退化为 incoming)
+    let last_cand = plan.last();
+    let raw_req = last_cand.and_then(|c| {
+        let protocol = upstream::normalize_provider(&c.provider);
+        upstream::build_upstream_body(protocol, &incoming, &c.model, &ctx, false)
+            .ok()
+            .map(|b| (upstream::vendor_request_repr(c, protocol, &b, false), c.base_url.clone()))
+    });
     // 更新 pending 条目(而不是追加新条目)
     // Use complete_and_persist to also write to JSONL (no response body on failure).
     host.complete_and_persist(request_id, &group.group.id, &group.group.name, false, false, Some(status), started.elapsed().as_millis() as u64,
         &model, attempts_n, &usage_out, Some(summary.clone()),
         Some(extract_content(&incoming)), None,
-        Some(incoming.to_string()), None);
+        raw_req.as_ref().map(|(s, _)| s.clone()), None, raw_req.as_ref().map(|(_, u)| u.as_str()));
     Err(BufferedFail {
         status,
         body: openai_error(&summary, "gateway_error", "all_models_failed"),
@@ -679,6 +701,10 @@ struct StreamOutcome {
     error: Option<String>,
     response_content: String,
     raw_response: String,
+    /// 厂商端点 URL(2026-11-02):「网关→厂商」请求的目标地址
+    vendor_url: String,
+    /// 「网关→厂商」请求的 HTTP 风格表示(2026-11-02)
+    raw_request: String,
 }
 
 fn handle_streaming(
@@ -728,8 +754,14 @@ fn handle_streaming(
                 if cand.model.is_empty() { &cand.label } else { &cand.model },
             );
             match upstream::open_stream(&host.client_for(cand.proxy), cand, &incoming, &ctx, timeout).await {
-                Ok((reply, model)) => {
+                Ok((reply, model, vendor_url)) => {
                     let display_model = if model.is_empty() { cand.label.clone() } else { model.clone() };
+                    // 构造「网关→厂商」请求的 HTTP 风格表示(2026-11-02):流式
+                    let protocol = upstream::normalize_provider(&cand.provider);
+                    let raw_req = match upstream::build_upstream_body(protocol, &incoming, &cand.model, &ctx, true) {
+                        Ok(b) => upstream::vendor_request_repr(cand, protocol, &b, true),
+                        Err(_) => incoming.to_string(),
+                    };
                     host.record_attempt(&group.group.id, &cand.id, true);
                     attempts.push(AttemptNote {
                         label: cand.label.clone(),
@@ -757,6 +789,8 @@ fn handle_streaming(
                                 error: Some(format!("客户端连接不可写: {e}")),
                                 response_content: String::new(),
                                 raw_response: String::new(),
+                                vendor_url: vendor_url.clone(),
+                                raw_request: raw_req.clone(),
                             };
                         }
                     };
@@ -792,6 +826,8 @@ fn handle_streaming(
                             error: summary.error,
                             response_content: summary.response_content,
                             raw_response: summary.raw_response,
+                            vendor_url: vendor_url.clone(),
+                            raw_request: raw_req,
                         },
                         Err(e) => StreamOutcome {
                             ok: false,
@@ -802,6 +838,8 @@ fn handle_streaming(
                             error: Some(e),
                             response_content: String::new(),
                             raw_response: String::new(),
+                            vendor_url: vendor_url,
+                            raw_request: raw_req,
                         },
                     };
                 }
@@ -825,6 +863,27 @@ fn handle_streaming(
         );
         let status = last_error.as_ref().and_then(|e| e.status()).unwrap_or(502);
         write_json(conn, status, &openai_error(&summary, "gateway_error", "all_models_failed"), &[]);
+        // 失败时:用最后一个候选构造 vendor 请求表示(2026-11-02)
+        let last_cand = plan.last();
+        let (stream_vendor_url, stream_raw_req) = match last_cand {
+            Some(c) => {
+                let protocol = upstream::normalize_provider(&c.provider);
+                let req = match upstream::build_upstream_body(protocol, &incoming, &c.model, &ctx, true) {
+                    Ok(b) => upstream::vendor_request_repr(c, protocol, &b, true),
+                    Err(_) => incoming.to_string(),
+                };
+                let vu = upstream::endpoint_url(
+                    &c.base_url,
+                    match protocol {
+                        Protocol::Anthropic => "messages",
+                        Protocol::Responses => "responses",
+                        Protocol::OpenAi => "chat/completions",
+                    },
+                );
+                (vu, req)
+            }
+            None => (String::new(), incoming.to_string()),
+        };
         StreamOutcome {
             ok: false,
             status: Some(status),
@@ -834,6 +893,8 @@ fn handle_streaming(
             error: Some(summary),
             response_content: String::new(),
             raw_response: String::new(),
+            vendor_url: stream_vendor_url,
+            raw_request: stream_raw_req,
         }
     });
     // 全部候选失败时已经 write_json 出了带 Content-Length 的 JSON。
@@ -868,8 +929,9 @@ fn handle_streaming(
         outcome.error.clone(),
         Some(extract_content(&incoming)),
         (!outcome.response_content.is_empty()).then_some(outcome.response_content),
-        Some(incoming.to_string()),
+        (!outcome.raw_request.is_empty()).then_some(outcome.raw_request),
         (!outcome.raw_response.is_empty()).then_some(outcome.raw_response),
+        Some(outcome.vendor_url.as_str()),
     );
 }
 
@@ -981,6 +1043,7 @@ Connection: close
             base_url: base.into(),
             api_key: "upstream-key".into(),
             model: model.into(),
+            proxy: None,
         }
     }
 
@@ -1005,7 +1068,7 @@ Connection: close
     fn make_host(group: ModelGroup) -> (GatewayHost, RuntimeGroup) {
         let host = GatewayHost::new();
         let cfg = DesktopConfig {
-            gateway: crate::gateway::GatewaySettings { enabled: true, port: 0, groups: vec![group], vendor_presets: vec![] },
+            gateway: crate::gateway::GatewaySettings { enabled: true, port: 0, groups: vec![group], vendor_presets: vec![], ..Default::default() },
             models: serde_json::json!([]),
             ..Default::default()
         };

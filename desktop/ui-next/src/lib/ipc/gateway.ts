@@ -84,6 +84,12 @@ export interface GatewayLogEntry {
   status: number | null;
   latency_ms: number;
   model: string;
+  /** 候选的接口地址(2026-11-02):前端日志按厂商名显示。
+   * 内存日志有;持久化历史查询无(缺省空)。 */
+  base_url?: string;
+  /** 厂商端点 URL(2026-11-02):「网关→厂商」请求的目标地址。
+   * 形如 https://api.openai.com/v1/chat/completions。 */
+  vendor_url?: string;
   attempts: number;
   prompt_tokens: number | null;
   completion_tokens: number | null;
@@ -120,6 +126,10 @@ export interface GatewayModelStats {
   total_tokens: number;
   /** 请求耗时累计(毫秒);UI 换算秒展示 */
   duration_ms: number;
+  /** 平均吞吐:total_tokens / 总时长(秒),即每秒 token 数(2026-11-02) */
+  tokens_per_sec: number;
+  /** 平均延迟:duration_ms / calls(毫秒,2026-11-02) */
+  avg_latency_ms: number;
 }
 
 /** 单日热力图数据点。 */
@@ -136,8 +146,16 @@ export interface GatewayLogStats {
   total_output_tokens: number;
   total_tokens: number;
   total_calls: number;
+  /** 范围内总成功次数(2026-11-02) */
+  total_ok_calls: number;
+  /** 范围内总失败次数(2026-11-02) */
+  total_fail_calls: number;
   /** 范围内请求耗时累计(毫秒) */
   total_duration_ms: number;
+  /** 范围内平均吞吐:total_tokens / 总时长(秒)(2026-11-02) */
+  total_tokens_per_sec: number;
+  /** 范围内平均延迟:total_duration_ms / total_calls(毫秒)(2026-11-02) */
+  total_avg_latency_ms: number;
   /** 按 total_tokens 降序 */
   models: GatewayModelStats[];
   /** 全量留存天,按日期升序(热力图) */
@@ -206,6 +224,11 @@ export async function gatewayLogDetail(id: string): Promise<GatewayLogEntry | nu
 export async function gatewayLogStats(range?: GatewayRangeKind): Promise<GatewayLogStats | null> {
   if (!inDesktopShell()) return null;
   return invoke<GatewayLogStats>("gateway_log_stats", { range: range ?? null });
+}
+
+/** 清空网关调用统计(2026-11-02):清除落盘的天×模型聚合,之后从零重新计算。 */
+export async function gatewayLogStatsClear(): Promise<void> {
+  return invoke<void>("gateway_log_stats_clear");
 }
 
 export async function gatewaySaveGroup(group: ModelGroup): Promise<ModelGroup> {
@@ -320,6 +343,8 @@ export interface ProxyStatus {
   api_port: number;
   kernel_ready: boolean;
   has_subscription: boolean;
+  /** 已保存的订阅地址(2026-10-31):回显到输入框。 */
+  subscription_url: string;
   error: string | null;
 }
 
@@ -332,7 +357,7 @@ export interface ProxyGroup {
 }
 
 export async function proxyStatus(): Promise<ProxyStatus> {
-  if (!inDesktopShell()) return { running: false, enabled: false, proxy_port: 0, api_port: 0, kernel_ready: false, has_subscription: false, error: null };
+  if (!inDesktopShell()) return { running: false, enabled: false, proxy_port: 0, api_port: 0, kernel_ready: false, has_subscription: false, subscription_url: "", error: null };
   return invoke<ProxyStatus>("proxy_status");
 }
 

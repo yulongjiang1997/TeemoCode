@@ -58,6 +58,7 @@
             "allow-gateway-log-count",
             "allow-gateway-log-detail",
             "allow-gateway-log-stats",
+            "allow-gateway-log-stats-clear",
             "allow-gateway-regen-key",
             "allow-gateway-save-group",
             "allow-gateway-ensure-running",

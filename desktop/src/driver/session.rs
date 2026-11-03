@@ -1356,7 +1356,7 @@ impl OhmyDriver {
             .0
             .models
             .iter()
-            .map(|m| json!({ "name": m.name, "default": m.default, "source": m.source, "think": m.think, "model": m.model, "locked": m.locked, "owner": m.owner }))
+            .map(|m| json!({ "name": m.name, "default": m.default, "source": m.source, "think": m.think, "model": m.model, "locked": m.locked, "owner": m.owner, "base_url": m.base_url }))
             .collect();
         // 本地网关模型组注入(2026-09-07 用户需求:工作区模型菜单可选网关组):
         // 组条目不在壳清单(cfg.models)里,是物化时按 cfg.gateway 动态生成的

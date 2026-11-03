@@ -782,9 +782,12 @@ export function GatewaySection() {
                         }}
                       />
                       <datalist id={`gw-models-${idx}`}>
-                        {fetched[idx]?.ids.map((id) => (
-                          <option key={id} value={id} />
-                        ))}
+                        {fetched[idx]?.ids.map((id) => {
+                          // 模型前加厂商名(2026-10-31):base_url 对应 vendorPresets 的名称
+                          const vendorName = vendorPresets.find((v) => v.base_url === m.base_url)?.name;
+                          const displayId = vendorName ? `${vendorName} · ${id}` : id;
+                          return <option key={id} value={id} label={displayId} />;
+                        })}
                       </datalist>
                       <button
                         type="button"
@@ -962,7 +965,7 @@ export function GatewaySection() {
                 type="text"
                 className="input input-xs min-w-0 flex-1 font-mono"
                 placeholder={t("settings.gateway.proxy.subscriptionPlaceholder")}
-                value={proxySubDraft ?? ""}
+                value={proxySubDraft ?? proxy?.subscription_url ?? ""}
                 onChange={(e) => setProxySubDraft(e.target.value)}
               />
               {proxy?.running ? (
@@ -979,7 +982,7 @@ export function GatewaySection() {
                 <button
                   type="button"
                   className="btn btn-xs btn-primary shrink-0"
-                  disabled={proxyBusy || (proxySubDraft === null && !proxy?.has_subscription)}
+                  disabled={proxyBusy || (proxySubDraft === null && !proxy?.subscription_url)}
                   onClick={startProxy}
                 >
                   {proxyBusy ? <span className="loading loading-spinner loading-xs" aria-hidden /> : null}
@@ -1349,6 +1352,7 @@ export function GatewaySection() {
               <tr>
                 <th>{t("settings.gateway.log.time")}</th>
                 <th>{t("settings.gateway.log.group")}</th>
+                <th>{t("settings.gateway.log.vendor")}</th>
                 <th>{t("settings.gateway.log.model")}</th>
                 <th>{t("settings.gateway.log.status")}</th>
                 <th>{t("settings.gateway.log.latency")}</th>
@@ -1367,6 +1371,12 @@ export function GatewaySection() {
                 >
                   <td className="whitespace-nowrap font-mono text-2xs">{formatLogTime(e.ts_ms)}</td>
                   <td className="max-w-32 truncate font-mono text-2xs">{e.group_name}</td>
+                  <td className="max-w-32 truncate text-2xs text-base-content/60" title={e.base_url}>
+                    {e.base_url
+                      ? (vendorPresets.find((v) => v.base_url === e.base_url)?.name
+                        || e.base_url.replace(/^https?:\/\//, "").replace(/\/v1$/, "").replace(/\/api.*$/, ""))
+                      : "—"}
+                  </td>
                   <td className="max-w-40 truncate font-mono text-2xs">
                     {e.pending ? (
                       <span className="inline-flex items-center gap-1">
@@ -1519,7 +1529,13 @@ export function GatewaySection() {
               )}
               {logDetail.raw_request ? (
                 <div className="text-xs">
-                  <div className="flex items-center gap-2">
+                  {logDetail.vendor_url && (
+                    <div className="flex items-center gap-2 text-base-content/50">
+                      <span>{t("settings.gateway.log.detail.vendorUrl")}:</span>
+                      <span className="font-mono break-all">{logDetail.vendor_url}</span>
+                    </div>
+                  )}
+                  <div className="mt-1 flex items-center gap-2">
                     <span className="font-bold">{t("settings.gateway.log.detail.rawRequest")}</span>
                     <button
                       type="button"

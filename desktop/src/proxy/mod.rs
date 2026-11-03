@@ -103,6 +103,10 @@ pub struct ProxyStatus {
     pub kernel_ready: bool,
     /// 订阅链接(已配置)
     pub has_subscription: bool,
+    /// 已保存的订阅地址(2026-10-31):前端回显用。地址含 token 已在本机,
+    /// 回显到同一台机器的设置页是安全的。
+    #[serde(default)]
+    pub subscription_url: String,
     /// 错误信息(启动失败等)
     pub error: Option<String>,
 }
@@ -211,6 +215,7 @@ impl ProxyManager {
             api_port: MIHOMO_API_PORT,
             kernel_ready: inner.kernel_ready,
             has_subscription: !cfg.subscription_url.is_empty(),
+            subscription_url: cfg.subscription_url.clone(),
             error: inner.error.clone(),
         }
     }

@@ -7,9 +7,11 @@
 //   引擎接活后本轮失败会回 Ok(错误走 task-error 帧),不得重投。
 // - 停止 = user-cancel {}(取消斡旋与看门狗都在壳侧)。
 // 排队语义:运行中/上一条未回执时发送进**队列**(按序追加,而非覆盖单槽),
-// 轮结束(running 变 false)自动补投队头;成功后出队继续投下一条;失败
-// (task-error 结束或壳 reject)标该条 failed + 自动暂停,等用户重试/移除/
-// 解除暂停,或退避重试到点(避免 chip 永久钉住)。
+// 轮结束(running 变 false)自动补投队头;成功后继续投下一条;失败
+// (task-error 结束或壳 reject)该指令**插回队首**标 failed + 自动暂停,
+// 等用户重试/编辑/移除/解除暂停,或退避重试到点(避免 chip 永久钉住)。
+// 2026-11-02:队列只有 pending/failed 两态——投出的指令即出队(inFlightRef
+// 跟踪),队列里不存在"执行中"项,避免帧被吞后 executing 永久卡死。
 // 补投的三道闸(每道都对应过一次真实故障,见各自注释):
 //   ①feed.historyLoaded —— 首份历史归约前 running 不可信,不许抢投;
 //   ②stateSid === sessionId —— 切会话那一帧里 queue 还属于上一个会话;
@@ -63,7 +65,7 @@ const newInstrId = (): string => `qi-${Date.now().toString(36)}-${Math.random().
 export interface ComposerCtl {
   draft: string;
   setDraft(v: string): void;
-  /** 指令队列(按序发送;队首 executing,失败项 failed 待重试/移除)。 */
+  /** 指令队列(按序发送;只剩 pending 未执行与 failed 待重试,无 executing)。 */
   queue: QueueItem[];
   /** 队列区展开态(折叠时只显示首条)。 */
   queueOpen: boolean;
@@ -73,7 +75,7 @@ export interface ComposerCtl {
   togglePaused(): void;
   retryInstr(id: string): void;
   removeInstr(id: string): void;
-  /** 拖动排序(仅 pending 项可拖;执行中/失败项不参与换序)。 */
+  /** 拖动排序(pending/failed 项均可拖)。 */
   reorderInstr(from: number, to: number): void;
   editInstr(id: string, text: string): void;
   /** 从队列移除指定项并立即发送到对话窗口。 */
@@ -223,10 +225,8 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
       // 队列持久化到 localStorage(跨重启):仅当队列非空/暂停才算"有东西要留",
       // 否则移除键。注意:空队列(含仅草稿)不写盘——既贴合"清空即移除"语义,
       // 也避免普通卸载把空档写入盘、污染同 id 会话的下一次挂载(测试/复用隔离)。
-      // ⚠️ 必须过滤 executing 项:cleanup 时 React state 可能还没来得及提交
-      // setQueue(filter) 的删除(异步批量),snap.queue 里仍残留"executing"的
-      // 最后一条指令——写入磁盘后下次挂载会恢复它并重新补投,造成"完成后又
-      // 重发"的无限循环(2026-08-26 用户报障根因)。
+      // 2026-11-02:投出即出队后队列里不再有 executing 项;保留过滤仅作防御
+      // (snap 与 setQueue 异步批处理的时序缺口里理论上仍可能出现旧值)。
       const snap = snapRef.current;
       const safeQueue = snap.queue.filter((x) => x.state !== "executing");
       writeComposerQueue(
@@ -419,31 +419,34 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
       inFlightRef.current = null;
       if (!turnEnded) {
         // task-error 结束(running false 但 turnEnded 未置):本轮失败 →
-        // 该指令标 failed + 自动暂停(防失败后疯狂自动补投),停手等用户重试/移除
-        setQueue((cur) => cur.map((x) => (x.id === done.id ? { ...x, state: "failed" } : x)));
+        // 该指令**插回队首**标 failed + 自动暂停(防失败后疯狂自动补投),
+        // 停手等用户重试/编辑/移除(2026-11-02:失败项回队列,不再卡 executing)
+        setQueue((cur) => [{ ...done, state: "failed" }, ...cur.filter((x) => x.id !== done.id)]);
         setPaused(true);
         flushBlockedRef.current = true;
         return;
       }
-      // task-ended 正常结束:该项执行成功,出队(return 让 effect 用新队列
-      // 重跑,自动投下一条;否则这里会拿旧闭包把已成功的队首再投一遍)
-      setQueue((cur) => cur.filter((x) => x.id !== done.id));
+      // task-ended 正常结束:该项执行成功,已被投出时移除队列(无需再删,
+      // 直接继续投下一条;return 让 effect 用新队列重跑)。
+      // task-ended 到达 = 上一轮上行彻底完成(回显帧也已来),在途标记可摘,
+      // 让 effect 重跑时立即投下一条(不然 sendingRef=true 会挡住下一条补投)
+      sendingRef.current = false;
       return;
     }
 
-    // 队列非空 + 未暂停 + 队头未失败/执行中 → 投出队头下一条
-    // 注意:队头可能是 executing(从持久化恢复的),要跳过等本轮结束再处理
-    // ⚠️ 不把残留 executing 自动复位 pending 再投:指令可能已真执行过,
-    // 重发 = 重复执行。2026-09-12 用户报障后,executing 项由 UI 放开手动
-    // 移除(Composer.tsx removable),残留僵尸交给用户处置,补投不自动碰它。
+    // 队列非空 + 未暂停 + 队头未失败 → 投出队首下一条。
+    // 2026-11-02 改为「投出即出队」:队列里只留 pending(未执行)和 failed,
+    // 不再有 executing 态——投出的指令用 inFlightRef 单独跟踪,轮次结束按
+    // turnEnded 判成败(成功继续投下一条;失败插回队首标 failed)。
+    // 这样队列项永远不会卡在"执行中"无法编辑/继续。
     const next = queue[0];
-    if (!next || paused || next.state === "failed" || next.state === "executing") return;
+    if (!next || paused || next.state === "failed") return;
     const forSid = sessionId;
     inFlightRef.current = next;
     deliveredTurnRef.current = true;
     sendingRef.current = true;
-    // 标记执行中(队首):UI 据此锁住拖动/删除/编辑,其余待发送项可排序
-    setQueue((cur) => cur.map((x) => (x.id === next.id ? { ...x, state: "executing" } : x)));
+    // 投出即出队:从队列移除(不留在队列显示"执行中")
+    setQueue((cur) => cur.filter((x) => x.id !== next.id));
     // 正文 = 指令文本 + 附件行(与 send() 同一拼法)
     const payload = [next.text, ...next.atts.map(attLine)].filter(Boolean).join("\n");
     void sessionSend(sessionId, "user-input", { content: b64encode(payload) }).catch((e: unknown) => {
@@ -451,8 +454,9 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
       flushBlockedRef.current = true;
       inFlightRef.current = null;
       deliveredTurnRef.current = false;
-      // 发送被壳拒(消息未入会话):该指令标 failed + 自动暂停,等用户重试/移除
-      setQueue((cur) => cur.map((x) => (x.id === next.id ? { ...x, state: "failed" } : x)));
+      // 发送被壳拒(消息未入会话):该指令**插回队首**标 failed + 自动暂停,
+      // 等用户重试/编辑/移除(2026-11-02:失败项回队列,不再卡 executing)
+      setQueue((cur) => [{ ...next, state: "failed" }, ...cur.filter((x) => x.id !== next.id)]);
       setPaused(true);
       // 回执迟到且人已切走 → 回原会话暂存(deliverQueued 接手后台补投)
       if (activeRef.current !== forSid) {
@@ -477,9 +481,9 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
   const removeInstr = useCallback((id: string) => {
     flushBlockedRef.current = false;
     setQueue((cur) => cur.filter((x) => x.id !== id));
-    // 2026-09-12 执行中项可手动移除了:若删的正是当前在途项,清掉在途
-    // 标记,避免把补投/失败抑制锁死在这次已删的指令上(否则删完自动补投
-    // 依旧卡住,等于白删)
+    // 2026-11-02:投出的指令已出队(inFlightRef 跟踪),正常情况不会命中;
+    // 保留兜底:若删的正是当前在途项,清掉在途标记,避免把补投/失败抑制
+    // 锁死在这次已删的指令上
     if (inFlightRef.current?.id === id) {
       inFlightRef.current = null;
       deliveredTurnRef.current = false;
@@ -562,13 +566,15 @@ export function useComposer(sessionId: string, feed: ComposerFeed): ComposerCtl 
   }, []);
   const clearQueue = useCallback(() => {
     flushBlockedRef.current = false;
-    setQueue((cur) => cur.filter((x) => x.state === "failed" || x.state === "executing")); // 只清待发送,执行中/失败项留给用户处置
+    // 只清待发送(pending);failed 项留给用户处置(走重试,防误删)
+    setQueue((cur) => cur.filter((x) => x.state === "failed"));
   }, []);
   /** 从 localStorage 恢复持久化队列:按文本去重后追加到队尾(补投 effect 会自动投)。
    * 空数组 = 清空当前队列(面板场景:打开时把当前未投项清除,只保留本地存档用于编辑)。 */
   const restorePersisted = useCallback((items: QueueItem[]) => {
     if (!items.length) {
-      // 清空当前队列:把 pending 和 executing 项都移除,只保留 failed 项供用户处置
+      // 清空当前队列:pending 全移除,只保留 failed 项供用户处置
+      // (2026-11-02:队列无 executing 态,投出项已出队,无需处理)
       setQueue((cur) => cur.filter((x) => x.state === "failed"));
       // 关键:队列清空时必须同步重置 inFlightRef/deliveredTurnRef/turnStartedRef,
       // 否则这三条 ref 仍指向已消失的旧指令,新轮次结束时会把下一条消息误判为

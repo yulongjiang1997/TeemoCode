@@ -1,11 +1,13 @@
-// 任务工作区「不死不休」:输入框下那排菜单里打开后,该工作区里没做完的任务只要落到
+// 任务工作区「不死不休」:输入框下那排菜单里打开后,该对话里没做完的任务只要落到
 // error / interrupted,就自动补一条「继续」直到做完。点停止是刹车,
 // 不把用户主动取消立刻再开起来。
+// 2026-11-02:改为以**会话(session id)**为单位隔离——同工作区的不同对话
+// 互不影响(旧版按 workdir 全局开关,会跨对话误补发)。
 import { b64encode } from "@/lib/protocol/codec";
 import { sessionOpen, sessionSend, type SessionMeta } from "@/lib/ipc/sessions";
-import { projectKey, readArchivedProjects } from "@/lib/util/projects";
+import { readArchivedProjects } from "@/lib/util/projects";
 
-const STORAGE_KEY = "mc.relentlessWorkspaces";
+const STORAGE_KEY = "mc.relentlessSessions";
 const FIRST_DELAY_MS = 2_000;
 const MAX_DELAY_MS = 60_000;
 
@@ -24,7 +26,8 @@ function loadKeys(): Set<string> {
   try {
     const raw: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
     if (!Array.isArray(raw)) return new Set();
-    return new Set(raw.filter((item): item is string => typeof item === "string" && item.length > 0).map(projectKey));
+    // 元素为会话 id(2026-11-02 起按对话隔离;不再存 projectKey)
+    return new Set(raw.filter((item): item is string => typeof item === "string" && item.length > 0));
   } catch {
     return new Set();
   }
@@ -43,19 +46,27 @@ export function getRelentlessKeys(): ReadonlySet<string> {
   return keys;
 }
 
-export function isRelentlessWorkspace(workdir: string): boolean {
-  return keys.has(projectKey(workdir));
+export function isRelentlessSession(sessionId: string): boolean {
+  return keys.has(sessionId);
 }
 
-export function setRelentlessWorkspace(workdir: string, on: boolean): void {
-  const key = projectKey(workdir);
-  if (!key) return;
+export function setRelentlessSession(sessionId: string, on: boolean): void {
   const next = new Set(keys);
-  if (on) next.add(key);
-  else next.delete(key);
+  if (on) next.add(sessionId);
+  else next.delete(sessionId);
   if (next.size === keys.size && [...next].every((item) => keys.has(item))) return;
   keys = next;
   persist();
+}
+
+/** 旧 API 向前兼容(部分外部调用仍传 workdir)。映射到等价空操作:
+ *  workdir 级全局开关已废弃,改用 setRelentlessSession(sessionId, on)。 */
+export function isRelentlessWorkspace(_workdir: string): boolean {
+  return false;
+}
+
+export function setRelentlessWorkspace(_workdir: string, _on: boolean): void {
+  // no-op: 旧 workdir 级开关已废弃(2026-11-02 改为会话级隔离)
 }
 
 export function subscribeRelentless(listener: () => void): () => void {
@@ -90,8 +101,9 @@ export function relentlessCandidates(
   for (const session of sessions) {
     if (session.archived || session.waiting_ask || session.kind === "chat" || paused.has(session.id)) continue;
     if (!RELENTLESS_STATUSES.has(session.status)) continue;
-    const key = projectKey(session.workdir);
-    if (!key || !enabled.has(key) || archivedProjects.has(key)) continue;
+    // 2026-11-02:按会话 id 隔离——只有该会话被用户勾选"不死不休"才补发
+    if (!enabled.has(session.id)) continue;
+    void archivedProjects;
     out.push(session.id);
   }
   return out;

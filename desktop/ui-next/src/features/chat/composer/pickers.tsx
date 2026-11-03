@@ -17,6 +17,8 @@ import { useUpwardMenuHeight } from "@/lib/util/menuHeight";
 import type { ModelInfo } from "@/lib/ipc/sessions";
 import { defaultEnabledSkills, type SkillInfo } from "@/lib/ipc/skills";
 import { externalAgentProbe, type ExternalAgent, type ExternalAgentProbe } from "@/lib/ipc/externalAgents";
+import { getConfig } from "@/lib/ipc/config";
+import type { VendorPreset } from "@/lib/ipc/gateway";
 import {
   filterModels,
   groupMemberSections,
@@ -108,6 +110,14 @@ export function ModelMenu({
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  const [vendorPresets, setVendorPresets] = useState<VendorPreset[]>([]);
+  // 厂商预设(2026-11-02):自定义 tab 按厂商分组时,组头显示厂商名称而非裸 URL。
+  // 仅在桌面壳加载,浏览器模式为空(退回 URL 提取)。
+  useEffect(() => {
+    getConfig()
+      .then((cfg) => setVendorPresets(cfg?.gateway?.vendor_presets ?? []))
+      .catch(() => {});
+  }, []);
   const boxRef = useRef<HTMLDivElement | null>(null);
   useDismiss(open, boxRef, () => setOpen(false));
   // 向上弹:高度按锚点到最近上边界(标题栏/视图头)的真实距离算,
@@ -243,6 +253,31 @@ export function ModelMenu({
                   </li>,
                   ...s.items.map((m) => itemOf(m, true)),
                 ])
+              : activeTab === "" && tabItems.length > 0
+                // 自定义 tab:按厂商(base_url)二次分组,组头优先显示厂商名称
+                // (vendor_presets 反查),回落到 URL 提取(2026-11-02)
+                ? (() => {
+                  const vendorMap = new Map<string, ModelInfo[]>();
+                  tabItems.forEach((m) => {
+                    const vk = m.base_url || "(other)";
+                    let g = vendorMap.get(vk);
+                    if (!g) { g = []; vendorMap.set(vk, g); }
+                    g.push(m);
+                  });
+                  return [...vendorMap.entries()].map(([vk, items]) => {
+                    const presetName = vk === "(other)" ? null : vendorPresets.find((v) => v.base_url === vk)?.name || null;
+                    const vLabel = vk === "(other)"
+                      ? t("model.source.custom")
+                      : presetName
+                        || vk.replace(/^https?:\/\//, "").replace(/\/v1$/, "").replace(/\/api.*$/, "") || vk;
+                    return [
+                      <li key={`vendor-${vk}-title`} className="menu-title flex flex-row items-baseline gap-2 text-xs">
+                        <span className="min-w-0 flex-1 truncate">{vLabel}</span>
+                      </li>,
+                      ...items.map((m) => itemOf(m)),
+                    ];
+                  });
+                })()
               : tabItems.map((m) => itemOf(m))}
           </ul>
           {/* 备用模型(故障转移链):主模型报错后按顺序逐个尝试,一次性使用 */}

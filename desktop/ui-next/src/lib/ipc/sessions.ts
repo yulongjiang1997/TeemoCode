@@ -50,6 +50,8 @@ export interface ModelInfo {
   locked?: boolean;
   owner?: string;
   think?: string;
+  /** 接口地址(2026-11-02):前端切换模型对话框自定义 tab 按厂商分组用。 */
+  base_url?: string;
 }
 
 /** 全局 session-event 载荷:session-status / session-ask / session-summary。 */

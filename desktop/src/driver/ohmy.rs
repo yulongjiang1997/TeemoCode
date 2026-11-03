@@ -191,6 +191,8 @@ pub(super) struct ManifestModel {
     /// 会员条目的服务端归属(public/private/team;非会员条目为空),
     /// UI 会员 tab 按它分「付费/我的/团队」节。
     pub(super) owner: String,
+    /// 接口地址(2026-11-02):前端切换模型对话框自定义 tab 按厂商分组用。
+    pub(super) base_url: String,
 }
 
 /// 清单模型解析(壳 models.json 词汇:name/provider/base_url/api_key/model/…)。
@@ -209,6 +211,7 @@ pub(super) fn parse_manifest_models(models: &Value) -> Vec<ManifestModel> {
                 model: m.get("model").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 locked: m.get("locked").and_then(|v| v.as_bool()).unwrap_or(false),
                 owner: m.get("owner").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                base_url: m.get("base_url").and_then(|v| v.as_str()).unwrap_or("").to_string(),
             })
         })
         .collect()

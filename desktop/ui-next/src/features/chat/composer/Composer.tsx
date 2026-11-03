@@ -31,8 +31,7 @@ import {
 } from "react";
 
 import { useI18n } from "@/lib/i18n";
-import { getRelentlessKeys, setRelentlessWorkspace, subscribeRelentless } from "@/lib/relentless";
-import { projectKey } from "@/lib/util/projects";
+import { getRelentlessKeys, setRelentlessSession, subscribeRelentless } from "@/lib/relentless";
 import { useEscLayer } from "@/lib/util/escLayer";
 import { sessionSetMode, sessionSetModel, sessionSetSkills, sessionSetThink } from "@/lib/ipc/controls";
 import { afterEngineReady } from "@/lib/ipc/engine";
@@ -95,7 +94,7 @@ function QueueArea({ ctl }: { ctl: ComposerCtl }) {
         <IconList size={13} stroke={1.75} aria-hidden className="shrink-0 text-base-content/50" />
         <span className="shrink-0 font-medium text-base-content/70">{t("chat.queue.count", { n: queue.length })}</span>
         {paused && <span className="shrink-0 rounded bg-warning/15 px-1 text-[10px] font-medium text-warning">{t("chat.queue.paused")}</span>}
-        <span className={`min-w-0 flex-1 truncate ${first.state === "failed" ? "text-error" : first.state === "executing" ? "text-info" : "text-base-content/80"}`}>{first.text}</span>
+        <span className={`min-w-0 flex-1 truncate ${first.state === "failed" ? "text-error" : "text-base-content/80"}`}>{first.text}</span>
         {failed > 0 && <span className="shrink-0 font-medium text-error">{t("chat.queue.failed", { n: failed })}</span>}
         {pauseBtn}
       </div>
@@ -123,33 +122,28 @@ function QueueArea({ ctl }: { ctl: ComposerCtl }) {
       </div>
       <ul className="flex flex-col gap-0.5">
         {queue.map((item, i) => {
-          // 按 state 锁拖动/编辑:执行中/失败指令不可拖动/编辑(失败走重试,
-          // 执行中正在跑);**pending 全部可编辑,包括队首**(2026-09-08)。
-          // **移除例外(2026-09-12 用户报障:指令执行完没自动出队也移不掉)**:
-          // executing 项允许手动移除——壳的回显/出队时序若没走到(轮次中断、
-          // task-started/task-ended 帧被吞),executing 会卡成僵尸,必须让用户
-          // 能手动删。仅 failed 的移除仍锁(它走重试,防误删要重跑的失败项)。
-          const locked = item.state !== "pending";
-          const removable = item.state !== "failed";
+          // 2026-11-02:队列只有 pending/failed 两态(投出即出队,inFlightRef
+          // 单独跟踪在途指令)。pending/failed 全部可编辑/可拖/可删;
+          // failed 另有重试按钮。
+          const locked = false;
           return (
           <li
             key={item.id}
-            className={`flex items-center gap-1.5 rounded px-1.5 py-1 ${item.state === "failed" ? "bg-error/10" : item.state === "executing" ? "bg-info/10" : "hover:bg-base-content/5"} ${dragIdx === i ? "opacity-50" : ""}`}
+            className={`flex items-center gap-1.5 rounded px-1.5 py-1 ${item.state === "failed" ? "bg-error/10" : "hover:bg-base-content/5"} ${dragIdx === i ? "opacity-50" : ""}`}
             onDragOver={(e) => {
               if (dragIdx !== null && dragIdx !== i && !locked) e.preventDefault();
             }}
             onDrop={(e) => {
               e.preventDefault();
-              // 不允许插到锁住项(执行中/失败)之前:落点若是锁定项,落到它之后
-              if (dragIdx !== null && dragIdx !== i) reorderInstr(dragIdx, locked ? i + 1 : i);
+              if (dragIdx !== null && dragIdx !== i) reorderInstr(dragIdx, i);
               setDragIdx(null);
             }}
           >
-            {/* 仅此图标可拖(pending 才可拖):拖动排序不误触其它区域 */}
+            {/* 仅此图标可拖:拖动排序不误触其它区域 */}
             <span
               draggable={!locked}
-              className={`shrink-0 ${locked ? "text-base-content/20" : "cursor-grab text-base-content/30 hover:text-base-content/60 active:cursor-grabbing"}`}
-              title={item.state === "executing" ? t("chat.queue.executing") : item.state === "failed" ? t("chat.queue.failedItem") : t("chat.queue.drag")}
+              className="shrink-0 cursor-grab text-base-content/30 hover:text-base-content/60 active:cursor-grabbing"
+              title={item.state === "failed" ? t("chat.queue.failedItem") : t("chat.queue.drag")}
               onDragStart={(e) => {
                 e.dataTransfer.effectAllowed = "move";
                 e.dataTransfer.setData("text/plain", String(i));
@@ -160,12 +154,6 @@ function QueueArea({ ctl }: { ctl: ComposerCtl }) {
               <IconGripVertical size={13} stroke={1.75} aria-hidden />
             </span>
             <span className="w-4 shrink-0 text-center tabular-nums text-base-content/40">{i + 1}</span>
-            {item.state === "executing" && (
-              <span className="shrink-0 text-[10px] font-medium text-info">
-                <span className="status status-info mr-1 motion-safe:animate-pulse" aria-hidden />
-                {t("chat.queue.executing")}
-              </span>
-            )}
             {item.state === "failed" && (
               <span className="shrink-0 text-[10px] font-medium text-error">{t("chat.queue.failedItem")}</span>
             )}
@@ -190,10 +178,8 @@ function QueueArea({ ctl }: { ctl: ComposerCtl }) {
               <button
                 type="button"
                 className="min-w-0 flex-1 truncate text-left text-base-content/80 hover:text-base-content"
-                title={item.state === "executing" ? t("chat.queue.executing") : item.state === "failed" ? t("chat.queue.failedItem") : t("chat.queue.edit")}
-                onClick={() => {
-                  if (!locked) setEditingId(item.id);
-                }}
+                title={item.state === "failed" ? t("chat.queue.failedItem") : t("chat.queue.edit")}
+                onClick={() => setEditingId(item.id)}
               >
                 {item.text}
               </button>
@@ -206,9 +192,8 @@ function QueueArea({ ctl }: { ctl: ComposerCtl }) {
             <button
               type="button"
               className="btn btn-ghost btn-square btn-xs shrink-0 text-base-content/50"
-              aria-label={removable ? t("chat.queue.remove") : t("chat.queue.executing")}
-              title={removable ? t("chat.queue.remove") : t("chat.queue.executing")}
-              disabled={!removable}
+              aria-label={t("chat.queue.remove")}
+              title={t("chat.queue.remove")}
               onClick={() => removeInstr(item.id)}
             >
               <IconX size={12} stroke={1.75} aria-hidden />
@@ -329,7 +314,8 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
 }: ComposerProps, ref) {
   const { t } = useI18n();
   const relentlessKeys = useSyncExternalStore(subscribeRelentless, getRelentlessKeys, getRelentlessKeys);
-  const relentlessOn = !!meta.workdir && relentlessKeys.has(projectKey(meta.workdir));
+  // 2026-11-02:按会话 id 隔离(不死不休以对话为单位,不再全局按工作区开)
+  const relentlessOn = !!meta.workdir && relentlessKeys.has(meta.id);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   useImperativeHandle(ref, () => ({ focus: () => taRef.current?.focus() }), []);
   const imeRef = useRef(createImeGuard());
@@ -774,7 +760,7 @@ const ComposerImpl = forwardRef<ComposerInputHandle, ComposerProps>(function Com
               }`}
               title={t("chat.relentless.hint")}
               aria-pressed={relentlessOn}
-              onClick={() => setRelentlessWorkspace(meta.workdir, !relentlessOn)}
+              onClick={() => setRelentlessSession(meta.id, !relentlessOn)}
             >
               {t("chat.relentless")}
             </button>
