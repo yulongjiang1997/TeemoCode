@@ -779,6 +779,7 @@ export function App() {
             settingsOpen={settingsOpen}
           onToggleSettings={() => { setCreating(null); setSettingsOpen((v) => !v); }}
         />
+        {space !== "gateway" && space !== "stats" && (
         <Sidebar
           space={space}
           sessions={sessions}
@@ -845,6 +846,7 @@ export function App() {
             },
           }}
         />
+        )}
         {creating ? (
           <NewTaskModal
             open
