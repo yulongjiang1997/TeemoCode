@@ -847,6 +847,10 @@ pub struct PersistedLogEntry {
     /// 形如 https://api.openai.com/v1/chat/completions。
     #[serde(default)]
     pub vendor_url: String,
+    /// 最终候选的接口地址(2026-11-03):前端日志按厂商名显示。
+    /// 与 LogEntry.base_url 对应;旧历史条目缺省空(厂商列显示派生 URL)。
+    #[serde(default)]
+    pub base_url: String,
 }
 
 /// Filter parameters for querying persisted log entries.
@@ -1134,6 +1138,7 @@ fn to_persisted(
         raw_request: raw_request.map(|s| truncate_bytes(s, RAW_SNIPPET_CAP)),
         raw_response: raw_response.map(|s| truncate_bytes(s, RAW_SNIPPET_CAP)),
         vendor_url: entry.vendor_url.clone(),
+        base_url: entry.base_url.clone(),
     }
 }
 
@@ -1384,6 +1389,7 @@ impl GatewayHost {
         raw_request: Option<String>,
         raw_response: Option<String>,
         vendor_url: Option<&str>,
+        base_url: Option<&str>,
     ) {
         let mut persisted_entry: Option<PersistedLogEntry> = None;
         {
@@ -1404,6 +1410,9 @@ impl GatewayHost {
                     entry.pending = false;
                     if let Some(vu) = vendor_url {
                         if !vu.is_empty() { entry.vendor_url = vu.to_string(); }
+                    }
+                    if let Some(bu) = base_url {
+                        if !bu.is_empty() { entry.base_url = bu.to_string(); }
                     }
                     persisted_entry = Some(to_persisted(
                         entry,
@@ -1435,6 +1444,7 @@ impl GatewayHost {
             raw_request: raw_request.as_deref().map(|s| truncate_bytes(s, RAW_SNIPPET_CAP)),
             raw_response: raw_response.as_deref().map(|s| truncate_bytes(s, RAW_SNIPPET_CAP)),
             vendor_url: vendor_url.unwrap_or_default().to_string(),
+            base_url: base_url.unwrap_or_default().to_string(),
         });
         if let Some(persistence) = &self.0.log_persistence {
             persistence.append(persisted.clone(), raw_request.as_deref(), raw_response.as_deref());
@@ -2619,6 +2629,7 @@ mod tests {
             raw_request: None,
             raw_response: None,
             vendor_url: String::new(),
+            base_url: String::new(),
         }
     }
 

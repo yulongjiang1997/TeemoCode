@@ -94,7 +94,8 @@ describe("GatewaySection", () => {
     // 筛选下拉框中也含"主力组",用 getAllByText 取第一个(span,即组行)
     await userEvent.click(screen.getAllByText("主力组")[0]!);
     expect(await screen.findByText("模型库中不存在「旧模型」(可能已删除或改名)")).toBeDefined();
-    expect(screen.getByText("tgk-abc")).toBeDefined();
+    // 组 key 可能同时出现在组行与「外部调用」卡片,用 getAllByText 断言至少一处
+    expect(screen.getAllByText("tgk-abc").length).toBeGreaterThan(0);
   });
 
   it("总开关切换走 gateway_update_settings(true+端口)", async () => {

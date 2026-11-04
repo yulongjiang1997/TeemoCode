@@ -619,7 +619,7 @@ pub(crate) async fn run_buffered(
                 host.complete_and_persist(request_id, &group.group.id, &group.group.name, false, true, Some(200), started.elapsed().as_millis() as u64,
                     &reply.model, attempts.len() as u32, &usage_out, None,
                     Some(extract_content(&incoming)), Some(extract_response_content(&reply.body)),
-                    raw_req, Some(reply.body.to_string()), Some(reply.vendor_url.as_str()));
+                    raw_req, Some(reply.body.to_string()), Some(reply.vendor_url.as_str()), Some(cand.base_url.as_str()));
                 return Ok(BufferedOk { body: reply.body, model: reply.model, attempts: attempts.len() });
             }
             Err(e) => {
@@ -655,7 +655,7 @@ pub(crate) async fn run_buffered(
     host.complete_and_persist(request_id, &group.group.id, &group.group.name, false, false, Some(status), started.elapsed().as_millis() as u64,
         &model, attempts_n, &usage_out, Some(summary.clone()),
         Some(extract_content(&incoming)), None,
-        raw_req.as_ref().map(|(s, _)| s.clone()), None, raw_req.as_ref().map(|(_, u)| u.as_str()));
+        raw_req.as_ref().map(|(s, _)| s.clone()), None, raw_req.as_ref().map(|(_, u)| u.as_str()), raw_req.as_ref().map(|(_, bu)| bu.as_str()));
     Err(BufferedFail {
         status,
         body: openai_error(&summary, "gateway_error", "all_models_failed"),
@@ -932,6 +932,9 @@ fn handle_streaming(
         (!outcome.raw_request.is_empty()).then_some(outcome.raw_request),
         (!outcome.raw_response.is_empty()).then_some(outcome.raw_response),
         Some(outcome.vendor_url.as_str()),
+        // 流式路径:持久化日志的 base_url 由 to_persisted 从内存 LogEntry
+        // 取(push_log 已填 initial_base_url),这里不重复传
+        None,
     );
 }
 
